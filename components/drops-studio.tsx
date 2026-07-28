@@ -43,7 +43,13 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { PreviewCanvas, type MarketCoin, type PredictionEvent } from "@/components/preview-canvas";
+import { compileProject } from "@/lib/project-compiler";
+import { createProjectSpec } from "@/lib/project-factory";
+import type { GeneratedProject, GeneratedProjectSpec, ProjectProvider } from "@/lib/project-types";
+import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
+import { validateProjectSpec } from "@/lib/project-validator";
 import { defaultPresetId, presets, type PresetId } from "@/lib/presets";
 
 type ProviderId = "free" | "dropstab" | "dropsbot" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
@@ -58,22 +64,13 @@ interface Provider {
   endpoint?: boolean;
 }
 
-interface SavedProject {
-  id: string;
-  title: string;
-  presetId: PresetId;
-  output: string;
-  createdAt: string;
-  custom: boolean;
-}
-
 const providerList: Provider[] = [
   { id: "free", name: "Free Auto", eyebrow: "No key", description: "Local planner plus the best available free workflow. Nothing to connect." },
   { id: "dropstab", name: "DropsTab API", eyebrow: "Live data", description: "Use your DropsTab API key for live prices, rankings, FDV, unlocks and research data.", keyLabel: "DropsTab API key", docs: "https://api-docs.dropstab.com/" },
   { id: "dropsbot", name: "Drops Bot", eyebrow: "Telegram", description: "Continue in the official bot to create profiles, wallet alerts, price alerts and channel delivery.", docs: "https://t.me/Drops" },
   { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use your own OpenAI account as the reasoning layer for generated briefs and explanations.", keyLabel: "OpenAI API key", docs: "https://platform.openai.com/api-keys" },
   { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Connect Claude for long-form research, editorial voice and strategy explanations.", keyLabel: "Anthropic API key", docs: "https://console.anthropic.com/settings/keys" },
-  { id: "openrouter", name: "OpenRouter", eyebrow: "Many models", description: "Choose from free and paid open-source models through one compatible endpoint.", keyLabel: "OpenRouter API key", docs: "https://openrouter.ai/keys" },
+  { id: "openrouter", name: "OpenRouter Free", eyebrow: "Free + paid models", description: "Start with OpenRouter's free-model router, or enter any paid model ID available to your account.", keyLabel: "OpenRouter API key", docs: "https://openrouter.ai/keys" },
   { id: "kimi", name: "Kimi", eyebrow: "Long context", description: "Connect Moonshot Kimi models for research-heavy crypto workflows.", keyLabel: "Moonshot API key", docs: "https://platform.moonshot.ai/console/api-keys" },
   { id: "custom", name: "Custom API", eyebrow: "OpenAI compatible", description: "Connect any public HTTPS OpenAI-compatible chat-completions endpoint you control.", keyLabel: "Bearer token", endpoint: true },
 ];
@@ -81,7 +78,7 @@ const providerList: Provider[] = [
 const defaultModels: Partial<Record<ProviderId, string>> = {
   openai: "gpt-4.1-mini",
   anthropic: "claude-haiku-4-5-20251001",
-  openrouter: "openrouter/auto",
+  openrouter: "openrouter/free",
   kimi: "kimi-k3",
 };
 
@@ -176,6 +173,7 @@ function Brand() {
 }
 
 export function DropsStudio() {
+  const router = useRouter();
   const [selectedId, setSelectedId] = useState<PresetId>(defaultPresetId);
   const [valuesByPreset, setValuesByPreset] = useState(initialValues);
   const [prompt, setPrompt] = useState("");
@@ -196,8 +194,8 @@ export function DropsStudio() {
   const [connections, setConnections] = useState<Record<ProviderId, boolean>>({ free: true, dropstab: false, dropsbot: false, openai: false, anthropic: false, openrouter: false, kimi: false, custom: false });
   const [activeBrain, setActiveBrain] = useState<ProviderId>("free");
   const [projectsOpen, setProjectsOpen] = useState(false);
-  const [projects, setProjects] = useState<SavedProject[]>([]);
-  const [successOpen, setSuccessOpen] = useState(false);
+  const [projects, setProjects] = useState<GeneratedProject[]>([]);
+  const [building, setBuilding] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
 
@@ -206,11 +204,34 @@ export function DropsStudio() {
   const provider = providerList.find((item) => item.id === providerId) ?? providerList[0];
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("drops-studio-projects");
     const timer = window.setTimeout(() => {
-      if (saved) {
-        try { setProjects(JSON.parse(saved) as SavedProject[]); } catch { /* Ignore invalid local drafts. */ }
-      }
+      let savedProjects: GeneratedProject[] = [];
+      try {
+        const parsed = JSON.parse(window.localStorage.getItem(PROJECTS_STORAGE_KEY) || "[]") as unknown;
+        if (Array.isArray(parsed)) savedProjects = parsed.filter((item): item is GeneratedProject => Boolean(item && typeof item === "object" && "spec" in item && "html" in item));
+      } catch { /* Ignore invalid local projects. */ }
+
+      try {
+        const legacy = JSON.parse(window.localStorage.getItem("drops-studio-projects") || "[]") as Array<{ id?: string; presetId?: PresetId; title?: string; createdAt?: string }>;
+        for (const draft of Array.isArray(legacy) ? legacy : []) {
+          if (!draft.id || !draft.presetId || savedProjects.some((item) => item.id === draft.id) || !presets.some((item) => item.id === draft.presetId)) continue;
+          const legacyPreset = presets.find((item) => item.id === draft.presetId) ?? presets[0];
+          const spec = createProjectSpec({
+            presetId: legacyPreset.id,
+            values: Object.fromEntries(legacyPreset.fields.map((field) => [field.id, field.value])),
+            prompt: draft.title && draft.title !== legacyPreset.title ? draft.title : "",
+            tools: legacyPreset.tools,
+            provider: "free",
+            model: "Free Auto",
+            market: sampleMarket,
+            prediction: defaultPrediction,
+            origin: window.location.origin,
+          });
+          savedProjects.push({ id: draft.id, spec, html: compileProject(spec), createdAt: draft.createdAt || spec.createdAt, updatedAt: new Date().toISOString() });
+        }
+        if (savedProjects.length) window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(savedProjects));
+      } catch { /* Legacy drafts are optional. */ }
+      setProjects(savedProjects);
       setConnections((current) => {
         const connected = { ...current };
         providerList.forEach((item) => {
@@ -220,6 +241,7 @@ export function DropsStudio() {
       });
       const rememberedBrain = window.sessionStorage.getItem("drops-studio:active-brain") as ProviderId | null;
       if (rememberedBrain && providerList.some((item) => item.id === rememberedBrain)) setActiveBrain(rememberedBrain);
+      if (new URLSearchParams(window.location.search).get("connections") === "1") setConnectionOpen(true);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -442,19 +464,64 @@ export function DropsStudio() {
     }
   }
 
-  function buildProject() {
-    const project: SavedProject = {
-      id: crypto.randomUUID(),
-      title: prompt.trim() || selectedPreset.title,
-      presetId: selectedId,
-      output: selectedPreset.output,
-      createdAt: new Date().toISOString(),
-      custom: customMode,
-    };
-    const next = [project, ...projects].slice(0, 12);
-    setProjects(next);
-    window.localStorage.setItem("drops-studio-projects", JSON.stringify(next));
-    setSuccessOpen(true);
+  async function buildProject() {
+    if (building) return;
+    setBuilding(true);
+    setToast(`Compiling a real ${selectedPreset.output.toLowerCase()}…`);
+    try {
+      const provider = (["openai", "anthropic", "openrouter", "kimi", "custom"].includes(activeBrain) ? activeBrain : "free") as ProjectProvider;
+      const model = window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain] || "Free Auto";
+      let spec = createProjectSpec({
+        presetId: selectedId,
+        values,
+        prompt,
+        tools: customMode && selectedTools.length ? selectedTools : selectedPreset.tools,
+        provider,
+        model,
+        market,
+        prediction,
+        origin: window.location.origin,
+      });
+
+      if (provider !== "free") {
+        const key = window.sessionStorage.getItem(`drops-studio:${provider}`);
+        if (key) {
+          try {
+            if (provider === "custom") {
+              const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
+              const customModel = window.sessionStorage.getItem("drops-studio:custom-model");
+              if (!endpoint || !customModel) throw new Error("Custom model configuration is incomplete.");
+              const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: customModel, temperature: 0.2, messages: [{ role: "system", content: "Return JSON only with name, tagline, description and theme. Never return code, URLs, secrets or markdown." }, { role: "user", content: JSON.stringify(spec) }] }) });
+              const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+              if (!response.ok) throw new Error(`Custom model returned ${response.status}.`);
+              const suggestion = JSON.parse(payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] || "{}") as Partial<GeneratedProjectSpec>;
+              spec = validateProjectSpec({ ...spec, ...suggestion, presetId: spec.presetId, values: spec.values, tools: spec.tools, market: spec.market, prediction: spec.prediction, brain: { provider, model: customModel, enhanced: true } });
+            } else {
+              const response = await fetch("/api/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, key, model, prompt: prompt || selectedPreset.description, spec }) });
+              const payload = await response.json() as { spec?: GeneratedProjectSpec; error?: string };
+              if (!response.ok || !payload.spec) throw new Error(payload.error || "Model enhancement failed.");
+              spec = payload.spec;
+            }
+          } catch (error) {
+            setToast(`${error instanceof Error ? error.message : "AI enhancement failed."} Free compiler used instead.`);
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+      const project: GeneratedProject = { id: crypto.randomUUID(), spec, html: compileProject(spec), createdAt: now, updatedAt: now };
+      const next = [project, ...projects].slice(0, 50);
+      try {
+        window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify([project, ...projects.filter((item) => !item.spec.experience.backgroundImage).slice(0, 8)]));
+      }
+      setProjects(next);
+      router.push(`/studio/${project.id}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not compile this project.");
+      setBuilding(false);
+    }
   }
 
   function toggleAudio() {
@@ -528,7 +595,7 @@ export function DropsStudio() {
             <div className="prompt-box">
               <WandSparkles size={22} />
               <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") planPrompt(); }} placeholder="Describe what you want to build…" rows={2} aria-label="Describe your crypto project" />
-              <button type="button" onClick={planPrompt} disabled={planning} aria-label="Create blueprint">{planning ? <LoaderCircle className="spin" /> : <Send />}</button>
+              <button type="button" onClick={planPrompt} disabled={planning} aria-label="Plan a working project">{planning ? <LoaderCircle className="spin" /> : <Send />}</button>
             </div>
             <span className="prompt-hint">⌘ Enter to plan · Works free without an AI key</span>
           </div>
@@ -593,7 +660,7 @@ export function DropsStudio() {
                 <div><BadgeCheck size={16} /><span><strong>Verified foundation</strong> · {selectedPreset.tools.join(" · ")}</span></div>
                 <button type="button" onClick={refreshMarket}>{dataMode === "live" ? "Refresh live data" : "Connect live data"}</button>
               </div>
-              <button className="build-button" type="button" onClick={buildProject}><Sparkles size={19} />{selectedPreset.cta}<ArrowRight size={18} /></button>
+              <button className="build-button" type="button" onClick={buildProject} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling your live product…</> : <><Sparkles size={19} />{selectedPreset.cta}<ArrowRight size={18} /></>}</button>
               <button className="blank-button" type="button" onClick={() => { setCustomMode(true); setPrompt(""); setToast("Blank canvas enabled. Describe anything or assemble the stack manually."); }}>Start from a blank canvas</button>
             </motion.section>
           </AnimatePresence>
@@ -631,11 +698,7 @@ export function DropsStudio() {
       </Dialog.Root>
 
       <Dialog.Root open={projectsOpen} onOpenChange={setProjectsOpen}>
-        <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="projects-dialog"><div className="dialog-top"><div><Dialog.Title>My Projects</Dialog.Title><Dialog.Description>Local MVP drafts saved in this browser.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>{projects.length ? <div className="project-list">{projects.map((project) => <button type="button" key={project.id} onClick={() => { choosePreset(project.presetId); setCustomMode(project.custom); setProjectsOpen(false); }}><span><Save size={17} /></span><div><strong>{project.title}</strong><small>{project.output} · {new Date(project.createdAt).toLocaleDateString()}</small></div><ChevronRight /></button>)}</div> : <div className="empty-projects"><Rocket /><strong>No projects yet</strong><p>Pick a recipe, tune the settings and build your first project.</p></div>}</Dialog.Content></Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root open={successOpen} onOpenChange={setSuccessOpen}>
-        <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="success-dialog"><div className="success-icon"><Check /></div><Dialog.Title>Your blueprint is ready</Dialog.Title><Dialog.Description>{selectedPreset.title} is saved locally with its current settings. Connect live services when you are ready to publish.</Dialog.Description><div className="success-summary"><span><Database />DropsTab intelligence</span><span><Bot />Drops Bot delivery</span><span><BrainCircuit />{providerList.find((item) => item.id === activeBrain)?.name ?? "Free Auto"}</span></div><button className="success-primary" type="button" onClick={() => { setSuccessOpen(false); setProjectsOpen(true); }}>Open my projects <ArrowRight /></button><button className="success-secondary" type="button" onClick={() => window.open("https://t.me/Drops", "_blank", "noopener,noreferrer")}>Continue in Drops Bot <ExternalLink /></button></Dialog.Content></Dialog.Portal>
+        <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="projects-dialog"><div className="dialog-top"><div><Dialog.Title>My Projects</Dialog.Title><Dialog.Description>Working products saved in this browser. Open one to edit, run and publish it.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>{projects.length ? <div className="project-list">{projects.map((project) => { const projectPreset = presets.find((item) => item.id === project.spec.presetId); return <button type="button" key={project.id} onClick={() => router.push(`/studio/${project.id}`)}><span><Save size={17} /></span><div><strong>{project.spec.name}</strong><small>{projectPreset?.output ?? "Live application"} · {project.publishedUrl ? "Published" : "Ready to run"} · {new Date(project.createdAt).toLocaleDateString()}</small></div><ChevronRight /></button>; })}</div> : <div className="empty-projects"><Rocket /><strong>No projects yet</strong><p>Pick a recipe, tune the settings and compile your first working product.</p></div>}</Dialog.Content></Dialog.Portal>
       </Dialog.Root>
 
       <div className={`toast ${toast ? "visible" : ""}`} role="status" aria-live="polite"><CircleHelp size={17} />{toast}</div>

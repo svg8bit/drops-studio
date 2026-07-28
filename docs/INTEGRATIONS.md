@@ -1,6 +1,6 @@
 # Integration contract
 
-The product is designed so the current MVP can work without requiring new backend development from DropsTab or Drops Bot.
+The product works without requiring new backend development from DropsTab or Drops Bot.
 
 ## DropsTab
 
@@ -17,7 +17,7 @@ Relevant official references:
 - <https://api-docs.dropstab.com/>
 - <https://api-docs.dropstab.com/llms.txt>
 
-The broader product recipes are based on documented DropsTab resources such as coins, price history, token unlocks, funding rounds, investors, activities, exchanges and pairs. A recipe remains in sample mode until a visitor connects access that supports its live data needs.
+The broader product recipes are based on documented DropsTab resources such as coins, price history, token unlocks, funding rounds, investors, activities, exchanges and pairs. A user-connected response becomes the safe initial snapshot of a generated project. Public and exported apps refresh through the no-secret public market adapter while keeping DropsTab attribution and research handoffs.
 
 ## Drops Bot
 
@@ -31,7 +31,7 @@ Drops Bot is integrated through the official Telegram surface and documented set
 - Solana trading surfaces
 - wallet event webhooks where available to the connected account
 
-The MVP opens `https://t.me/Drops` for the final setup and approval. It does not claim that every Telegram configuration can be created remotely because a complete public remote-configuration API is not documented.
+Generated products open `https://t.me/Drops` for the final setup and approval. They do not claim that every Telegram configuration can be created remotely because a complete public remote-configuration API is not documented.
 
 Relevant official references:
 
@@ -55,8 +55,23 @@ The Vault verifies a key against the provider's official models endpoint:
 - Kimi/Moonshot: `https://api.moonshot.ai/v1/models`
 - Custom: a user-supplied public HTTPS OpenAI-compatible chat-completions endpoint
 
-Free Auto is a deterministic local planner. Connected OpenAI, Anthropic, OpenRouter and Kimi accounts can replace it as the blueprint-planning brain through `/api/plan`. Custom endpoints are called directly from the visitor's browser, so the hosting service does not become an unrestricted request proxy.
+Free Auto is a deterministic local planner and product compiler. Connected OpenAI, Anthropic, OpenRouter and Kimi accounts can improve planning through `/api/plan` and bounded product copy/theme values through `/api/generate`. OpenRouter defaults to `openrouter/free`; availability and limits remain controlled by OpenRouter. Custom endpoints are called directly from the visitor's browser, so the hosting service does not become an unrestricted request proxy.
+
+Models never generate executable HTML. The server and browser compile the same validated project specification, so model output cannot inject scripts or credentials into a published product.
+
+## Publishing and source ownership
+
+Free publishing stores a validated specification and freshly compiled standalone HTML in Cloudflare D1, then returns an anonymous `/p/{slug}` URL. The public route is the product itself and contains no editor chrome.
+
+The ZIP export contains:
+
+- the same runnable `index.html`;
+- `project.json` without credentials;
+- Vercel, Cloudflare, Netlify and GitHub Pages configuration;
+- a run and deployment README.
+
+Paid-hosting cards are honest export handoffs. Only Drops Studio Cloud reports `Published` after persistence confirms success.
 
 ## Execution safety
 
-Preview buttons either open an official external product, copy a share link, or add an action to the local blueprint. They do not execute a transaction. This keeps the UI useful while preserving an honest boundary around wallet signatures, Telegram configuration and trading approvals.
+Generated-product actions either change local product state, create an explicitly labelled paper action, open an official external product, copy a share link, or prepare a Drops Bot handoff. They do not execute a transaction. This preserves an honest boundary around wallet signatures, Telegram configuration and trading approvals.

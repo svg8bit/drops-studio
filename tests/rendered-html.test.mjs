@@ -31,11 +31,12 @@ test("server-renders the complete Drops Studio builder", async () => {
 });
 
 test("starter preview is removed and source contains the required product surfaces", async () => {
-  const [page, component, dropstabRoute, packageJson] = await Promise.all([
+  const [page, component, dropstabRoute, packageJson, studio] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dropstab/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../components/project-studio.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /<DropsStudio \/>/);
@@ -44,9 +45,13 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(component, /\/api\/plan/);
   assert.match(component, /sessionStorage/);
   assert.match(component, /Start from a blank canvas/);
-  assert.match(component, /drops-studio-projects/);
+  assert.match(component, /PROJECTS_STORAGE_KEY/);
+  assert.match(component, /router\.push\(`\/studio\//);
+  assert.match(studio, /Publish free now/);
+  assert.match(studio, /Download runnable app \+ source/);
+  assert.match(studio, /Export & continue/);
   assert.match(dropstabRoute, /"x-dropstab-api-key": key/);
-  assert.match(packageJson, /"name": "drops-studio-mvp"/);
+  assert.match(packageJson, /"name": "drops-studio"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });

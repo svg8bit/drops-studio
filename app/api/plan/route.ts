@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     const config: { url: string; model: string; extra: Record<string, string> } | null = provider === "openai"
       ? { url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", extra: {} }
       : provider === "openrouter"
-        ? { url: "https://openrouter.ai/api/v1/chat/completions", model: "openrouter/auto", extra: { "HTTP-Referer": request.nextUrl.origin, "X-OpenRouter-Title": "Drops Studio" } }
+        ? { url: "https://openrouter.ai/api/v1/chat/completions", model: "openrouter/free", extra: { "HTTP-Referer": request.nextUrl.origin, "X-OpenRouter-Title": "Drops Studio" } }
         : provider === "kimi"
           ? { url: "https://api.moonshot.ai/v1/chat/completions", model: "kimi-k3", extra: {} }
           : null;

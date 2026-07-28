@@ -1,29 +1,31 @@
 # Drops Studio
 
-Drops Studio is a product-builder MVP for turning a crypto idea into an editable project blueprint powered by DropsTab intelligence, Drops Bot automation, and an AI model chosen by the user.
+Drops Studio turns a crypto idea into a real, editable and publishable product powered by DropsTab intelligence and Drops Bot automation.
 
-The interface is intentionally prompt-first: choose one of 12 useful recipes, tune its context-aware settings, or describe a completely custom product. The live preview changes with the recipe and never presents a simulated action as an executed trade.
+The start page is a prompt-first recipe builder. Choose one of 12 products, tune its settings or describe something custom, then build. Drops Studio compiles a standalone application and opens its Project Studio, where the user can run it, change logic and branding, publish a public URL and download the runnable source.
 
-![Drops Studio desktop builder](docs/screenshots/desktop.png)
+![Drops Studio start builder](docs/screenshots/desktop.png)
 
-The mobile builder keeps the same complete workflow and moves the live preview below the editable blueprint.
-
-<img src="docs/screenshots/mobile.png" alt="Drops Studio mobile builder" width="320" />
+![Drops Studio Project Studio](docs/screenshots/project-studio.png)
 
 ## What works
 
-- 12 interactive crypto product recipes
-- local multilingual prompt classification with no AI key required, or live planning through a connected AI provider
-- context-aware configuration for every recipe
-- editable custom stack of data, triggers, AI and outputs
-- separate previews for briefs, channels, action engines, prediction markets, aggregators, games, companions, radio and voice
-- API Vault for DropsTab, Drops Bot, OpenAI, Anthropic, OpenRouter, Kimi and custom OpenAI-compatible endpoints
-- real provider key verification through server-side proxy routes
-- live DropsTab market mode when a valid user key is connected
-- public Polymarket event context through the Gamma API
-- browser speech for Crypto Radio and Crypto Siri
-- local project drafts through `localStorage`
-- responsive desktop and mobile UI
+- 12 distinct standalone crypto product runtimes
+- deterministic no-key Free Auto compiler
+- bounded design enhancement through OpenAI, Anthropic, OpenRouter Free, Kimi or a custom OpenAI-compatible model
+- universal Experience Director for every recipe: archetype, layout, data view,
+  engagement loop, audience, primary loop and editable product modules
+- direct Design Mode editing, six curated design kits, responsive preview,
+  block variants/visibility, uploaded hero artwork and category-specific chat directions
+- editable Project Studio for project metadata, data, product logic, AI,
+  branding, source and checkpoints
+- sandboxed live application preview
+- live public market adapter plus user-connected DropsTab snapshots and research handoffs
+- Drops Bot alert, channel, Telegram and action handoffs
+- one-click free public publishing to an anonymous `/p/{slug}` application URL
+- runnable source ZIP with `index.html`, project config and Vercel, Cloudflare, Netlify and GitHub Pages files
+- local project persistence and automatic migration from the earlier blueprint prototype
+- responsive builder, Studio and standalone products
 
 ## Product recipes
 
@@ -40,18 +42,25 @@ The mobile builder keeps the same complete workflow and moves the live preview b
 11. Crypto Radio
 12. Crypto Siri
 
-## Integration boundaries
+Each recipe has its own runtime and stateful interaction. Examples include a decision ledger, sourced alpha post composer, searchable market table, playable scored prediction round, local portfolio creature, community voting, browser-speech radio and voice-assisted market answers.
 
-This MVP only uses capabilities that are already publicly documented or publicly reachable:
+Professional controls are not limited to the game recipe. Changing a data view
+actually recompiles eligible products as cards, a table, timeline, graph or
+relationship map; changing layout and engagement updates the runtime contract;
+and product modules can be added, renamed, reordered or removed in every
+category. Uploaded artwork is optimized in the browser and included in the
+preview, public application and source ZIP. Every accepted Director or visual
+change creates a restorable checkpoint.
 
-- DropsTab data is requested through the documented Public API using the visitor's own API key.
-- Drops Bot actions continue in the official Telegram bot. The MVP does not pretend that undocumented remote configuration endpoints exist.
-- Polymarket context comes from the public Gamma API.
-- AI provider credentials are verified against each provider's official models endpoint.
-- No secret is committed, logged, placed in project history or written to `localStorage`. Connected keys live in `sessionStorage` for the current tab.
-- No trade is executed without the user continuing to the relevant official product and approving it.
+## Honest integration boundary
 
-See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the exact implementation contract.
+- A visitor may connect a DropsTab API key for documented live data. The key stays in browser session storage and is never compiled, persisted or published.
+- Generated products preserve DropsTab attribution, compatible market data and research links.
+- Drops Bot actions continue through the official Telegram product; the app never claims an undocumented remote configuration succeeded.
+- Trading-like actions are explicit research, paper-mode or official-product handoffs until the user approves an action in the connected product.
+- Connected models return a validated JSON design object. They never author the executable runtime.
+
+See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) and [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md) for the product and security contracts.
 
 ## Run locally
 
@@ -68,28 +77,21 @@ Open `http://localhost:3000`.
 
 ```bash
 npm run lint
+npx tsc --noEmit
 npm test
 ```
 
-`npm test` performs a production Vinext build and verifies the rendered product shell.
+The production test builds the Cloudflare-compatible application and checks the server-rendered builder and generator contract. Browser QA covers all 12 Build flows, their standalone runtimes, free publishing and the public project route.
 
 ## Stack
 
 - Next.js 16 / React 19 through Vinext
-- TypeScript
-- Tailwind CSS v4
-- Radix UI primitives
-- Framer Motion
-- Lucide icons
+- TypeScript and Tailwind CSS v4
+- Radix UI, Framer Motion and Lucide icons
+- Cloudflare D1 for published-project persistence
+- Fflate for browser-side runnable source archives
 - Cloudflare Workers-compatible Sites runtime
-
-## Security notes
-
-- Custom model endpoints must be public HTTPS URLs.
-- Localhost, loopback, link-local and private-network custom endpoints are blocked.
-- Connection checks have a 10-second timeout; AI planning requests time out after 20 seconds.
-- API keys are never rendered by the server or included in saved project drafts.
 
 ## Brand note
 
-DropsTab and Drops Bot names and marks belong to their respective owners. This repository contains an MVP product concept built around their public product surfaces and documentation.
+DropsTab and Drops Bot names and marks belong to their respective owners. This public repository is a working product concept built around their public product surfaces and documentation.
