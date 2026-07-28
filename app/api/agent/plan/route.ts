@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { generateText } from "ai";
+import { createGateway, generateText, Output } from "ai";
+import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { fallbackAgentPlan } from "@/lib/product-blueprint";
@@ -10,9 +11,10 @@ export const runtime = "nodejs";
 const GUEST_DAILY_LIMIT = 3;
 const MAX_PLAN_TOKENS = 4_500;
 const GUEST_MODELS = [
-  "poolside/laguna-s-2.1-free",
+  "google/gemini-2.5-flash-lite",
   "inclusionai/ling-3.0-flash-free",
   "zai/glm-4.6v-flash",
+  "poolside/laguna-s-2.1-free",
 ] as const;
 
 const presetIds = presets.map((preset) => preset.id) as [PresetId, ...PresetId[]];
@@ -146,8 +148,13 @@ function readGuestUsage(request: NextRequest): number {
 function parseObject(text: string): unknown {
   const first = text.indexOf("{");
   const last = text.lastIndexOf("}");
-  if (first < 0 || last <= first) throw new Error("Model returned no JSON object.");
-  return JSON.parse(text.slice(first, last + 1));
+  if (first < 0) throw new Error("Model returned no JSON object.");
+  const candidate = text.slice(first, last > first ? last + 1 : undefined);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return JSON.parse(jsonrepair(candidate));
+  }
 }
 
 function responseWithQuota(payload: unknown, used: number, status = 200) {
@@ -239,16 +246,38 @@ async function runDirectProvider(prompt: string, key: string, provider: DirectPr
 }
 
 async function runGuestGateway(prompt: string, guestId: string) {
+  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  if (!gatewayToken) throw new Error("Platform AI Gateway is not configured.");
+  const guestGateway = createGateway({ apiKey: gatewayToken });
   const errors: string[] = [];
   for (const model of GUEST_MODELS) {
     try {
+      if (model === "google/gemini-2.5-flash-lite") {
+        const result = await generateText({
+          model: guestGateway(model),
+          output: Output.object({
+            schema: planSchema,
+            name: "drops_product_plan",
+            description: "A complete, category-native DropsTab and Drops Bot product blueprint.",
+          }),
+          maxOutputTokens: MAX_PLAN_TOKENS,
+          maxRetries: 0,
+          temperature: 0.2,
+          system: systemPrompt,
+          prompt,
+          abortSignal: AbortSignal.timeout(18_000),
+          providerOptions: { gateway: { user: guestId, tags: ["feature:product-plan", "tier:guest"] } },
+        });
+        return { plan: { ...result.output, provider: "gateway" as const, model }, model, usage: result.usage };
+      }
       const result = await generateText({
-        model,
+        model: guestGateway(model),
         maxOutputTokens: MAX_PLAN_TOKENS,
         maxRetries: 0,
         temperature: 0.2,
         system: systemPrompt,
         prompt,
+        abortSignal: AbortSignal.timeout(18_000),
         providerOptions: { gateway: { user: guestId, tags: ["feature:product-plan", "tier:guest"] } },
       });
       const plan = planSchema.parse(parseObject(result.text));
