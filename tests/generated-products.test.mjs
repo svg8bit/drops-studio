@@ -65,6 +65,8 @@ test("publishing recompiles validated specs and source export includes real host
   assert.match(studio, /pages\.yml/);
   assert.match(studio, /migrated\.publishedAt !== migrated\.updatedAt/);
   assert.match(studio, /publishedAt, updatedAt: publishedAt/);
+  assert.match(studio, /function handleCloudPublish\(\)/);
+  assert.match(studio, /onClick=\{handleCloudPublish\}/);
   assert.match(migration, /CREATE TABLE `published_projects`/);
   assert.equal(JSON.parse(hosting).d1, "DB");
   assert.match(persistence, /process\.env\.BLOB_READ_WRITE_TOKEN/);
