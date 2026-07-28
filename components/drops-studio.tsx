@@ -47,6 +47,7 @@ import { useRouter } from "next/navigation";
 import { PreviewCanvas, type MarketCoin, type PredictionEvent } from "@/components/preview-canvas";
 import { compileProject } from "@/lib/project-compiler";
 import { createProjectSpec } from "@/lib/project-factory";
+import { applyAgentPlan, fallbackAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import type { GeneratedProject, GeneratedProjectSpec, ProjectProvider } from "@/lib/project-types";
 import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
 import { validateProjectSpec } from "@/lib/project-validator";
@@ -68,7 +69,7 @@ const providerList: Provider[] = [
   { id: "free", name: "Free Auto", eyebrow: "No key", description: "Local planner plus the best available free workflow. Nothing to connect." },
   { id: "dropstab", name: "DropsTab API", eyebrow: "Live data", description: "Use your DropsTab API key for live prices, rankings, FDV, unlocks and research data.", keyLabel: "DropsTab API key", docs: "https://api-docs.dropstab.com/" },
   { id: "dropsbot", name: "Drops Bot", eyebrow: "Telegram", description: "Continue in the official bot to create profiles, wallet alerts, price alerts and channel delivery.", docs: "https://t.me/Drops" },
-  { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use your own OpenAI account as the reasoning layer for generated briefs and explanations.", keyLabel: "OpenAI API key", docs: "https://platform.openai.com/api-keys" },
+  { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use your own OpenAI API project as the reasoning layer and choose any model available to that key.", keyLabel: "OpenAI API key", docs: "https://platform.openai.com/api-keys" },
   { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Connect Claude for long-form research, editorial voice and strategy explanations.", keyLabel: "Anthropic API key", docs: "https://console.anthropic.com/settings/keys" },
   { id: "openrouter", name: "OpenRouter Free", eyebrow: "Free + paid models", description: "Start with OpenRouter's free-model router, or enter any paid model ID available to your account.", keyLabel: "OpenRouter API key", docs: "https://openrouter.ai/keys" },
   { id: "kimi", name: "Kimi", eyebrow: "Long context", description: "Connect Moonshot Kimi models for research-heavy crypto workflows.", keyLabel: "Moonshot API key", docs: "https://platform.moonshot.ai/console/api-keys" },
@@ -76,10 +77,10 @@ const providerList: Provider[] = [
 ];
 
 const defaultModels: Partial<Record<ProviderId, string>> = {
-  openai: "gpt-4.1-mini",
+  openai: "gpt-5.2",
   anthropic: "claude-haiku-4-5-20251001",
   openrouter: "openrouter/free",
-  kimi: "kimi-k3",
+  kimi: "kimi-k2.5",
 };
 
 const sampleMarket: MarketCoin[] = [
@@ -122,22 +123,6 @@ function initialValues() {
   return Object.fromEntries(
     presets.map((preset) => [preset.id, Object.fromEntries(preset.fields.map((field) => [field.id, field.value]))]),
   ) as Record<PresetId, Record<string, string>>;
-}
-
-function classifyPrompt(prompt: string): PresetId {
-  const text = prompt.toLowerCase();
-  if (/game|игр|battle|leaderboard/.test(text)) return "crypto-game";
-  if (/radio|радио|podcast|audio|аудио/.test(text)) return "crypto-radio";
-  if (/siri|voice|голос|ассистент/.test(text)) return "crypto-siri";
-  if (/tamagotchi|тамагочи|pet|питом/.test(text)) return "portfolio-tamagotchi";
-  if (/product hunt|launch board|каталог|запуск/.test(text)) return "crypto-product-hunt";
-  if (/aggregator|агрегатор|coinmarketcap|coingecko|market cap/.test(text)) return "crypto-aggregator";
-  if (/prediction|polymarket|ставк|odds|вероятност/.test(text)) return "prediction-impact";
-  if (/copy|копи|wallet|кошел|smart money/.test(text)) return "smart-money-copy";
-  if (/channel|канал|alpha feed|сигнал/.test(text)) return "alpha-channel";
-  if (/morning|утрен|brief|дайджест/.test(text)) return "morning-alpha";
-  if (/recommend|персонал|companion|лента/.test(text)) return "personal-companion";
-  return "action-engine";
 }
 
 function SelectControl({ value, options, onChange, ariaLabel }: { value: string; options: string[]; onChange: (value: string) => void; ariaLabel: string }) {
@@ -196,8 +181,12 @@ export function DropsStudio() {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [projects, setProjects] = useState<GeneratedProject[]>([]);
   const [building, setBuilding] = useState(false);
+  const [draftSpec, setDraftSpec] = useState<GeneratedProjectSpec | null>(null);
+  const [guestRemaining, setGuestRemaining] = useState<number | null>(3);
+  const [planLabel, setPlanLabel] = useState("Free AI ready");
   const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
+  const guestIdRef = useRef("");
 
   const selectedPreset = useMemo(() => presets.find((preset) => preset.id === selectedId) ?? presets[0], [selectedId]);
   const values = valuesByPreset[selectedId];
@@ -241,7 +230,16 @@ export function DropsStudio() {
       });
       const rememberedBrain = window.sessionStorage.getItem("drops-studio:active-brain") as ProviderId | null;
       if (rememberedBrain && providerList.some((item) => item.id === rememberedBrain)) setActiveBrain(rememberedBrain);
-      if (new URLSearchParams(window.location.search).get("connections") === "1") setConnectionOpen(true);
+      guestIdRef.current = window.sessionStorage.getItem("drops-studio:guest-id") || crypto.randomUUID();
+      window.sessionStorage.setItem("drops-studio:guest-id", guestIdRef.current);
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("connections") === "1") setConnectionOpen(true);
+      if (params.get("openrouter") === "connected") {
+        setConnections((current) => ({ ...current, openrouter: true }));
+        setActiveBrain("openrouter");
+        setProviderId("openrouter");
+        setToast("OpenRouter connected. Your account is now the active AI brain.");
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -263,6 +261,7 @@ export function DropsStudio() {
   }, [selectedId]);
 
   function choosePreset(id: PresetId) {
+    if (id !== selectedId) setDraftSpec(null);
     setSelectedId(id);
     window.requestAnimationFrame(() => {
       document.querySelector(`[data-preset="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
@@ -279,6 +278,9 @@ export function DropsStudio() {
       ...current,
       [selectedId]: { ...current[selectedId], [fieldId]: value },
     }));
+    setDraftSpec((current) => current?.presetId === selectedId
+      ? validateProjectSpec({ ...current, values: { ...current.values, [fieldId]: value } })
+      : current);
   }
 
   async function planPrompt() {
@@ -287,71 +289,147 @@ export function DropsStudio() {
       return;
     }
     setPlanning(true);
-    let recommendation = classifyPrompt(prompt);
-    let recommendedTools: string[] = [];
-    let plannerName = "Free Auto";
+    setPlanLabel("AI is turning your brief into screens, logic and integrations…");
+    try {
+      let plan: AgentProductPlan;
+      let tier = "guest";
+      let remaining: number | null = guestRemaining;
+      let warning = "";
+      const key = activeBrain === "free" ? "" : window.sessionStorage.getItem(`drops-studio:${activeBrain}`) ?? "";
 
-    if (activeBrain !== "free") {
-      const key = window.sessionStorage.getItem(`drops-studio:${activeBrain}`);
-      if (!key) {
-        setPlanning(false);
+      if (activeBrain !== "free" && !key) {
         openProvider(activeBrain);
-        setToast(`Connect ${providerList.find((item) => item.id === activeBrain)?.name ?? "this AI"} first.`);
-        return;
+        throw new Error(`Connect ${providerList.find((item) => item.id === activeBrain)?.name ?? "this AI"} first.`);
       }
-      plannerName = providerList.find((item) => item.id === activeBrain)?.name ?? "Connected AI";
-      try {
-        let payload: { presetId?: PresetId; tools?: string[] };
-        if (activeBrain === "custom") {
-          const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
-          const model = window.sessionStorage.getItem("drops-studio:custom-model");
-          if (!endpoint || !model) throw new Error("Custom endpoint or model is missing.");
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-            body: JSON.stringify({
-              model,
-              temperature: 0.2,
-              messages: [
-                { role: "system", content: "Return only JSON with presetId and tools. Allowed presetId values: action-engine, alpha-channel, morning-alpha, prediction-impact, smart-money-copy, crypto-aggregator, crypto-game, personal-companion, portfolio-tamagotchi, crypto-product-hunt, crypto-radio, crypto-siri. Allowed tools: prices, unlocks, wallets, polymarket, telegram, voice." },
-                { role: "user", content: prompt.trim() },
-              ],
-            }),
-          });
-          if (!response.ok) throw new Error(`Custom model returned ${response.status}.`);
-          const result = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-          const content = result.choices?.[0]?.message?.content ?? "{}";
-          payload = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
-        } else {
-          const response = await fetch("/api/plan", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider: activeBrain, key, model: window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`), prompt: prompt.trim() }),
-          });
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.error ?? "AI planning failed.");
-          payload = result.plan;
-        }
-        if (payload.presetId && presets.some((preset) => preset.id === payload.presetId)) recommendation = payload.presetId;
-        if (Array.isArray(payload.tools)) recommendedTools = payload.tools.filter((id) => customTools.some((tool) => tool.id === id));
-      } catch {
-        plannerName = "Free Auto fallback";
-      }
-    }
 
-    window.setTimeout(() => {
-      choosePreset(recommendation);
-      setCustomMode(true);
-      const preset = presets.find((item) => item.id === recommendation);
-      if (recommendedTools.length) {
-        setSelectedTools(recommendedTools);
-      } else if (preset) {
-        const toolIds = customTools.filter((tool) => preset.tools.some((name) => name.toLowerCase().includes(tool.id.slice(0, 5)))).map((tool) => tool.id);
-        setSelectedTools(toolIds.length ? toolIds : ["prices", "telegram"]);
+      if (activeBrain === "custom") {
+        const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
+        const model = window.sessionStorage.getItem("drops-studio:custom-model");
+        if (!endpoint || !model) throw new Error("Custom endpoint or model is missing.");
+        const seed = fallbackAgentPlan(prompt.trim());
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            model,
+            temperature: 0.2,
+            messages: [
+              { role: "system", content: "You are a product architect. Refine the supplied seed into a category-native working crypto product. Preserve the exact JSON shape and keys. Return JSON only. DropsTab is the source/data layer and Drops Bot is the alert/Telegram handoff layer. Never return a generic dashboard when the user asks for a game, channel, radio, assistant or another native experience." },
+              { role: "user", content: JSON.stringify({ request: prompt.trim(), seed }) },
+            ],
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const result = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? `Custom model returned ${response.status}.`);
+        const parsed = JSON.parse(result.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] || "{}") as unknown;
+        const candidate = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+        const candidateBlueprint = candidate.blueprint && typeof candidate.blueprint === "object" && !Array.isArray(candidate.blueprint)
+          ? candidate.blueprint as Record<string, unknown>
+          : {};
+        const candidateContent = candidateBlueprint.content && typeof candidateBlueprint.content === "object" && !Array.isArray(candidateBlueprint.content)
+          ? candidateBlueprint.content as Record<string, unknown>
+          : {};
+        const candidatePresetId = presets.some((item) => item.id === candidate.presetId) ? candidate.presetId as PresetId : seed.presetId;
+        const normalized = validateProjectSpec({
+          ...candidate,
+          schemaVersion: 1,
+          presetId: candidatePresetId,
+          name: candidate.name ?? seed.name,
+          tagline: candidate.tagline ?? seed.tagline,
+          description: candidate.description ?? seed.description,
+          prompt: prompt.trim(),
+          values: valuesByPreset[candidatePresetId],
+          tools: candidate.tools ?? seed.tools,
+          brain: { provider: "custom", model, enhanced: true },
+          theme: { ...(seed.theme ?? {}), ...(candidate.theme && typeof candidate.theme === "object" ? candidate.theme : {}) },
+          design: { ...(seed.design ?? {}), ...(candidate.design && typeof candidate.design === "object" ? candidate.design : {}) },
+          experience: { ...(seed.experience ?? {}), ...(candidate.experience && typeof candidate.experience === "object" ? candidate.experience : {}) },
+          blueprint: {
+            ...seed.blueprint,
+            ...candidateBlueprint,
+            content: { ...seed.blueprint.content, ...candidateContent },
+          },
+          gameDirection: { ...(seed.gameDirection ?? {}), ...(candidate.gameDirection && typeof candidate.gameDirection === "object" ? candidate.gameDirection : {}) },
+          market,
+          prediction,
+          dataEndpoint: `${window.location.origin}/api/public-data`,
+          createdAt: new Date().toISOString(),
+        });
+        plan = {
+          presetId: normalized.presetId,
+          name: normalized.name,
+          tagline: normalized.tagline,
+          description: normalized.description,
+          tools: normalized.tools,
+          blueprint: normalized.blueprint,
+          theme: normalized.theme,
+          design: normalized.design,
+          experience: normalized.experience,
+          gameDirection: normalized.gameDirection,
+          provider: "custom",
+          model,
+        };
+        tier = "byok";
+        remaining = null;
+      } else {
+        const headers: Record<string, string> = { "content-type": "application/json", "x-drops-guest": guestIdRef.current };
+        if (activeBrain === "openrouter") headers["x-openrouter-key"] = key;
+        else if (["openai", "anthropic", "kimi"].includes(activeBrain)) headers["x-provider-key"] = key;
+        const response = await fetch("/api/agent/plan", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            prompt: prompt.trim(),
+            guestId: guestIdRef.current,
+            provider: activeBrain === "free" ? undefined : activeBrain,
+            model: window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain],
+          }),
+        });
+        const payload = await response.json() as { plan?: AgentProductPlan; tier?: string; model?: string; remaining?: number | null; warning?: string; error?: string; code?: string };
+        if (!response.ok || !payload.plan) {
+          if (payload.code === "GUEST_LIMIT") {
+            setProviderId("openrouter");
+            setConnectionOpen(true);
+          }
+          throw new Error(payload.error ?? "AI planning failed.");
+        }
+        plan = payload.plan;
+        tier = payload.tier ?? tier;
+        remaining = payload.remaining ?? null;
+        warning = payload.warning ?? "";
       }
+
+      const nextPreset = presets.find((item) => item.id === plan.presetId) ?? presets[0];
+      const nextValues = valuesByPreset[nextPreset.id];
+      const base = createProjectSpec({
+        presetId: nextPreset.id,
+        values: nextValues,
+        prompt: prompt.trim(),
+        tools: plan.tools.length ? plan.tools : nextPreset.tools,
+        provider: plan.provider ?? (activeBrain === "free" ? "gateway" : activeBrain as ProjectProvider),
+        model: plan.model ?? defaultModels[activeBrain] ?? "Drops Free AI",
+        market,
+        prediction,
+        origin: window.location.origin,
+      });
+      const spec = validateProjectSpec(applyAgentPlan(base, plan));
+      choosePreset(nextPreset.id);
+      setDraftSpec(spec);
+      setCustomMode(true);
+      setGuestRemaining(remaining);
+      const searchable = `${plan.tools.join(" ")} ${plan.blueprint.dropsTabUse.join(" ")} ${plan.blueprint.dropsBotUse.join(" ")}`.toLowerCase();
+      const recommendedTools = customTools.filter((tool) => searchable.includes(tool.id.slice(0, 5)) || searchable.includes(tool.label.split(" ")[0].toLowerCase())).map((tool) => tool.id);
+      setSelectedTools(recommendedTools.length ? recommendedTools : ["prices", "telegram"]);
+      const brainName = tier === "fallback" ? "Local product compiler" : plan.model || (tier === "guest" ? "Free AI" : "Your model");
+      setPlanLabel(`${brainName} · ${plan.blueprint.screens.length} screens · ${plan.blueprint.interactions.length} interactions`);
+      setToast(warning || `${brainName} created a real ${plan.blueprint.productType} blueprint.`);
+    } catch (error) {
+      setPlanLabel("AI planning needs attention");
+      setToast(error instanceof Error ? error.message : "AI planning failed.");
+    } finally {
       setPlanning(false);
-      setToast(`${plannerName} built the blueprint. Settings and preview now match your idea.`);
-    }, activeBrain === "free" ? 520 : 120);
+    }
   }
 
   function toggleTool(id: string) {
@@ -364,6 +442,20 @@ export function DropsStudio() {
     setProviderModel(window.sessionStorage.getItem(`drops-studio:${id}:model`) ?? defaultModels[id] ?? "");
     setCustomEndpoint(window.sessionStorage.getItem("drops-studio:custom-endpoint") ?? "");
     setConnectionOpen(true);
+  }
+
+  async function connectOpenRouterAccount() {
+    const bytes = crypto.getRandomValues(new Uint8Array(48));
+    const verifier = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    window.sessionStorage.setItem("drops-studio:openrouter:pkce", verifier);
+    const callback = `${window.location.origin}/auth/openrouter`;
+    const authorize = new URL("https://openrouter.ai/auth");
+    authorize.searchParams.set("callback_url", callback);
+    authorize.searchParams.set("code_challenge", challenge);
+    authorize.searchParams.set("code_challenge_method", "S256");
+    window.location.assign(authorize.toString());
   }
 
   async function connectProvider() {
@@ -471,19 +563,30 @@ export function DropsStudio() {
     try {
       const provider = (["openai", "anthropic", "openrouter", "kimi", "custom"].includes(activeBrain) ? activeBrain : "free") as ProjectProvider;
       const model = window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain] || "Free Auto";
-      let spec = createProjectSpec({
-        presetId: selectedId,
-        values,
-        prompt,
-        tools: customMode && selectedTools.length ? selectedTools : selectedPreset.tools,
-        provider,
-        model,
-        market,
-        prediction,
-        origin: window.location.origin,
-      });
+      const selectedToolLabels = selectedTools.map((id) => customTools.find((tool) => tool.id === id)?.label ?? id);
+      const hasAgentDraft = Boolean(draftSpec && draftSpec.presetId === selectedId && draftSpec.prompt.trim() === prompt.trim());
+      let spec = hasAgentDraft && draftSpec
+        ? validateProjectSpec({
+            ...draftSpec,
+            values,
+            tools: customMode && selectedToolLabels.length ? Array.from(new Set([...draftSpec.tools, ...selectedToolLabels])) : draftSpec.tools,
+            market,
+            prediction,
+            dataEndpoint: `${window.location.origin}/api/public-data`,
+          })
+        : createProjectSpec({
+            presetId: selectedId,
+            values,
+            prompt,
+            tools: customMode && selectedToolLabels.length ? selectedToolLabels : selectedPreset.tools,
+            provider,
+            model,
+            market,
+            prediction,
+            origin: window.location.origin,
+          });
 
-      if (provider !== "free") {
+      if (!hasAgentDraft && provider !== "free") {
         const key = window.sessionStorage.getItem(`drops-studio:${provider}`);
         if (key) {
           try {
@@ -491,7 +594,7 @@ export function DropsStudio() {
               const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
               const customModel = window.sessionStorage.getItem("drops-studio:custom-model");
               if (!endpoint || !customModel) throw new Error("Custom model configuration is incomplete.");
-              const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: customModel, temperature: 0.2, messages: [{ role: "system", content: "Return JSON only with name, tagline, description and theme. Never return code, URLs, secrets or markdown." }, { role: "user", content: JSON.stringify(spec) }] }) });
+              const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: customModel, temperature: 0.2, messages: [{ role: "system", content: "Return JSON only with name, tagline, description and theme. Never return code, URLs, secrets or markdown." }, { role: "user", content: JSON.stringify(spec) }] }), signal: AbortSignal.timeout(60_000) });
               const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
               if (!response.ok) throw new Error(`Custom model returned ${response.status}.`);
               const suggestion = JSON.parse(payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] || "{}") as Partial<GeneratedProjectSpec>;
@@ -594,10 +697,10 @@ export function DropsStudio() {
           <div className="prompt-frame">
             <div className="prompt-box">
               <WandSparkles size={22} />
-              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") planPrompt(); }} placeholder="Describe what you want to build…" rows={2} aria-label="Describe your crypto project" />
+              <textarea value={prompt} onChange={(event) => { setPrompt(event.target.value); if (draftSpec && event.target.value.trim() !== draftSpec.prompt.trim()) setDraftSpec(null); }} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") planPrompt(); }} placeholder="Describe what you want to build — product, design, behavior and audience…" rows={2} aria-label="Describe your crypto project" />
               <button type="button" onClick={planPrompt} disabled={planning} aria-label="Plan a working project">{planning ? <LoaderCircle className="spin" /> : <Send />}</button>
             </div>
-            <span className="prompt-hint">⌘ Enter to plan · Works free without an AI key</span>
+            <div className="prompt-meta"><span>{planLabel}</span><span>{activeBrain === "free" ? `${guestRemaining ?? 3} free AI builds left today` : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}</span></div>
           </div>
 
           <section className="preset-section" aria-labelledby="preset-title">
@@ -622,7 +725,7 @@ export function DropsStudio() {
           <AnimatePresence mode="wait">
             <motion.section className="setup-card" key={`${selectedId}-${customMode}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22 }}>
               <div className="setup-heading">
-                <div><span>{customMode ? "YOUR CUSTOM BLUEPRINT" : "SET UP THIS RECIPE"}</span><h2>{selectedPreset.title}</h2><p>{selectedPreset.description}</p></div>
+                <div><span>{draftSpec ? "AI PRODUCT BLUEPRINT" : customMode ? "YOUR CUSTOM BLUEPRINT" : "SET UP THIS RECIPE"}</span><h2>{draftSpec?.name ?? selectedPreset.title}</h2><p>{draftSpec?.description ?? selectedPreset.description}</p></div>
                 <label className="custom-switch"><span>Custom mode</span><Switch.Root checked={customMode} onCheckedChange={setCustomMode}><Switch.Thumb /></Switch.Root></label>
               </div>
               <div className="field-grid">
@@ -657,16 +760,16 @@ export function DropsStudio() {
               </div>
 
               <div className="source-strip">
-                <div><BadgeCheck size={16} /><span><strong>Verified foundation</strong> · {selectedPreset.tools.join(" · ")}</span></div>
+                <div><BadgeCheck size={16} /><span><strong>Verified foundation</strong> · {(draftSpec?.tools ?? selectedPreset.tools).join(" · ")}</span></div>
                 <button type="button" onClick={refreshMarket}>{dataMode === "live" ? "Refresh live data" : "Connect live data"}</button>
               </div>
-              <button className="build-button" type="button" onClick={buildProject} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling your live product…</> : <><Sparkles size={19} />{selectedPreset.cta}<ArrowRight size={18} /></>}</button>
+              <button className="build-button" type="button" onClick={buildProject} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling screens, state and runtime…</> : <><Sparkles size={19} />{draftSpec ? `Build ${draftSpec.name}` : selectedPreset.cta}<ArrowRight size={18} /></>}</button>
               <button className="blank-button" type="button" onClick={() => { setCustomMode(true); setPrompt(""); setToast("Blank canvas enabled. Describe anything or assemble the stack manually."); }}>Start from a blank canvas</button>
             </motion.section>
           </AnimatePresence>
         </section>
 
-        <PreviewCanvas preset={selectedPreset} values={values} market={market} dataMode={dataMode} prediction={prediction} isPlaying={isPlaying} onToggleAudio={toggleAudio} onAction={handlePreviewAction} />
+        <PreviewCanvas preset={selectedPreset} spec={draftSpec ?? undefined} values={values} market={market} dataMode={dataMode} prediction={prediction} isPlaying={isPlaying} onToggleAudio={toggleAudio} onAction={handlePreviewAction} />
       </div>
 
       <footer className="studio-footer"><Brand /><p>Build on real crypto intelligence. You approve every external action.</p><div><a href="https://dropstab.com/" target="_blank" rel="noreferrer">DropsTab</a><a href="https://t.me/Drops" target="_blank" rel="noreferrer">Drops Bot</a><a href="https://api-docs.dropstab.com/" target="_blank" rel="noreferrer">API Docs</a></div></footer>
@@ -683,6 +786,7 @@ export function DropsStudio() {
               <div className="provider-detail">
                 <span className="detail-icon">{provider.id === "free" ? <Sparkles /> : provider.id === "dropstab" ? <Database /> : provider.id === "dropsbot" ? <Bot /> : provider.id === "custom" ? <Code2 /> : <Cloud />}</span>
                 <div className="detail-copy"><span>{provider.eyebrow}</span><h3>{provider.name}</h3><p>{provider.description}</p></div>
+                {provider.id === "openrouter" && <div className="oauth-connect-card"><div><BadgeCheck /><span><strong>Connect account in one click</strong><small>OpenRouter creates a user-controlled key. It stays only in this browser tab.</small></span></div><button type="button" onClick={() => void connectOpenRouterAccount()}>Continue with OpenRouter <ArrowRight size={15} /></button><em>or use an existing API key below</em></div>}
                 {provider.endpoint && <label className="key-field"><span>HTTPS chat-completions endpoint</span><input type="url" value={customEndpoint} onChange={(event) => setCustomEndpoint(event.target.value)} placeholder="https://api.example.com/v1/chat/completions" /></label>}
                 {provider.keyLabel && <label className="key-field"><span>{provider.keyLabel}</span><div><LockKeyhole size={16} /><input type="password" autoComplete="off" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="••••••••••••••••" /></div></label>}
                 {["openai", "anthropic", "openrouter", "kimi", "custom"].includes(provider.id) && <label className="key-field"><span>Model ID</span><input type="text" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} placeholder="Enter a model ID" /></label>}

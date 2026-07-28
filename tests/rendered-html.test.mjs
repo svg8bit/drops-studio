@@ -31,10 +31,12 @@ test("server-renders the complete Drops Studio builder", async () => {
 });
 
 test("starter preview is removed and source contains the required product surfaces", async () => {
-  const [page, component, dropstabRoute, packageJson, studio] = await Promise.all([
+  const [page, component, dropstabRoute, agentRoute, compiler, packageJson, studio] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dropstab/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/agent/plan/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../components/project-studio.tsx", import.meta.url), "utf8"),
   ]);
@@ -42,7 +44,14 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(page, /<DropsStudio \/>/);
   assert.match(component, /providerList/);
   assert.match(component, /AI & API Vault/);
-  assert.match(component, /\/api\/plan/);
+  assert.match(component, /\/api\/agent\/plan/);
+  assert.match(component, /OpenRouter/);
+  assert.match(agentRoute, /poolside\/laguna-s-2\.1-free/);
+  assert.match(agentRoute, /GUEST_DAILY_LIMIT/);
+  assert.match(compiler, /renderAlphaNative/);
+  assert.match(compiler, /renderGameNative/);
+  assert.match(compiler, /dropsbotSetup/);
+  assert.match(compiler, /market-catcher-retro\.png/);
   assert.match(component, /sessionStorage/);
   assert.match(component, /Start from a blank canvas/);
   assert.match(component, /PROJECTS_STORAGE_KEY/);

@@ -78,7 +78,9 @@ unsafe scripts.
 
 1. Intent router selects or confirms a product recipe.
 2. Recipe graph selects data, triggers, interactions, AI and output modules.
-3. Free Auto creates a deterministic, high-quality project specification.
+3. Guest AI uses a platform-funded free-model route with a signed daily quota;
+   if capacity is unavailable, a deterministic category-aware compiler keeps the
+   build flow working instead of returning a dead end.
 4. A connected model may improve naming, copy, theme and feature configuration
    through a strictly validated JSON response.
 5. The project compiler produces a standalone HTML/CSS/JS product.
@@ -86,7 +88,8 @@ unsafe scripts.
 
 Supported brains:
 
-- Free Auto, no key and no usage fee;
+- Free Auto, three platform-funded AI plans per guest/day plus unlimited local
+  category-aware compilation;
 - OpenRouter Free (`openrouter/free`) with the user's OpenRouter key;
 - OpenAI;
 - Anthropic;
@@ -151,7 +154,7 @@ for Radio.
 ### Core
 
 - DropsTab Public API: market intelligence, categories, unlocks, funding and
-  research links when the user connects access.
+  research links through a platform-owned production key or user-connected access.
 - Drops Bot: alerts, wallet monitoring, Telegram delivery, Polymarket tracking
   and action continuation through documented product surfaces.
 

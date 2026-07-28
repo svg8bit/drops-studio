@@ -1,8 +1,9 @@
 import { presets, type PresetId } from "@/lib/presets";
-import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectDesignKit, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
+import { createDefaultBlueprint } from "@/lib/product-blueprint";
+import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectBlueprint, ProjectDesignKit, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
 
 const presetIds = new Set(presets.map((preset) => preset.id));
-const providers = new Set<ProjectProvider>(["free", "openai", "anthropic", "openrouter", "kimi", "custom"]);
+const providers = new Set<ProjectProvider>(["free", "gateway", "openai", "anthropic", "openrouter", "kimi", "custom"]);
 const modes = new Set(["light", "dark", "hybrid"]);
 const styles = new Set(["precision", "cosmic", "editorial", "playful"]);
 const designKits = new Set<ProjectDesignKit>(["drops-precision", "neon-arena", "mascot-pop", "glass-signal", "editorial-alpha", "terminal-pro"]);
@@ -10,10 +11,10 @@ const densities = new Set(["compact", "comfortable", "cinematic"]);
 const motions = new Set(["reduced", "smooth", "expressive"]);
 const fonts = new Set(["inter", "space-grotesk", "ibm-plex"]);
 const blockVariants = new Set<ProjectBlockConfig["variant"]>(["default", "compact", "wide", "spotlight"]);
-const gameGenres = new Set<ProjectGameDirection["genre"]>(["market-race", "coin-quiz", "portfolio-battle", "unlock-dodge"]);
-const artStyles = new Set<ProjectGameDirection["artStyle"]>(["3d-toy", "comic", "pixel", "neon"]);
-const gameWorlds = new Set<ProjectGameDirection["world"]>(["cloud-city", "space-exchange", "token-island", "cyber-arcade"]);
-const mascots = new Set<ProjectGameDirection["mascot"]>(["coin-crew", "rocket-pets", "market-monsters", "no-mascot"]);
+const gameGenres = new Set<ProjectGameDirection["genre"]>(["market-race", "coin-quiz", "portfolio-battle", "unlock-dodge", "catcher"]);
+const artStyles = new Set<ProjectGameDirection["artStyle"]>(["3d-toy", "comic", "pixel", "neon", "retro-cartoon"]);
+const gameWorlds = new Set<ProjectGameDirection["world"]>(["cloud-city", "space-exchange", "token-island", "cyber-arcade", "retro-factory"]);
+const mascots = new Set<ProjectGameDirection["mascot"]>(["coin-crew", "rocket-pets", "market-monsters", "retro-wolf", "no-mascot"]);
 const assetSources = new Set<ProjectGameDirection["assetSource"]>(["free-vector", "uploaded", "ai-generated"]);
 const difficulties = new Set<ProjectGameDirection["difficulty"]>(["casual", "normal", "expert"]);
 const experienceArchetypes = new Set<ProjectExperienceDirection["archetype"]>(["decision-cockpit", "creator-feed", "editorial-brief", "impact-map", "strategy-monitor", "market-explorer", "game-world", "discovery-companion", "character-habitat", "launch-board", "audio-studio", "voice-assistant"]);
@@ -106,6 +107,48 @@ function blocks(value: unknown): Record<string, ProjectBlockConfig> {
   }));
 }
 
+function textList(value: unknown, fallback: string[], maxItems = 12, maxLength = 140): string[] {
+  if (!Array.isArray(value)) return [...fallback];
+  const items = value.map((item) => cleanText(item, "", maxLength)).filter(Boolean).slice(0, maxItems);
+  return items.length ? items : [...fallback];
+}
+
+function blueprint(value: unknown, presetId: PresetId, prompt: string): ProjectBlueprint {
+  const fallback = createDefaultBlueprint(presetId, prompt);
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const contentInput = input.content && typeof input.content === "object" && !Array.isArray(input.content) ? input.content as Record<string, unknown> : {};
+  const gameInput = input.game && typeof input.game === "object" && !Array.isArray(input.game) ? input.game as Record<string, unknown> : null;
+  const locale = input.locale === "ru" || input.locale === "en" || input.locale === "auto" ? input.locale : fallback.locale;
+  return {
+    locale,
+    productType: cleanText(input.productType, fallback.productType, 100),
+    visualConcept: cleanText(input.visualConcept, fallback.visualConcept, 600),
+    primaryLoop: cleanText(input.primaryLoop, fallback.primaryLoop, 500),
+    modules: textList(input.modules, fallback.modules, 12, 80),
+    screens: textList(input.screens, fallback.screens, 10, 80),
+    interactions: textList(input.interactions, fallback.interactions, 14, 120),
+    dropsTabUse: textList(input.dropsTabUse, fallback.dropsTabUse, 10, 140),
+    dropsBotUse: textList(input.dropsBotUse, fallback.dropsBotUse, 10, 140),
+    acceptanceChecks: textList(input.acceptanceChecks, fallback.acceptanceChecks, 10, 180),
+    content: {
+      headline: cleanText(contentInput.headline, fallback.content.headline, 100),
+      subheadline: cleanText(contentInput.subheadline, fallback.content.subheadline, 180),
+      primaryAction: cleanText(contentInput.primaryAction, fallback.content.primaryAction, 64),
+      emptyState: cleanText(contentInput.emptyState, fallback.content.emptyState, 180),
+    },
+    ...(presetId === "crypto-game" ? {
+      game: {
+        mechanic: cleanText(gameInput?.mechanic, fallback.game?.mechanic ?? "Catch market objects and avoid risk hazards.", 360),
+        protagonist: cleanText(gameInput?.protagonist, fallback.game?.protagonist ?? "An original market character.", 320),
+        scene: cleanText(gameInput?.scene, fallback.game?.scene ?? fallback.visualConcept, 420),
+        objective: cleanText(gameInput?.objective, fallback.game?.objective ?? fallback.primaryLoop, 320),
+        artDirection: cleanText(gameInput?.artDirection, fallback.game?.artDirection ?? fallback.visualConcept, 420),
+        dataUse: cleanText(gameInput?.dataUse, fallback.game?.dataUse ?? fallback.dropsTabUse.join(" · "), 420),
+      },
+    } : {}),
+  };
+}
+
 function gameDirection(value: unknown): ProjectGameDirection {
   const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const safeBackgroundImage = backgroundImage(input.backgroundImage);
@@ -115,6 +158,12 @@ function gameDirection(value: unknown): ProjectGameDirection {
     world: gameWorlds.has(input.world as ProjectGameDirection["world"]) ? input.world as ProjectGameDirection["world"] : "cloud-city",
     mascot: mascots.has(input.mascot as ProjectGameDirection["mascot"]) ? input.mascot as ProjectGameDirection["mascot"] : "coin-crew",
     gameLoop: cleanText(input.gameLoop, "Pick a coin hero, lock a prediction, watch the live market race, then challenge friends.", 240),
+    mechanic: cleanText(input.mechanic, "React to market-driven objects and finish the round with the highest score.", 360),
+    protagonist: cleanText(input.protagonist, "An original market character.", 320),
+    scene: cleanText(input.scene, "A polished illustrated crypto game world.", 420),
+    objective: cleanText(input.objective, "Finish the round with the highest market-informed score.", 320),
+    artDirection: cleanText(input.artDirection, "Expressive original game illustration with readable silhouettes.", 420),
+    dataUse: cleanText(input.dataUse, "DropsTab market context changes the round; Drops Bot delivers daily challenges.", 420),
     difficulty: difficulties.has(input.difficulty as ProjectGameDirection["difficulty"]) ? input.difficulty as ProjectGameDirection["difficulty"] : "normal",
     roundSeconds: Math.round(finite(input.roundSeconds, 8, 5, 120)),
     sound: input.sound !== false,
@@ -156,6 +205,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
     ? input.tools.map((item) => cleanText(item, "", 80)).filter(Boolean).slice(0, 12)
     : preset.tools;
   const safeMarket = market(input.market);
+  const safePrompt = cleanText(input.prompt, "", 2_000);
   const dataEndpoint = typeof input.dataEndpoint === "string" && /^https?:\/\//i.test(input.dataEndpoint)
     ? input.dataEndpoint.slice(0, 500)
     : "/api/public-data";
@@ -167,7 +217,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
     slug: cleanSlug(input.slug, preset.id),
     tagline: cleanText(input.tagline, preset.tagline, 120),
     description: cleanText(input.description, preset.description, 360),
-    prompt: cleanText(input.prompt, "", 2_000),
+    prompt: safePrompt,
     values,
     tools: tools.length ? tools : preset.tools,
     brain: {
@@ -190,6 +240,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
     },
     blocks: blocks(input.blocks),
     experience: experienceDirection(input.experience, presetId),
+    blueprint: blueprint(input.blueprint, presetId, safePrompt),
     ...(presetId === "crypto-game" ? { gameDirection: gameDirection(input.gameDirection) } : {}),
     market: safeMarket.length ? safeMarket : [
       { symbol: "BTC", name: "Bitcoin", price: "$118,420", change: 4.21, marketCap: "$2.35T" },
@@ -205,6 +256,9 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
 export function applyEnhancement(spec: GeneratedProjectSpec, enhancement: unknown): GeneratedProjectSpec {
   if (!enhancement || typeof enhancement !== "object") return spec;
   const input = enhancement as Record<string, unknown>;
+  const blueprintInput = input.blueprint && typeof input.blueprint === "object"
+    ? input.blueprint as Record<string, unknown>
+    : null;
   return validateProjectSpec({
     ...spec,
     name: input.name ?? spec.name,
@@ -213,6 +267,16 @@ export function applyEnhancement(spec: GeneratedProjectSpec, enhancement: unknow
     theme: { ...spec.theme, ...(input.theme && typeof input.theme === "object" ? input.theme : {}) },
     design: { ...spec.design, ...(input.design && typeof input.design === "object" ? input.design : {}) },
     experience: { ...spec.experience, ...(input.experience && typeof input.experience === "object" ? input.experience : {}) },
+    blueprint: blueprintInput
+      ? {
+          ...spec.blueprint,
+          ...blueprintInput,
+          content: {
+            ...spec.blueprint.content,
+            ...(blueprintInput.content && typeof blueprintInput.content === "object" ? blueprintInput.content : {}),
+          },
+        }
+      : spec.blueprint,
     gameDirection: spec.gameDirection ? { ...spec.gameDirection, ...(input.gameDirection && typeof input.gameDirection === "object" ? input.gameDirection : {}) } : undefined,
     brain: { ...spec.brain, enhanced: true },
   });

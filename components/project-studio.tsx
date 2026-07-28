@@ -51,6 +51,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { compileProject } from "@/lib/project-compiler";
 import { createFreeDirectorProposal, DESIGN_DIRECTIONS, type DirectorProposal } from "@/lib/project-director";
+import { applyAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import type {
   GeneratedProject,
   GeneratedProjectSpec,
@@ -69,6 +70,7 @@ type DeviceMode = "desktop" | "mobile";
 
 const modelLabels: Record<ProjectProvider, string> = {
   free: "Free Director",
+  gateway: "Drops AI Gateway",
   openai: "OpenAI",
   anthropic: "Anthropic Claude",
   openrouter: "OpenRouter Free",
@@ -225,9 +227,9 @@ The package works on Vercel, Cloudflare Pages, Netlify and GitHub Pages with the
 `;
 }
 
-function projectArchive(project: GeneratedProject): Uint8Array {
+async function projectArchive(project: GeneratedProject): Promise<Uint8Array> {
   const slug = project.spec.slug;
-  return zipSync({
+  const files: Record<string, Uint8Array> = {
     "index.html": strToU8(project.html),
     "README.md": strToU8(readme(project.spec)),
     "project.json": strToU8(JSON.stringify(project.spec, null, 2)),
@@ -235,7 +237,12 @@ function projectArchive(project: GeneratedProject): Uint8Array {
     "netlify.toml": strToU8(`[build]\n  publish = "."\n\n[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = "nosniff"\n`),
     "wrangler.toml": strToU8(`name = "${slug}"\ncompatibility_date = "2026-07-28"\n[assets]\ndirectory = "."\n`),
     ".github/workflows/pages.yml": strToU8(`name: Deploy static site to Pages\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\npermissions:\n  contents: read\n  pages: write\n  id-token: write\njobs:\n  deploy:\n    environment:\n      name: github-pages\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/configure-pages@v5\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: .\n      - uses: actions/deploy-pages@v4\n`),
-  }, { level: 6 });
+  };
+  if (project.spec.presetId === "crypto-game") {
+    const response = await fetch("/assets/market-catcher-retro.png");
+    if (response.ok) files["assets/market-catcher-retro.png"] = new Uint8Array(await response.arrayBuffer());
+  }
+  return zipSync(files, { level: 6 });
 }
 
 function assistantWelcome(spec: GeneratedProjectSpec): ProjectChatMessage {
@@ -269,6 +276,7 @@ export function ProjectStudio() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [newModule, setNewModule] = useState("");
+  const [previewGameArt, setPreviewGameArt] = useState("");
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -324,7 +332,34 @@ export function ProjectStudio() {
     iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*");
   }, [designMode, project?.updatedAt]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (project?.spec.presetId !== "crypto-game") {
+      return;
+    }
+    void fetch("/assets/market-catcher-retro.png")
+      .then((response) => {
+        if (!response.ok) throw new Error("Game artwork unavailable.");
+        return response.blob();
+      })
+      .then((blob) => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      }))
+      .then((dataUrl) => { if (!cancelled) setPreviewGameArt(dataUrl); })
+      .catch(() => { if (!cancelled) setPreviewGameArt(""); });
+    return () => { cancelled = true; };
+  }, [project?.spec.presetId]);
+
   const preset = presets.find((item) => item.id === project?.spec.presetId);
+  const runtimeHtml = useMemo(() => {
+    if (!project) return "";
+    if (project.spec.presetId !== "crypto-game") return project.html;
+    const safePreviewArt = previewGameArt || "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+    return project.html.replace("/assets/market-catcher-retro.png", safePreviewArt);
+  }, [previewGameArt, project]);
   const activeProvider = useMemo(() => {
     if (!project) return "free" as ProjectProvider;
     return (window.sessionStorage?.getItem("drops-studio:active-brain") || project.spec.brain.provider || "free") as ProjectProvider;
@@ -436,14 +471,35 @@ export function ProjectStudio() {
           brain: { provider: "custom", model, enhanced: true },
         });
         proposal = { label: `${model} proposal`, summary: ["Applied the requested direction through your custom model.", "Preserved the validated crypto product contract."], affected: ["Product brief", "Experience", "Design"], spec: customSpec };
-      } else if (provider !== "free" && key) {
-        const model = window.sessionStorage.getItem(`drops-studio:${provider}:model`) || project.spec.brain.model;
-        const response = await fetch("/api/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, key, model, prompt: instruction, spec: project.spec }) });
-        const payload = await response.json() as { spec?: GeneratedProjectSpec; error?: string };
-        if (!response.ok || !payload.spec) throw new Error(payload.error || "Connected Director failed.");
-        proposal = { label: `${modelLabels[provider]} proposal`, summary: ["Applied the requested product direction through the connected model.", "Preserved the DropsTab and Drops Bot contracts."], affected: ["Product brief", "Design system"], spec: payload.spec };
       } else {
-        proposal = createFreeDirectorProposal(project.spec, instruction, selectedBlock?.id);
+        const model = window.sessionStorage.getItem(`drops-studio:${provider}:model`) || project.spec.brain.model;
+        const headers: Record<string, string> = { "content-type": "application/json" };
+        if (provider === "openrouter" && key) headers["x-openrouter-key"] = key;
+        else if (["openai", "anthropic", "kimi"].includes(provider) && key) headers["x-provider-key"] = key;
+        const response = await fetch("/api/agent/plan", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            provider: provider === "free" || provider === "gateway" ? undefined : provider,
+            model,
+            guestId: window.sessionStorage.getItem("drops-studio:guest-id"),
+            prompt: `Revise the existing product without changing its category (${project.spec.presetId}).\nUser change: ${instruction}\nSelected block: ${selectedBlock?.label ?? "whole product"}.\nCurrent product: ${JSON.stringify({ name: project.spec.name, tagline: project.spec.tagline, description: project.spec.description, tools: project.spec.tools })}\nCurrent blueprint: ${JSON.stringify(project.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: project.spec.theme, design: project.spec.design, experience: project.spec.experience, gameDirection: project.spec.gameDirection })}`,
+          }),
+        });
+        const payload = await response.json() as { plan?: AgentProductPlan; error?: string; model?: string; warning?: string };
+        if (!response.ok || !payload.plan) throw new Error(payload.error || "AI Director failed.");
+        const aiPlan: AgentProductPlan = { ...payload.plan, presetId: project.spec.presetId };
+        const revised = validateProjectSpec(applyAgentPlan(project.spec, aiPlan));
+        proposal = {
+          label: `${payload.model || aiPlan.model || modelLabels[provider]} change set`,
+          summary: [
+            `Rebuilt ${selectedBlock?.label ?? "the product direction"} from the full instruction.`,
+            `${aiPlan.blueprint.screens.length} native screens · ${aiPlan.blueprint.interactions.length} working interactions.`,
+            payload.warning || "DropsTab evidence and Drops Bot action boundaries remain explicit.",
+          ],
+          affected: [selectedBlock?.label ?? "Product blueprint", "Runtime", "Design system"],
+          spec: revised,
+        };
       }
       const assistant: ProjectChatMessage = {
         id: nowId("assistant"),
@@ -582,9 +638,9 @@ export function ProjectStudio() {
     void publish();
   }
 
-  function downloadSource(nextHost?: HostingProvider) {
+  async function downloadSource(nextHost?: HostingProvider) {
     if (!project) return;
-    const bytes = projectArchive(project);
+    const bytes = await projectArchive(project);
     downloadBlob(`${project.spec.slug}-source.zip`, new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" }));
     setToast(nextHost ? `Git-ready deployment package created for ${nextHost}` : "Runnable app + source ZIP downloaded");
     if (nextHost) window.setTimeout(() => window.open(hostLinks[nextHost], "_blank", "noopener,noreferrer"), 450);
@@ -628,6 +684,7 @@ export function ProjectStudio() {
             <label>Product name<input value={project.spec.name} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, name: event.target.value }))} /></label>
             <label>Product promise<textarea rows={4} value={project.spec.tagline} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, tagline: event.target.value }))} /></label>
             <div className="experience-brief"><span><Layers3 /> Experience brief</span><dl><div><dt>Archetype</dt><dd>{project.spec.experience.archetype.replace(/-/g, " ")}</dd></div><div><dt>Layout</dt><dd>{project.spec.experience.layout}</dd></div><div><dt>Data view</dt><dd>{project.spec.experience.dataView}</dd></div><div><dt>Loop</dt><dd>{project.spec.experience.engagement}</dd></div></dl><p>{project.spec.experience.primaryLoop}</p><div>{project.spec.experience.modules.map((module) => <i key={module}>{module}</i>)}</div></div>
+            <div className="blueprint-inspector"><span><WandSparkles /> AI product blueprint</span><p>{project.spec.blueprint.visualConcept}</p><dl><div><dt>Native screens</dt><dd>{project.spec.blueprint.screens.join(" · ")}</dd></div><div><dt>Working interactions</dt><dd>{project.spec.blueprint.interactions.join(" · ")}</dd></div><div><dt>DropsTab foundation</dt><dd>{project.spec.blueprint.dropsTabUse.join(" · ")}</dd></div><div><dt>Drops Bot automation</dt><dd>{project.spec.blueprint.dropsBotUse.join(" · ")}</dd></div></dl></div>
             {game && <div className="game-brief"><span><Gamepad2 /> Game brief</span><dl><div><dt>Genre</dt><dd>{game.genre.replace(/-/g, " ")}</dd></div><div><dt>World</dt><dd>{game.world.replace(/-/g, " ")}</dd></div><div><dt>Art</dt><dd>{game.artStyle}</dd></div><div><dt>Loop</dt><dd>{game.roundSeconds}s · {game.difficulty}</dd></div></dl><p>{game.gameLoop}</p></div>}
             <button className="inspector-primary" type="button" onClick={() => void sendDirectorPrompt(game ? "Make this game feel more visual, playful and shareable" : "Improve the product hierarchy and primary user loop")}><WandSparkles /> Ask Director to improve it</button>
           </section>}
@@ -642,7 +699,7 @@ export function ProjectStudio() {
             <label className="art-upload"><ImageIcon /><span><strong>{game ? "Replace game world artwork" : "Add product hero artwork"}</strong><small>Auto-optimized · included in public app and ZIP</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handleArtUpload(event.target.files?.[0])} /></label>
           </section>}
 
-          {tab === "data" && <section className="inspector-section"><div className="inspector-heading"><span><Database /> Data foundation</span><BadgeCheck /></div><p className="inspector-copy">The app uses the public adapter when available and an explicit saved snapshot as fallback.</p><div className="foundation-card"><span><Database /></span><div><strong>DropsTab-compatible market feed</strong><small>Prices · change · market cap · context</small></div><b>LIVE</b></div><div className="asset-list">{project.spec.market.map((coin) => <div key={coin.symbol}><span>{coin.symbol.slice(0, 2)}</span><div><strong>{coin.symbol}</strong><small>{coin.name}</small></div><b className={coin.change >= 0 ? "up" : "down"}>{coin.change >= 0 ? "+" : ""}{coin.change.toFixed(2)}%</b></div>)}</div><div className="safety-note"><ShieldCheck /><span><strong>No secret in the output</strong><small>Connected keys stay session-only and never enter publish or ZIP.</small></span></div><button className="inspector-secondary" type="button" onClick={() => window.open("https://api-docs.dropstab.com/", "_blank", "noopener,noreferrer")}><Database /> DropsTab API docs <ExternalLink /></button></section>}
+          {tab === "data" && <section className="inspector-section"><div className="inspector-heading"><span><Database /> Data foundation</span><BadgeCheck /></div><p className="inspector-copy">DropsTab Public API is the primary production data contract. A clearly labelled public fallback keeps exported demos alive when no platform or user key is available.</p><div className="foundation-card"><span><Database /></span><div><strong>DropsTab Public API adapter</strong><small>Prices · change · market cap · context</small></div><b>API READY</b></div><div className="asset-list">{project.spec.market.map((coin) => <div key={coin.symbol}><span>{coin.symbol.slice(0, 2)}</span><div><strong>{coin.symbol}</strong><small>{coin.name}</small></div><b className={coin.change >= 0 ? "up" : "down"}>{coin.change >= 0 ? "+" : ""}{coin.change.toFixed(2)}%</b></div>)}</div><div className="safety-note"><ShieldCheck /><span><strong>No secret in the output</strong><small>Connected keys stay session-only and never enter publish or ZIP.</small></span></div><button className="inspector-secondary" type="button" onClick={() => window.open("https://api-docs.dropstab.com/", "_blank", "noopener,noreferrer")}><Database /> DropsTab API docs <ExternalLink /></button></section>}
 
           {tab === "logic" && (
             <section className="inspector-section">
@@ -677,12 +734,12 @@ export function ProjectStudio() {
                 ))}
                 <div className="module-add"><Plus /><input aria-label="New product module" value={newModule} placeholder="Add module…" onChange={(event) => setNewModule(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addModule(); } }} /><button type="button" disabled={!newModule.trim() || project.spec.experience.modules.length >= 12} onClick={addModule}>Add</button></div>
               </div>
-              {game && <><span className="section-label">Game system</span><div className="logic-grid"><label>Difficulty<select value={game.difficulty} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, gameDirection: { ...game, difficulty: event.target.value } }), "Changed game difficulty")}><option value="casual">Casual</option><option value="normal">Normal</option><option value="expert">Expert</option></select></label><label>Demo timer<input type="number" min={5} max={120} value={game.roundSeconds} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, roundSeconds: Number(event.target.value) } : undefined }))} /></label></div></>}
+              {game && <><span className="section-label">Game system</span><div className="logic-grid"><label>Difficulty<select value={game.difficulty} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, gameDirection: { ...game, difficulty: event.target.value } }), "Changed game difficulty")}><option value="casual">Casual</option><option value="normal">Normal</option><option value="expert">Expert</option></select></label><label>Round timer<input type="number" min={5} max={120} value={game.roundSeconds} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, roundSeconds: Number(event.target.value) } : undefined }))} /></label></div><label>Core mechanic<textarea rows={3} value={game.mechanic} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, mechanic: event.target.value } : undefined }))} /></label><label>Character and world<textarea rows={3} value={`${game.protagonist}\n\n${game.scene}`} onChange={(event) => { const [protagonist, ...scene] = event.target.value.split("\n\n"); updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, protagonist, scene: scene.join("\n\n") || spec.gameDirection.scene } : undefined })); }} /></label><label>Art direction<textarea rows={3} value={game.artDirection} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, artDirection: event.target.value } : undefined }))} /></label><label>DropsTab gameplay mapping<textarea rows={3} value={game.dataUse} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, dataUse: event.target.value } : undefined }))} /></label></>}
               <div className="tool-stack"><span>Working capabilities</span>{project.spec.tools.map((tool) => <div key={tool}><Check /> {tool}</div>)}</div>
             </section>
           )}
 
-          {tab === "brain" && <section className="inspector-section"><div className="inspector-heading"><span><BrainCircuit /> AI brain</span><b>{activeProvider === "free" ? "FREE" : "BYO"}</b></div><div className="brain-card"><span><Sparkles /></span><div><strong>{modelLabels[activeProvider]}</strong><small>{activeProvider === "free" ? "Deterministic crypto-aware Director" : "Connected account · session only"}</small></div><b>Ready</b></div><div className="ai-capabilities"><span><Check /> Product planning and bounded patches</span><span><Check /> Category-aware visual direction</span><span><Check /> Free fallback when a provider fails</span><span><Check /> No key compiled into projects</span></div><button className="inspector-primary" type="button" onClick={() => { window.location.href = "/?connections=1"; }}><KeyRound /> Connect or change AI</button><div className="upgrade-card"><strong>Optional professional layer</strong><p>Use your own model for deeper naming and art direction. The working free compiler remains available.</p><span>OpenAI · Claude · OpenRouter · Kimi · Custom</span></div></section>}
+          {tab === "brain" && <section className="inspector-section"><div className="inspector-heading"><span><BrainCircuit /> AI brain</span><b>{activeProvider === "free" || activeProvider === "gateway" ? "FREE" : "BYO"}</b></div><div className="brain-card"><span><Sparkles /></span><div><strong>{modelLabels[activeProvider]}</strong><small>{activeProvider === "free" || activeProvider === "gateway" ? "Platform-funded AI with category-aware fallback" : "Connected account · session only"}</small></div><b>Ready</b></div><div className="ai-capabilities"><span><Check /> Full prompt-to-product planning</span><span><Check /> Category-native screens and interactions</span><span><Check /> AI revisions with reviewable checkpoints</span><span><Check /> No key compiled into projects</span></div><button className="inspector-primary" type="button" onClick={() => { window.location.href = "/?connections=1"; }}><KeyRound /> Connect or change AI</button><div className="upgrade-card"><strong>Professional model layer</strong><p>Connect OpenRouter in one click or bring your OpenAI, Claude, Kimi or compatible endpoint. Your own budget is used without being bundled into the app.</p><span>OpenRouter OAuth · OpenAI · Claude · Kimi · Custom</span></div></section>}
 
           {tab === "code" && <section className="inspector-section"><div className="inspector-heading"><span><Code2 /> Code & Git</span><b>OWNED</b></div><div className="file-tree"><span><Code2 /> index.html <b>generated</b></span><span><Settings2 /> project.json <b>source</b></span><span><GitBranch /> .github/workflows/pages.yml <b>deploy</b></span><span><Cloud /> vercel · netlify · wrangler <b>ready</b></span></div><div className="git-card"><div><GitBranch /><span><strong>Git-ready workspace</strong><small>main · {checkpoints.length} local commits</small></span></div><p>ZIP contains a runnable app and deployment workflows. Two-way GitHub OAuth is intentionally shown as an upgrade until a real GitHub App is connected.</p><button type="button" onClick={() => downloadSource("github")}><GitCommit /> Export & continue to GitHub <ExternalLink /></button></div><button className="inspector-secondary" type="button" onClick={() => setSourceOpen(true)}><Code2 /> Inspect exact generated source</button><button className="inspector-primary" type="button" onClick={() => downloadSource()}><Download /> Download runnable app + source</button></section>}
 
@@ -691,7 +748,7 @@ export function ProjectStudio() {
 
         <section className="runtime-stage">
           <div className="stage-toolbar"><div className="device-switch"><button type="button" className={device === "desktop" ? "active" : ""} onClick={() => setDevice("desktop")}><Monitor /> Desktop</button><button type="button" className={device === "mobile" ? "active" : ""} onClick={() => setDevice("mobile")}><Smartphone /> Mobile</button></div><div><button type="button" className={designMode ? "active" : ""} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /> Design mode</button><button type="button" onClick={() => setSourceOpen(true)}><Code2 /> Code</button><button type="button" onClick={openRuntime}><ExternalLink /> Fullscreen</button></div></div>
-          <div className={`runtime-browser ${device}`}><div className="browser-bar"><span><i /><i /><i /></span><strong>{project.spec.slug}.live</strong><b><i /> Live preview</b></div><iframe ref={iframeRef} key={project.updatedAt} title={`${project.spec.name} live application`} srcDoc={project.html} sandbox="allow-scripts allow-forms allow-popups allow-downloads" onLoad={() => iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*")} /></div>
+          <div className={`runtime-browser ${device}`}><div className="browser-bar"><span><i /><i /><i /></span><strong>{project.spec.slug}.live</strong><b><i /> Live preview</b></div><iframe ref={iframeRef} key={`${project.updatedAt}:${Boolean(previewGameArt)}`} title={`${project.spec.name} live application`} srcDoc={runtimeHtml} sandbox="allow-scripts allow-forms allow-popups allow-downloads" onLoad={() => iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*")} /></div>
         </section>
 
         <aside className="assistant-panel">
@@ -704,7 +761,7 @@ export function ProjectStudio() {
         </aside>
       </div>
 
-      <footer className="project-statusbar"><span><Check /> Autosaved <small>{new Date(project.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></span><span><Database /> DropsTab adapter <b>Live</b></span><span><Bot /> Drops Bot <strong>Action handoff</strong></span><span><BrainCircuit /> AI <strong>{modelLabels[activeProvider]}</strong></span><span className="operational"><i /> Product running</span></footer>
+      <footer className="project-statusbar"><span><Check /> Autosaved <small>{new Date(project.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></span><span><Database /> DropsTab foundation <b>API</b></span><span><Bot /> Drops Bot <strong>Action handoff</strong></span><span><BrainCircuit /> AI <strong>{modelLabels[activeProvider]}</strong></span><span className="operational"><i /> Product running</span></footer>
 
       <Dialog.Root open={sourceOpen} onOpenChange={setSourceOpen}><Dialog.Portal><Dialog.Overlay className="studio-dialog-overlay" /><Dialog.Content className="source-dialog"><div><div><Dialog.Title>Exact runnable source</Dialog.Title><Dialog.Description>This is the standalone product currently rendered in Preview and included in publish/export.</Dialog.Description></div><Dialog.Close><X /></Dialog.Close></div><pre>{project.html}</pre><footer><button type="button" onClick={() => navigator.clipboard.writeText(project.html).then(() => setToast("Source copied"))}><Copy /> Copy HTML</button><button type="button" onClick={() => downloadSource()}><Download /> Download full ZIP</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>
 

@@ -4,13 +4,19 @@ The product works without requiring new backend development from DropsTab or Dro
 
 ## DropsTab
 
-Live market mode uses the visitor's API key and the documented coins endpoint:
+Live market mode uses the documented coins endpoint:
 
 ```text
 GET https://public-api.dropstab.com/api/v1/coins
 ```
 
-The local `/api/dropstab` route acts as a narrow proxy. It forwards the key only for that request, normalizes the response for the preview, and never persists the credential.
+The local `/api/dropstab` route acts as a narrow proxy for a visitor-connected
+key. It forwards the key only for that request, normalizes the response for the
+preview, and never persists the credential. A deployment may also set
+`DROPSTAB_API_KEY` server-side; `/api/public-data` then uses DropsTab as the
+primary feed for every published application without exposing the key. If no
+platform key is configured, the runtime explicitly labels its public demo feed
+as a fallback rather than presenting it as DropsTab data.
 
 Relevant official references:
 
@@ -55,7 +61,15 @@ The Vault verifies a key against the provider's official models endpoint:
 - Kimi/Moonshot: `https://api.moonshot.ai/v1/models`
 - Custom: a user-supplied public HTTPS OpenAI-compatible chat-completions endpoint
 
-Free Auto is a deterministic local planner and product compiler. Connected OpenAI, Anthropic, OpenRouter and Kimi accounts can improve planning through `/api/plan` and bounded product copy/theme values through `/api/generate`. OpenRouter defaults to `openrouter/free`; availability and limits remain controlled by OpenRouter. Custom endpoints are called directly from the visitor's browser, so the hosting service does not become an unrestricted request proxy.
+Free Auto first uses a platform-funded Vercel AI Gateway route with a signed
+three-build daily guest quota and several free-model fallbacks. When that
+capacity is unavailable, a deterministic category-aware planner still creates a
+working product. Connected OpenAI, Anthropic, OpenRouter and Kimi accounts can
+improve planning through `/api/agent/plan` and bounded product configuration
+through `/api/generate`. OpenRouter defaults to `openrouter/free`; availability
+and limits remain controlled by OpenRouter. Custom endpoints are called directly
+from the visitor's browser, so the hosting service does not become an
+unrestricted request proxy.
 
 Models never generate executable HTML. The server and browser compile the same validated project specification, so model output cannot inject scripts or credentials into a published product.
 

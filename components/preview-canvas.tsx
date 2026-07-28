@@ -1,8 +1,10 @@
 "use client";
 
 import Image from "next/image";
+import { useEffect, useState } from "react";
 import {
   Activity,
+  ArrowLeft,
   ArrowRight,
   AudioLines,
   BadgeCheck,
@@ -19,6 +21,7 @@ import {
   Play,
   Radio,
   Rocket,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
   Star,
@@ -29,6 +32,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { Preset } from "@/lib/presets";
+import type { GeneratedProjectSpec } from "@/lib/project-types";
 
 export interface MarketCoin {
   symbol: string;
@@ -47,6 +51,7 @@ export interface PredictionEvent {
 
 interface PreviewCanvasProps {
   preset: Preset;
+  spec?: GeneratedProjectSpec;
   values: Record<string, string>;
   market: MarketCoin[];
   dataMode: "sample" | "live";
@@ -84,13 +89,13 @@ function ActionRow({ actions, onAction }: { actions: string[]; onAction: (label:
   );
 }
 
-function BriefPreview({ market, onAction }: { market: MarketCoin[]; onAction: (label: string) => void }) {
+function BriefPreview({ market, spec, onAction }: { market: MarketCoin[]; spec?: GeneratedProjectSpec; onAction: (label: string) => void }) {
   const leader = market[0];
   return (
     <div className="telegram-card">
       <div className="message-title">
         <span className="message-icon sun"><TrendingUp size={17} /></span>
-        <div><strong>Morning Alpha</strong><span>Today · 08:00 UTC</span></div>
+        <div><strong>{spec?.blueprint.content.headline ?? "Morning Alpha"}</strong><span>Today · {spec?.values.schedule ?? "08:00 UTC"}</span></div>
       </div>
       <div className="brief-block">
         <div className="brief-heading"><TrendingUp size={17} /><strong>Biggest move</strong><b>{leader.symbol} {formatSigned(leader.change)}</b></div>
@@ -127,12 +132,12 @@ function EnginePreview({ values, onAction }: { values: Record<string, string>; o
   );
 }
 
-function ChannelPreview({ onAction }: { onAction: (label: string) => void }) {
+function ChannelPreview({ spec, onAction }: { spec?: GeneratedProjectSpec; onAction: (label: string) => void }) {
   return (
     <div className="telegram-card alpha-message">
       <div className="message-title">
         <span className="message-icon purple"><Zap size={17} /></span>
-        <div><strong>Alpha caught early</strong><span>Solana smart money · now</span></div>
+        <div><strong>{spec?.blueprint.content.headline ?? "Alpha caught early"}</strong><span>{spec?.values.niche ?? "Solana smart money"} · now</span></div>
         <BadgeCheck className="verified" size={17} />
       </div>
       <div className="alpha-token-row">
@@ -204,21 +209,52 @@ function AggregatorPreview({ market, onAction }: { market: MarketCoin[]; onActio
   );
 }
 
-function GamePreview({ market, onAction }: { market: MarketCoin[]; onAction: (label: string) => void }) {
+function GamePreview({ market, spec, onAction }: { market: MarketCoin[]; spec?: GeneratedProjectSpec; onAction: (label: string) => void }) {
+  const [playing, setPlaying] = useState(false);
+  const [lane, setLane] = useState(1);
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [seconds, setSeconds] = useState(30);
+  const title = spec?.blueprint.content.headline ?? "Market Catcher";
+  const retro = spec?.gameDirection?.artStyle === "retro-cartoon" || /волк|wolf/i.test(spec?.prompt ?? "");
+
+  useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      setSeconds((value) => {
+        if (value <= 1) {
+          setPlaying(false);
+          return 0;
+        }
+        return value - 1;
+      });
+      setScore((value) => value + 10 + Math.floor(Math.random() * 8));
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [playing]);
+
+  function start() {
+    setPlaying(true);
+    setScore(0);
+    setLives(3);
+    setSeconds(spec?.gameDirection?.roundSeconds ?? 30);
+    onAction("START GAME");
+  }
+
+  function move(direction: -1 | 1) {
+    setLane((value) => Math.max(0, Math.min(3, value + direction)));
+    if (playing) setScore((value) => value + 4);
+  }
+
   return (
-    <div className="game-card">
-      <div className="game-top"><span><Gamepad2 size={16} /> DAILY RUN</span><b>01:42</b></div>
-      <h3>Beat the Market</h3>
-      <p>Pick the best performer for the next 24 hours.</p>
-      <div className="game-coins">
-        {market.map((coin, index) => (
-          <button key={coin.symbol} type="button" onClick={() => onAction(`LOCK ${coin.symbol}`)} className={index === 2 ? "selected" : ""}>
-            <span>{coin.symbol.slice(0, 1)}</span><strong>{coin.symbol}</strong><small>{coin.price}</small>
-          </button>
-        ))}
-      </div>
-      <button className="game-lock" type="button" onClick={() => onAction("LOCK PICK")}>Lock SOL <ArrowRight size={15} /></button>
-      <div className="game-footer"><Trophy size={15} /> 8,412 players · top 18% this week</div>
+    <div className={`catcher-game ${retro ? "retro" : ""}`} style={{ backgroundImage: retro ? "linear-gradient(rgba(28,20,18,.05), rgba(42,19,10,.2)), url('/assets/market-catcher-retro.png')" : undefined }}>
+      <div className="catcher-hud"><span><Gamepad2 /> DAILY MARKET RUN</span><div><b>{score.toLocaleString()}</b><small>SCORE</small></div><div><b>{"♥".repeat(lives)}</b><small>LIVES</small></div><strong>{seconds}s</strong></div>
+      <div className="catcher-title"><span>POWERED BY DROPSTAB MOMENTUM</span><h3>{title}</h3><p>{spec?.blueprint.content.subheadline ?? "Catch market leaders. Dodge unlock risk."}</p></div>
+      {playing && <div className="falling-layer" aria-hidden="true">{market.slice(0, 3).map((coin, index) => <i className={`falling-token lane-${index}`} style={{ animationDelay: `${index * -.72}s` }} key={coin.symbol}>{coin.symbol}</i>)}<i className="falling-token hazard lane-3">!</i></div>}
+      <div className="catcher-character-marker" style={{ left: `${15 + lane * 23}%` }}><i /><span>{retro ? "WOLF" : "PLAYER"}</span></div>
+      {!playing && seconds > 0 && <button className="catcher-start" type="button" onClick={start}><Play /> {spec?.blueprint.content.primaryAction ?? "PLAY NOW"}</button>}
+      {!playing && seconds === 0 && <div className="catcher-result"><Trophy /><strong>{score} points</strong><span>Round complete · Drops Bot challenge ready</span><button type="button" onClick={start}><RotateCcw /> Play again</button></div>}
+      <div className="catcher-controls"><button type="button" onClick={() => move(-1)} aria-label="Move left"><ArrowLeft /></button><span>{playing ? "Move the baskets" : "Keyboard + touch ready"}</span><button type="button" onClick={() => move(1)} aria-label="Move right"><ArrowRight /></button></div>
     </div>
   );
 }
@@ -295,16 +331,16 @@ function SiriPreview({ isPlaying, onToggleAudio, onAction }: { isPlaying: boolea
   );
 }
 
-export function PreviewCanvas({ preset, values, market, dataMode, prediction, isPlaying, onToggleAudio, onAction }: PreviewCanvasProps) {
+export function PreviewCanvas({ preset, spec, values, market, dataMode, prediction, isPlaying, onToggleAudio, onAction }: PreviewCanvasProps) {
   let content;
   switch (preset.preview) {
     case "engine": content = <EnginePreview values={values} onAction={onAction} />; break;
-    case "channel": content = <ChannelPreview onAction={onAction} />; break;
-    case "brief": content = <BriefPreview market={market} onAction={onAction} />; break;
+    case "channel": content = <ChannelPreview spec={spec} onAction={onAction} />; break;
+    case "brief": content = <BriefPreview market={market} spec={spec} onAction={onAction} />; break;
     case "prediction": content = <PredictionPreview market={market} prediction={prediction} onAction={onAction} />; break;
     case "copy": content = <CopyPreview onAction={onAction} />; break;
     case "aggregator": content = <AggregatorPreview market={market} onAction={onAction} />; break;
-    case "game": content = <GamePreview market={market} onAction={onAction} />; break;
+    case "game": content = <GamePreview market={market} spec={spec} onAction={onAction} />; break;
     case "companion": content = <CompanionPreview onAction={onAction} />; break;
     case "tamagotchi": content = <TamagotchiPreview onAction={onAction} />; break;
     case "hunt": content = <HuntPreview onAction={onAction} />; break;
@@ -313,20 +349,27 @@ export function PreviewCanvas({ preset, values, market, dataMode, prediction, is
     default: content = null;
   }
 
+  const isTelegram = preset.preview === "channel" || preset.preview === "brief";
+  const isGame = preset.preview === "game";
+  const surface = isTelegram ? "telegram-native" : isGame ? "game-native" : `${preset.preview}-native`;
+  const visibleName = spec?.name ?? (isTelegram ? preset.preview === "brief" ? "Morning Alpha" : "Alpha Channel" : preset.output);
+
   return (
     <section className="preview-column" aria-live="polite">
       <div className="preview-status-row">
-        <span className="preview-ready"><BadgeCheck size={17} /> {preset.shortTitle} · Preview updated</span>
+        <span className="preview-ready"><BadgeCheck size={17} /> {spec ? "AI build" : preset.shortTitle} · Preview updated</span>
         <span className={`data-mode ${dataMode}`}><i /> {dataMode === "live" ? "Live DropsTab data" : "Sample data"}</span>
       </div>
-      <div className="preview-device" style={{ "--preview-accent": preset.accent, "--preview-tint": preset.tint } as React.CSSProperties}>
+      <div className={`preview-device ${surface}`} style={{ "--preview-accent": preset.accent, "--preview-tint": preset.tint } as React.CSSProperties}>
         <div className="preview-device-header">
+          {isTelegram && <button className="telegram-back" type="button" aria-label="Back"><ArrowLeft /></button>}
           <div className="preview-brand-mark"><Image src="https://dropstab.com/images/dropstab-logo-drop-default.svg" alt="" width={26} height={26} unoptimized /></div>
-          <div><strong>{preset.output}</strong><span>Built with Drops Studio</span></div>
+          <div className="preview-profile"><strong>{visibleName}</strong><span>{isTelegram ? `${values.audience ?? "10,842"} subscribers · built with DropsTab` : isGame ? "Playable build · DropsTab live market adapter" : spec?.tagline ?? "Built with Drops Studio"}</span></div>
           <button type="button" aria-label="Preview options"><span /><span /><span /></button>
         </div>
+        {!isTelegram && !isGame && spec && <div className="native-screen-tabs">{spec.blueprint.screens.slice(0, 4).map((screen, index) => <span className={index === 0 ? "active" : ""} key={screen}>{screen}</span>)}</div>}
         <div className="preview-stage">{content}</div>
-        <div className="preview-reactions"><span><Flame size={15} />128</span><span><Star size={15} />64</span><span><UsersRound size={15} />23</span><button type="button" onClick={() => onAction("SHARE")}><ArrowRight size={16} /></button></div>
+        {isTelegram && <div className="preview-reactions"><span><Flame size={15} />128</span><span><Star size={15} />64</span><span><UsersRound size={15} />23</span><button type="button" onClick={() => onAction("SHARE")}><ArrowRight size={16} /></button></div>}
       </div>
       <p className="preview-footnote"><ShieldCheck size={14} /> Preview changes live. No key or trade is executed without your approval.</p>
     </section>

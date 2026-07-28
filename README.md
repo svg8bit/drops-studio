@@ -11,7 +11,7 @@ The start page is a prompt-first recipe builder. Choose one of 12 products, tune
 ## What works
 
 - 12 distinct standalone crypto product runtimes
-- deterministic no-key Free Auto compiler
+- platform-funded guest AI planning with a signed daily quota and a deterministic no-key fallback compiler
 - bounded design enhancement through OpenAI, Anthropic, OpenRouter Free, Kimi or a custom OpenAI-compatible model
 - universal Experience Director for every recipe: archetype, layout, data view,
   engagement loop, audience, primary loop and editable product modules
@@ -20,7 +20,7 @@ The start page is a prompt-first recipe builder. Choose one of 12 products, tune
 - editable Project Studio for project metadata, data, product logic, AI,
   branding, source and checkpoints
 - sandboxed live application preview
-- live public market adapter plus user-connected DropsTab snapshots and research handoffs
+- DropsTab Public API production adapter plus user-connected DropsTab snapshots and a clearly labelled public demo fallback
 - Drops Bot alert, channel, Telegram and action handoffs
 - one-click free public publishing to an anonymous `/p/{slug}` application URL
 - runnable source ZIP with `index.html`, project config and Vercel, Cloudflare, Netlify and GitHub Pages files
@@ -55,6 +55,7 @@ change creates a restorable checkpoint.
 ## Honest integration boundary
 
 - A visitor may connect a DropsTab API key for documented live data. The key stays in browser session storage and is never compiled, persisted or published.
+- A deployment can set `DROPSTAB_API_KEY` server-side so every published app uses the official DropsTab Public API without exposing the key. Without it, apps label the public demo feed as a fallback.
 - Generated products preserve DropsTab attribution, compatible market data and research links.
 - Drops Bot actions continue through the official Telegram product; the app never claims an undocumented remote configuration succeeded.
 - Trading-like actions are explicit research, paper-mode or official-product handoffs until the user approves an action in the connected product.

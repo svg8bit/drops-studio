@@ -1,6 +1,6 @@
 import type { PresetId } from "@/lib/presets";
 
-export type ProjectProvider = "free" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
+export type ProjectProvider = "free" | "gateway" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
 
 export type ProjectDesignKit =
   | "drops-precision"
@@ -19,16 +19,49 @@ export interface ProjectBlockConfig {
 }
 
 export interface ProjectGameDirection {
-  genre: "market-race" | "coin-quiz" | "portfolio-battle" | "unlock-dodge";
-  artStyle: "3d-toy" | "comic" | "pixel" | "neon";
-  world: "cloud-city" | "space-exchange" | "token-island" | "cyber-arcade";
-  mascot: "coin-crew" | "rocket-pets" | "market-monsters" | "no-mascot";
+  genre: "market-race" | "coin-quiz" | "portfolio-battle" | "unlock-dodge" | "catcher";
+  artStyle: "3d-toy" | "comic" | "pixel" | "neon" | "retro-cartoon";
+  world: "cloud-city" | "space-exchange" | "token-island" | "cyber-arcade" | "retro-factory";
+  mascot: "coin-crew" | "rocket-pets" | "market-monsters" | "retro-wolf" | "no-mascot";
   gameLoop: string;
+  mechanic: string;
+  protagonist: string;
+  scene: string;
+  objective: string;
+  artDirection: string;
+  dataUse: string;
   difficulty: "casual" | "normal" | "expert";
   roundSeconds: number;
   sound: boolean;
   assetSource: "free-vector" | "uploaded" | "ai-generated";
   backgroundImage?: string;
+}
+
+export interface ProjectBlueprint {
+  locale: "en" | "ru" | "auto";
+  productType: string;
+  visualConcept: string;
+  primaryLoop: string;
+  modules: string[];
+  screens: string[];
+  interactions: string[];
+  dropsTabUse: string[];
+  dropsBotUse: string[];
+  acceptanceChecks: string[];
+  content: {
+    headline: string;
+    subheadline: string;
+    primaryAction: string;
+    emptyState: string;
+  };
+  game?: {
+    mechanic: string;
+    protagonist: string;
+    scene: string;
+    objective: string;
+    artDirection: string;
+    dataUse: string;
+  };
 }
 
 export interface ProjectExperienceDirection {
@@ -100,6 +133,7 @@ export interface GeneratedProjectSpec {
   };
   blocks: Record<string, ProjectBlockConfig>;
   experience: ProjectExperienceDirection;
+  blueprint: ProjectBlueprint;
   gameDirection?: ProjectGameDirection;
   market: ProjectMarketCoin[];
   prediction: ProjectPrediction;
