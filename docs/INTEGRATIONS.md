@@ -61,7 +61,7 @@ Models never generate executable HTML. The server and browser compile the same v
 
 ## Publishing and source ownership
 
-Free publishing stores a validated specification and freshly compiled standalone HTML in Cloudflare D1, then returns an anonymous `/p/{slug}` URL. The public route is the product itself and contains no editor chrome.
+Free publishing stores a validated specification and freshly compiled standalone HTML in Cloudflare D1 on Sites or Vercel Blob on the public fallback, then returns an anonymous `/p/{slug}` URL. The public route is the product itself and contains no editor chrome. The Hobby Blob path is capped by the provider's free quota rather than silently creating charges.
 
 The ZIP export contains:
 

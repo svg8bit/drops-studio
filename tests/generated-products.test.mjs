@@ -42,12 +42,15 @@ test("the compiler contains a distinct runnable product for every preset", async
 });
 
 test("publishing recompiles validated specs and source export includes real hosting files", async () => {
-  const [publishRoute, publicRoute, studio, migration, hosting] = await Promise.all([
+  const [publishRoute, publicRoute, studio, migration, hosting, persistence, vercel, pkg] = await Promise.all([
     readFile(new URL("../app/api/projects/publish/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/p/[slug]/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../components/project-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0000_pretty_shape.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
+    readFile(new URL("../db/projects.ts", import.meta.url), "utf8"),
+    readFile(new URL("../vercel.json", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(publishRoute, /validateProjectSpec/);
@@ -64,6 +67,15 @@ test("publishing recompiles validated specs and source export includes real host
   assert.match(studio, /publishedAt, updatedAt: publishedAt/);
   assert.match(migration, /CREATE TABLE `published_projects`/);
   assert.equal(JSON.parse(hosting).d1, "DB");
+  assert.match(persistence, /process\.env\.BLOB_READ_WRITE_TOKEN/);
+  assert.match(persistence, /await import\("@vercel\/blob"\)/);
+  assert.match(persistence, /presetIds\.has\(record\.presetId\)/);
+  assert.match(persistence, /await put\(blobPath\(project\.slug\)/);
+  assert.match(persistence, /await get\(blobPath\(slug\)/);
+  assert.match(persistence, /try \{\s+parsed = JSON\.parse\(text\)/);
+  assert.match(persistence, /catch \{\s+return null/);
+  assert.equal(JSON.parse(vercel).buildCommand, "npm run build:vercel");
+  assert.equal(JSON.parse(pkg).dependencies["@vercel/blob"], "^2.6.1");
 });
 
 test("professional editing and category direction apply to every product", async () => {

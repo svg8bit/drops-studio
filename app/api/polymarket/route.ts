@@ -27,7 +27,7 @@ function dayChange(markets: unknown): number {
 
 export async function GET() {
   try {
-    const response = await fetch("https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&tag_slug=crypto&order=volume24hr&ascending=false", { next: { revalidate: 60 }, signal: AbortSignal.timeout(8_000) });
+    const response = await fetch("https://gamma-api.polymarket.com/events?active=true&closed=false&limit=20&tag_slug=crypto&order=volume24hr&ascending=false", { next: { revalidate: 60 }, signal: AbortSignal.timeout(8_000) });
     if (!response.ok) throw new Error("Gamma unavailable");
     const payload = await response.json() as Array<Record<string, unknown>>;
     const impactTopics = /bitcoin|ethereum|solana|crypto|etf|sec|fed|rate|oil|iran|tariff|election/i;

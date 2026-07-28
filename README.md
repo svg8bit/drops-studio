@@ -88,7 +88,8 @@ The production test builds the Cloudflare-compatible application and checks the 
 - Next.js 16 / React 19 through Vinext
 - TypeScript and Tailwind CSS v4
 - Radix UI, Framer Motion and Lucide icons
-- Cloudflare D1 for published-project persistence
+- Cloudflare D1 on Sites or Vercel Blob on the public fallback for
+  published-project persistence
 - Fflate for browser-side runnable source archives
 - Cloudflare Workers-compatible Sites runtime
 
