@@ -93,9 +93,9 @@ export function compileProject(input: GeneratedProjectSpec): string {
   (function(){
     "use strict";
     var spec=JSON.parse(document.getElementById("projectSpec").textContent);
-    var parentOrigin=(function(){try{return new URL(document.referrer).origin}catch(_error){return location.origin}})();
-    function trustedParentMessage(event){return window.parent!==window&&event.source===window.parent&&event.origin===parentOrigin}
-    function postParent(payload){if(window.parent!==window)window.parent.postMessage(payload,parentOrigin)}
+    var parentOrigin=(function(){var candidates=[];try{if(location.ancestorOrigins&&location.ancestorOrigins.length)candidates.push(location.ancestorOrigins[0])}catch(_error){}try{if(document.referrer)candidates.push(new URL(document.referrer).origin)}catch(_error){}try{candidates.push(location.origin)}catch(_error){}return candidates.find(function(value){return /^https?:\\/\\//i.test(String(value||""))})||""})();
+    function trustedParentMessage(event){return window.parent!==window&&Boolean(parentOrigin)&&event.source===window.parent&&event.origin===parentOrigin}
+    function postParent(payload){if(window.parent!==window&&parentOrigin)window.parent.postMessage(payload,parentOrigin)}
     var telegramEndpoint=(function(){try{return location.protocol==="http:"||location.protocol==="https:"?new URL("/api/telegram/verify",location.origin).href:""}catch(_error){return ""}})();
     var telegramSession=(function(){try{var key="drops-studio:telegram-session";var current=sessionStorage.getItem(key);if(current&&/^[a-f0-9-]{16,64}$/i.test(current))return current;var next=crypto.randomUUID?crypto.randomUUID():Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function(value){return value.toString(16).padStart(2,"0")}).join("");sessionStorage.setItem(key,next);return next}catch(_error){return ""}})();
     var presetTools=${tools};

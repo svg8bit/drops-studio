@@ -61,6 +61,7 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(compiler, /data-studio-element/);
   assert.match(compiler, /trustedParentMessage/);
   assert.match(compiler, /postParent/);
+  assert.match(compiler, /ancestorOrigins/);
   assert.doesNotMatch(compiler, /window\.parent\.postMessage\([^\n]+,"\*"\)/);
   assert.match(compiler, /originalText/);
   assert.match(compiler, /editableOwnerKey/);
