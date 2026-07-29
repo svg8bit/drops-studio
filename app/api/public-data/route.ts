@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { DROPSTAB_SHARED_CACHE_SECONDS, fetchDropsTabCoins, type DropsTabMarketCoin } from "@/lib/dropstab-client";
 
-export const revalidate = DROPSTAB_SHARED_CACHE_SECONDS;
+// Next.js segment config must be statically analyzable at build time.
+export const revalidate = 900;
 
 const assets = [
   { symbol: "BTC", name: "Bitcoin", product: "BTC-USD", marketCap: "$2.35T" },
