@@ -10,6 +10,7 @@ The start page is a prompt-first recipe builder. Choose one of 12 products, tune
 
 ## What works
 
+- output-first intent routing: the requested app type wins while wallet, alert, AI and delivery requirements become capabilities inside it
 - 12 distinct standalone crypto product runtimes
 - platform-funded guest AI planning with a signed daily quota and a deterministic no-key fallback compiler
 - bounded design enhancement through OpenAI, Anthropic, OpenRouter Free, Kimi or a custom OpenAI-compatible model
@@ -17,13 +18,15 @@ The start page is a prompt-first recipe builder. Choose one of 12 products, tune
   engagement loop, audience, primary loop and editable product modules
 - direct Design Mode editing, six curated design kits, responsive preview,
   block variants/visibility, uploaded hero artwork and category-specific chat directions
+- explicit Plan and Build Now flows with visible compilation stages
 - editable Project Studio for project metadata, data, product logic, AI,
-  branding, source and checkpoints
+  branding, validated source, release checks and checkpoints
 - sandboxed live application preview
-- DropsTab Public API production adapter plus user-connected DropsTab snapshots and a clearly labelled public demo fallback
+- DropsTab Public API production adapter with a 15-minute shared cache, no generated-app polling, user-triggered BYOK snapshots and a clearly labelled public demo fallback
 - Drops Bot alert, channel, Telegram and action handoffs
 - one-click free public publishing to an anonymous `/p/{slug}` application URL
-- runnable source ZIP with `index.html`, project config and Vercel, Cloudflare, Netlify and GitHub Pages files
+- deterministic quality gate on every edit and before publishing
+- runnable source ZIP with `index.html`, editable project config, integration manifest, quality report, smoke test and Vercel, Cloudflare, Netlify and GitHub Pages files
 - local project persistence and automatic migration from the earlier blueprint prototype
 - responsive builder, Studio and standalone products
 
@@ -56,12 +59,13 @@ change creates a restorable checkpoint.
 
 - A visitor may connect a DropsTab API key for documented live data. The key stays in browser session storage and is never compiled, persisted or published.
 - A deployment can set `DROPSTAB_API_KEY` server-side so every published app uses the official DropsTab Public API without exposing the key. Without it, apps label the public demo feed as a fallback.
+- The platform-owned feed is cached for 15 minutes and targets one shared market request per warm runtime cache window; CDN caching and in-flight de-duplication suppress duplicate traffic. Serverless cold starts, regions and retries mean this is a budget policy, not a false global hard cap. Generated apps do not poll it. A visitor's own key is called only on an explicit connect or refresh action.
 - Generated products preserve DropsTab attribution, compatible market data and research links.
 - Drops Bot actions continue through the official Telegram product; the app never claims an undocumented remote configuration succeeded.
 - Trading-like actions are explicit research, paper-mode or official-product handoffs until the user approves an action in the connected product.
 - Connected models return a validated JSON design object. They never author the executable runtime.
 
-See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) and [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md) for the product and security contracts.
+See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md), [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md) and [docs/COMPETITIVE-BENCHMARK.md](docs/COMPETITIVE-BENCHMARK.md) for the product, competitor and security contracts.
 
 ## Run locally
 

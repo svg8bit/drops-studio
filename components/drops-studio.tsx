@@ -47,6 +47,7 @@ import { useRouter } from "next/navigation";
 import { PreviewCanvas, type MarketCoin, type PredictionEvent } from "@/components/preview-canvas";
 import { compileProject } from "@/lib/project-compiler";
 import { createProjectSpec } from "@/lib/project-factory";
+import { evaluateProjectQuality } from "@/lib/project-quality";
 import { applyAgentPlan, fallbackAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import type { GeneratedProject, GeneratedProjectSpec, ProjectProvider } from "@/lib/project-types";
 import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
@@ -54,6 +55,22 @@ import { validateProjectSpec } from "@/lib/project-validator";
 import { defaultPresetId, presets, type PresetId } from "@/lib/presets";
 
 type ProviderId = "free" | "dropstab" | "dropsbot" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
+type BuilderRunMode = "plan" | "build";
+type BuildActivityStatus = "queued" | "active" | "done" | "failed";
+
+interface BuildActivityItem {
+  id: "intent" | "blueprint" | "runtime" | "quality";
+  label: string;
+  detail: string;
+  status: BuildActivityStatus;
+}
+
+const initialBuildActivity: BuildActivityItem[] = [
+  { id: "intent", label: "Understand output", detail: "Category and secondary capabilities", status: "queued" },
+  { id: "blueprint", label: "Direct the product", detail: "Screens, loops, data and actions", status: "queued" },
+  { id: "runtime", label: "Compile working app", detail: "State, interactions and responsive UI", status: "queued" },
+  { id: "quality", label: "Run release checks", detail: "Category, safety, data and publish gate", status: "queued" },
+];
 
 interface Provider {
   id: ProviderId;
@@ -184,6 +201,8 @@ export function DropsStudio() {
   const [draftSpec, setDraftSpec] = useState<GeneratedProjectSpec | null>(null);
   const [guestRemaining, setGuestRemaining] = useState<number | null>(3);
   const [planLabel, setPlanLabel] = useState("Free AI ready");
+  const [runMode, setRunMode] = useState<BuilderRunMode>("build");
+  const [buildActivity, setBuildActivity] = useState<BuildActivityItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
   const guestIdRef = useRef("");
@@ -283,10 +302,14 @@ export function DropsStudio() {
       : current);
   }
 
-  async function planPrompt() {
+  function setActivity(id: BuildActivityItem["id"], status: BuildActivityStatus, detail?: string) {
+    setBuildActivity((current) => current.map((item) => item.id === id ? { ...item, status, detail: detail ?? item.detail } : item));
+  }
+
+  async function planPrompt(): Promise<GeneratedProjectSpec | null> {
     if (!prompt.trim()) {
       setToast("Describe your idea first — one sentence is enough.");
-      return;
+      return null;
     }
     setPlanning(true);
     setPlanLabel("AI is turning your brief into screens, logic and integrations…");
@@ -424,12 +447,32 @@ export function DropsStudio() {
       const brainName = tier === "fallback" ? "Local product compiler" : plan.model || (tier === "guest" ? "Free AI" : "Your model");
       setPlanLabel(`${brainName} · ${plan.blueprint.screens.length} screens · ${plan.blueprint.interactions.length} interactions`);
       setToast(warning || `${brainName} created a real ${plan.blueprint.productType} blueprint.`);
+      return spec;
     } catch (error) {
       setPlanLabel("AI planning needs attention");
       setToast(error instanceof Error ? error.message : "AI planning failed.");
+      return null;
     } finally {
       setPlanning(false);
     }
+  }
+
+  async function runPrompt() {
+    if (planning || building) return;
+    setBuildActivity(initialBuildActivity.map((item, index) => ({ ...item, status: index === 0 ? "active" : "queued" })));
+    const spec = await planPrompt();
+    if (!spec) {
+      setActivity("intent", "failed", "The product brief needs attention");
+      return;
+    }
+    setActivity("intent", "done", `${spec.presetId.replace(/-/g, " ")} selected from the requested output`);
+    setActivity("blueprint", "done", `${spec.blueprint.screens.length} screens · ${spec.blueprint.interactions.length} interactions`);
+    if (runMode === "plan") {
+      setActivity("runtime", "queued", "Review the blueprint, then build when ready");
+      setActivity("quality", "queued", "Runs on the compiled product");
+      return;
+    }
+    await buildProject(spec);
   }
 
   function toggleTool(id: string) {
@@ -556,16 +599,20 @@ export function DropsStudio() {
     }
   }
 
-  async function buildProject() {
+  async function buildProject(specOverride?: GeneratedProjectSpec) {
     if (building) return;
     setBuilding(true);
-    setToast(`Compiling a real ${selectedPreset.output.toLowerCase()}…`);
+    const targetPreset = specOverride ? presets.find((item) => item.id === specOverride.presetId) ?? selectedPreset : selectedPreset;
+    setActivity("runtime", "active", `Compiling ${targetPreset.output.toLowerCase()}`);
+    setToast(`Compiling a real ${targetPreset.output.toLowerCase()}…`);
     try {
       const provider = (["openai", "anthropic", "openrouter", "kimi", "custom"].includes(activeBrain) ? activeBrain : "free") as ProjectProvider;
       const model = window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain] || "Free Auto";
       const selectedToolLabels = selectedTools.map((id) => customTools.find((tool) => tool.id === id)?.label ?? id);
-      const hasAgentDraft = Boolean(draftSpec && draftSpec.presetId === selectedId && draftSpec.prompt.trim() === prompt.trim());
-      let spec = hasAgentDraft && draftSpec
+      const hasAgentDraft = Boolean(specOverride || (draftSpec && draftSpec.presetId === selectedId && draftSpec.prompt.trim() === prompt.trim()));
+      let spec = specOverride
+        ? validateProjectSpec({ ...specOverride, market, prediction, dataEndpoint: `${window.location.origin}/api/public-data` })
+        : hasAgentDraft && draftSpec
         ? validateProjectSpec({
             ...draftSpec,
             values,
@@ -611,8 +658,18 @@ export function DropsStudio() {
         }
       }
 
+      const html = compileProject(spec);
+      setActivity("runtime", "done", "Standalone state, interactions and responsive runtime compiled");
+      setActivity("quality", "active", "Checking category fit, safety and data/action contracts");
+      const quality = evaluateProjectQuality(spec, html);
+      const sandboxChecks = new Set(["runtime", "interactions", "dropstab", "dropsbot", "actions"]);
+      const staticFailures = quality.criticalFailures.filter((id) => !sandboxChecks.has(id));
+      if (staticFailures.length) {
+        throw new Error(`Build stopped by quality gate (${quality.score}/100): ${staticFailures.join(", ")}.`);
+      }
+      setActivity("quality", "done", "Static contract passed · sandbox smoke continues in Studio");
       const now = new Date().toISOString();
-      const project: GeneratedProject = { id: crypto.randomUUID(), spec, html: compileProject(spec), createdAt: now, updatedAt: now };
+      const project: GeneratedProject = { id: crypto.randomUUID(), spec, html, quality, createdAt: now, updatedAt: now };
       const next = [project, ...projects].slice(0, 50);
       try {
         window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
@@ -620,8 +677,10 @@ export function DropsStudio() {
         window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify([project, ...projects.filter((item) => !item.spec.experience.backgroundImage).slice(0, 8)]));
       }
       setProjects(next);
+      setBuilding(false);
       router.push(`/studio/${project.id}`);
     } catch (error) {
+      setActivity("quality", "failed", error instanceof Error ? error.message : "Release checks failed");
       setToast(error instanceof Error ? error.message : "Could not compile this project.");
       setBuilding(false);
     }
@@ -697,11 +756,14 @@ export function DropsStudio() {
           <div className="prompt-frame">
             <div className="prompt-box">
               <WandSparkles size={22} />
-              <textarea value={prompt} onChange={(event) => { setPrompt(event.target.value); if (draftSpec && event.target.value.trim() !== draftSpec.prompt.trim()) setDraftSpec(null); }} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") planPrompt(); }} placeholder="Describe what you want to build — product, design, behavior and audience…" rows={2} aria-label="Describe your crypto project" />
-              <button type="button" onClick={planPrompt} disabled={planning} aria-label="Plan a working project">{planning ? <LoaderCircle className="spin" /> : <Send />}</button>
+              <textarea value={prompt} onChange={(event) => { setPrompt(event.target.value); if (draftSpec && event.target.value.trim() !== draftSpec.prompt.trim()) setDraftSpec(null); }} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runPrompt(); }} placeholder="Describe the full product: output, users, behavior, design and data…" rows={2} aria-label="Describe your crypto project" />
+              <button type="button" onClick={() => void runPrompt()} disabled={planning || building} aria-label={runMode === "build" ? "Build a working project" : "Plan a working project"}>{planning || building ? <LoaderCircle className="spin" /> : runMode === "build" ? <Rocket /> : <Send />}</button>
             </div>
+            <div className="prompt-runbar"><div className="run-mode" role="group" aria-label="Builder mode"><button type="button" className={runMode === "plan" ? "active" : ""} onClick={() => setRunMode("plan")}><WandSparkles /> Plan</button><button type="button" className={runMode === "build" ? "active" : ""} onClick={() => setRunMode("build")}><Rocket /> Build now</button></div><span>Requested output wins; wallet, AI and alerts become capabilities inside it.</span></div>
             <div className="prompt-meta"><span>{planLabel}</span><span>{activeBrain === "free" ? `${guestRemaining ?? 3} free AI builds left today` : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}</span></div>
           </div>
+
+          {buildActivity.length > 0 && <div className="build-activity" aria-live="polite">{buildActivity.map((item) => <div className={item.status} key={item.id}><span>{item.status === "done" ? <Check /> : item.status === "active" ? <LoaderCircle className="spin" /> : item.status === "failed" ? <X /> : <i />}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div></div>)}</div>}
 
           <section className="preset-section" aria-labelledby="preset-title">
             <div className="section-heading"><div><span>START WITH A RECIPE</span><h2 id="preset-title">Ideas that are worth building</h2></div><div className="carousel-controls"><button type="button" onClick={() => shiftPreset(-1)} aria-label="Previous preset"><ArrowLeft /></button><button type="button" onClick={() => shiftPreset(1)} aria-label="Next preset"><ArrowRight /></button></div></div>
@@ -763,7 +825,7 @@ export function DropsStudio() {
                 <div><BadgeCheck size={16} /><span><strong>Verified foundation</strong> · {(draftSpec?.tools ?? selectedPreset.tools).join(" · ")}</span></div>
                 <button type="button" onClick={refreshMarket}>{dataMode === "live" ? "Refresh live data" : "Connect live data"}</button>
               </div>
-              <button className="build-button" type="button" onClick={buildProject} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling screens, state and runtime…</> : <><Sparkles size={19} />{draftSpec ? `Build ${draftSpec.name}` : selectedPreset.cta}<ArrowRight size={18} /></>}</button>
+              <button className="build-button" type="button" onClick={() => void buildProject()} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling and running release checks…</> : <><Sparkles size={19} />{draftSpec ? `Build ${draftSpec.name}` : selectedPreset.cta}<ArrowRight size={18} /></>}</button>
               <button className="blank-button" type="button" onClick={() => { setCustomMode(true); setPrompt(""); setToast("Blank canvas enabled. Describe anything or assemble the stack manually."); }}>Start from a blank canvas</button>
             </motion.section>
           </AnimatePresence>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { DROPSTAB_SHARED_CACHE_SECONDS, fetchDropsTabCoins, type DropsTabMarketCoin } from "@/lib/dropstab-client";
 
-export const dynamic = "force-dynamic";
+export const revalidate = DROPSTAB_SHARED_CACHE_SECONDS;
 
 const assets = [
   { symbol: "BTC", name: "Bitcoin", product: "BTC-USD", marketCap: "$2.35T" },
@@ -8,13 +9,15 @@ const assets = [
   { symbol: "SOL", name: "Solana", product: "SOL-USD", marketCap: "$91.7B" },
 ];
 
-interface MarketCoin {
-  symbol: string;
-  name: string;
-  price: string;
-  change: number;
-  marketCap: string;
-}
+type MarketResult = {
+  coins: DropsTabMarketCoin[];
+  source: string;
+  provider: "dropstab" | "fallback";
+  fetchedAt: string;
+};
+
+let marketCache: { expiresAt: number; value: MarketResult } | null = null;
+let marketRequest: Promise<MarketResult> | null = null;
 
 function money(value: number): string {
   if (!Number.isFinite(value)) return "—";
@@ -26,58 +29,14 @@ function money(value: number): string {
 function cors(payload: unknown, init?: ResponseInit) {
   const response = NextResponse.json(payload, init);
   response.headers.set("access-control-allow-origin", "*");
-  response.headers.set("cache-control", "public, max-age=15, s-maxage=30, stale-while-revalidate=120");
+  response.headers.set(
+    "cache-control",
+    response.status >= 500 ? "no-store" : `public, max-age=60, s-maxage=${DROPSTAB_SHARED_CACHE_SECONDS}, stale-while-revalidate=3600`,
+  );
   return response;
 }
 
-function firstNumber(...values: unknown[]): number {
-  for (const value of values) {
-    if (value === null || value === undefined) continue;
-    const candidate = typeof value === "object" && value !== null && "USD" in value ? (value as { USD?: unknown }).USD : value;
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  return 0;
-}
-
-function dropsTabRows(body: unknown): MarketCoin[] {
-  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
-  const nested = record.data && typeof record.data === "object" && !Array.isArray(record.data) ? record.data as Record<string, unknown> : {};
-  const rows = Array.isArray(body) ? body
-    : Array.isArray(record.data) ? record.data
-      : Array.isArray(nested.content) ? nested.content
-        : Array.isArray(nested.items) ? nested.items
-          : Array.isArray(record.content) ? record.content
-            : Array.isArray(record.items) ? record.items
-              : [];
-  return rows.slice(0, 10).map((raw): MarketCoin | null => {
-    if (!raw || typeof raw !== "object") return null;
-    const coin = raw as Record<string, unknown>;
-    const symbol = String(coin.symbol ?? coin.ticker ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
-    if (!symbol) return null;
-    return {
-      symbol,
-      name: String(coin.name ?? coin.title ?? symbol).slice(0, 48),
-      price: money(firstNumber(coin.price, coin.currentPrice, coin.priceUsd)),
-      change: firstNumber(coin.priceChange24h, coin.change24h, coin.percentChange24h, coin.priceChangePercentage24h),
-      marketCap: money(firstNumber(coin.marketCap, coin.marketCapUsd, coin.cap)),
-    };
-  }).filter((coin): coin is MarketCoin => Boolean(coin));
-}
-
-async function fetchDropsTabMarket(key: string): Promise<MarketCoin[]> {
-  const response = await fetch("https://public-api.dropstab.com/api/v1/coins?page=0&pageSize=10&sortingOrder=ASC&sortingField=RANK", {
-    headers: { "x-dropstab-api-key": key, accept: "application/json" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(7_000),
-  });
-  if (!response.ok) throw new Error(`DropsTab returned ${response.status}`);
-  const rows = dropsTabRows(await response.json());
-  if (!rows.length) throw new Error("DropsTab returned no market rows");
-  return rows;
-}
-
-async function fetchPublicFallbackMarket(): Promise<MarketCoin[]> {
+async function fetchPublicFallbackMarket(): Promise<DropsTabMarketCoin[]> {
   return Promise.all(assets.map(async (asset) => {
     const response = await fetch(`https://api.exchange.coinbase.com/products/${asset.product}/stats`, {
       headers: { accept: "application/json", "user-agent": "Drops Studio/1.0" },
@@ -98,18 +57,33 @@ async function fetchPublicFallbackMarket(): Promise<MarketCoin[]> {
   }));
 }
 
+async function fetchMarket(dropsTabKey?: string): Promise<MarketResult> {
+  if (marketCache && marketCache.expiresAt > Date.now()) return marketCache.value;
+  if (marketRequest) return marketRequest;
+
+  marketRequest = (async () => {
+    const fetchedAt = new Date().toISOString();
+    const value = dropsTabKey
+      ? await fetchDropsTabCoins(dropsTabKey, { mode: "platform", pageSize: 10 })
+        .then((coins) => ({ coins, source: "DropsTab Public API · shared 15-minute cache", provider: "dropstab" as const, fetchedAt }))
+        .catch(() => fetchPublicFallbackMarket().then((coins) => ({ coins, source: "Live public fallback · connect DropsTab for full context", provider: "fallback" as const, fetchedAt })))
+      : await fetchPublicFallbackMarket()
+        .then((coins) => ({ coins, source: "Live public fallback · connect DropsTab for full context", provider: "fallback" as const, fetchedAt }));
+    marketCache = { expiresAt: Date.now() + DROPSTAB_SHARED_CACHE_SECONDS * 1_000, value };
+    return value;
+  })().finally(() => { marketRequest = null; });
+
+  return marketRequest;
+}
+
 export async function GET() {
   try {
     const dropsTabKey = process.env.DROPSTAB_API_KEY?.trim();
     const [marketResult, predictionResponse] = await Promise.all([
-      dropsTabKey
-        ? fetchDropsTabMarket(dropsTabKey)
-          .then((coins) => ({ coins, source: "DropsTab Public API · live" }))
-          .catch(() => fetchPublicFallbackMarket().then((coins) => ({ coins, source: "Live public fallback · DropsTab research handoff" })))
-        : fetchPublicFallbackMarket().then((coins) => ({ coins, source: "Live public fallback · DropsTab research handoff" })),
+      fetchMarket(dropsTabKey),
       fetch("https://gamma-api.polymarket.com/events?active=true&closed=false&limit=20&tag_slug=crypto&order=volume24hr&ascending=false", {
         headers: { accept: "application/json" },
-        next: { revalidate: 60 },
+        cache: "no-store",
         signal: AbortSignal.timeout(7_000),
       }).catch(() => null),
     ]);
@@ -136,8 +110,19 @@ export async function GET() {
       }
     }
 
-    return cors({ coins: marketResult.coins, events, source: marketResult.source });
-  } catch {
+    return cors({
+      coins: marketResult.coins,
+      events,
+      source: marketResult.source,
+      data: {
+        provider: marketResult.provider,
+        fetchedAt: marketResult.fetchedAt,
+        sharedCacheSeconds: DROPSTAB_SHARED_CACHE_SECONDS,
+        budgetPolicy: "Targets one shared DropsTab market request per warm cache window; generated apps never poll the API.",
+      },
+    });
+  } catch (error) {
+    console.error("[public-data] live adapters failed", error);
     return cors({ error: "The live market adapter is temporarily unavailable." }, { status: 502 });
   }
 }

@@ -18,6 +18,17 @@ primary feed for every published application without exposing the key. If no
 platform key is configured, the runtime explicitly labels its public demo feed
 as a fallback rather than presenting it as DropsTab data.
 
+The platform feed uses a 15-minute warm-runtime cache, in-flight request
+de-duplication and stale-while-revalidate CDN delivery. Its steady-state target
+is one `/coins` request per warm cache window, but serverless cold starts,
+regions and bounded retries mean this is intentionally documented as a budget
+policy rather than a false global hard cap. Generated products request the
+adapter on load and explicit refresh only; they never poll DropsTab. A
+visitor-connected key is used only when the visitor explicitly connects or
+refreshes it. Transient `429` and `5xx` responses use at most three short
+exponential-backoff attempts; authentication and documented-request errors are
+never retried.
+
 Relevant official references:
 
 - <https://api-docs.dropstab.com/>
@@ -80,7 +91,10 @@ Free publishing stores a validated specification and freshly compiled standalone
 The ZIP export contains:
 
 - the same runnable `index.html`;
-- `project.json` without credentials;
+- editable `project.json` without credentials;
+- `drops.config.json` with the honest data/action/AI integration manifest;
+- `quality-report.json` from the same release gate used before publishing;
+- `tests/smoke.mjs` for source-owned runtime checks;
 - Vercel, Cloudflare, Netlify and GitHub Pages configuration;
 - a run and deployment README.
 

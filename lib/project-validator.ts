@@ -130,6 +130,7 @@ function blueprint(value: unknown, presetId: PresetId, prompt: string): ProjectB
     dropsTabUse: textList(input.dropsTabUse, fallback.dropsTabUse, 10, 140),
     dropsBotUse: textList(input.dropsBotUse, fallback.dropsBotUse, 10, 140),
     acceptanceChecks: textList(input.acceptanceChecks, fallback.acceptanceChecks, 10, 180),
+    ...(Array.isArray(input.revisionNotes) ? { revisionNotes: textList(input.revisionNotes, [], 8, 180) } : {}),
     content: {
       headline: cleanText(contentInput.headline, fallback.content.headline, 100),
       subheadline: cleanText(contentInput.subheadline, fallback.content.subheadline, 180),

@@ -23,6 +23,7 @@ that foundation.
 The existing light Drops Studio home remains the entry experience:
 
 - natural-language project prompt;
+- explicit Plan and Build Now modes;
 - 12-product carousel;
 - recipe-specific setup controls;
 - Free Auto and bring-your-own AI selection;
@@ -46,6 +47,7 @@ Every generated project opens on its own `/studio/{project-id}` route with:
 - a large sandboxed runtime showing the actual running product;
 - rebuild/regenerate controls;
 - source inspection and ZIP export;
+- editable, validated `project.json` plus a deterministic release-check panel;
 - one-click free publishing;
 - a shareable standalone URL;
 - Vercel, Cloudflare, GitHub Pages, Netlify and self-hosted export choices;
@@ -77,6 +79,9 @@ HTML. This keeps every output runnable and prevents a model from publishing
 unsafe scripts.
 
 1. Intent router selects or confirms a product recipe.
+   Explicit output nouns have priority: requesting a Telegram channel produces
+   a Telegram product even when the same prompt also asks for wallet tracking,
+   AI explanations or alert rules.
 2. Recipe graph selects data, triggers, interactions, AI and output modules.
 3. Guest AI uses a platform-funded free-model route with a signed daily quota;
    if capacity is unavailable, a deterministic category-aware compiler keeps the
@@ -84,7 +89,10 @@ unsafe scripts.
 4. A connected model may improve naming, copy, theme and feature configuration
    through a strictly validated JSON response.
 5. The project compiler produces a standalone HTML/CSS/JS product.
-6. The same compiler powers Studio preview, public hosting and source export.
+6. Static checks plus an executed sandbox smoke gate verify category fit,
+   interaction handlers, successful market-data handoff, a safe Drops Bot
+   action probe, state, responsive rules and secret safety.
+7. The same compiler powers Studio preview, public hosting and source export.
 
 Supported brains:
 

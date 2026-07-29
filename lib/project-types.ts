@@ -48,6 +48,7 @@ export interface ProjectBlueprint {
   dropsTabUse: string[];
   dropsBotUse: string[];
   acceptanceChecks: string[];
+  revisionNotes?: string[];
   content: {
     headline: string;
     subheadline: string;
@@ -152,6 +153,36 @@ export interface GeneratedProject {
   publishedAt?: string;
   checkpoints?: ProjectCheckpoint[];
   conversation?: ProjectChatMessage[];
+  quality?: ProjectQualityReport;
+}
+
+export interface ProjectQualityCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+  weight: number;
+  critical: boolean;
+}
+
+export interface ProjectQualityReport {
+  score: number;
+  readyToPublish: boolean;
+  checkedAt: string;
+  checks: ProjectQualityCheck[];
+  criticalFailures: string[];
+  runtimeSmoke?: ProjectRuntimeSmokeResult;
+}
+
+export interface ProjectRuntimeSmokeResult {
+  executed: boolean;
+  runtime: boolean;
+  interactions: boolean;
+  dropstab: boolean;
+  dropsbot: boolean;
+  actions: boolean;
+  errors: string[];
+  checkedAt: string;
 }
 
 export interface ProjectCheckpoint {

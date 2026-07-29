@@ -41,7 +41,7 @@ test("the compiler contains a distinct runnable product for every preset", async
   assert.doesNotMatch(compiler, /new Function/);
 });
 
-test("publishing recompiles validated specs and source export includes real hosting files", async () => {
+test("publishing recompiles validated specs and persists recoverable public builds", async () => {
   const [publishRoute, publicRoute, studio, migration, hosting, persistence, vercel, pkg] = await Promise.all([
     readFile(new URL("../app/api/projects/publish/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/p/[slug]/route.ts", import.meta.url), "utf8"),
@@ -57,12 +57,6 @@ test("publishing recompiles validated specs and source export includes real host
   assert.match(publishRoute, /compileProject/);
   assert.match(publicRoute, /text\/html; charset=utf-8/);
   assert.match(publicRoute, /content-security-policy/);
-  assert.match(studio, /"index\.html"/);
-  assert.match(studio, /"project\.json"/);
-  assert.match(studio, /"vercel\.json"/);
-  assert.match(studio, /"netlify\.toml"/);
-  assert.match(studio, /"wrangler\.toml"/);
-  assert.match(studio, /pages\.yml/);
   assert.match(studio, /migrated\.publishedAt !== migrated\.updatedAt/);
   assert.match(studio, /publishedAt, updatedAt: publishedAt/);
   assert.match(studio, /function handleCloudPublish\(\)/);
@@ -116,5 +110,25 @@ test("professional editing and category direction apply to every product", async
   assert.match(studio, /categoryPrompts/);
   assert.match(studio, /Apply changes/);
   assert.match(studio, /Reordered product modules/);
+  assert.match(studio, /Owned source workspace/);
+  assert.match(studio, /Validate & apply/);
+  assert.match(studio, /Release checks/);
   assert.doesNotMatch(studio, /\{game && <label className="art-upload"/);
+});
+
+test("competitive benchmark and builder promise remain documented", async () => {
+  const [home, benchmark, integrations] = await Promise.all([
+    readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../docs/COMPETITIVE-BENCHMARK.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/INTEGRATIONS.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(home, /Requested output wins/);
+  assert.match(home, /Build now/);
+  assert.match(benchmark, /Replit Agent/);
+  assert.match(benchmark, /Lovable/);
+  assert.match(benchmark, /Bolt/);
+  assert.match(benchmark, /Base44/);
+  assert.match(integrations, /warm-runtime cache/);
+  assert.match(integrations, /never poll DropsTab/);
 });

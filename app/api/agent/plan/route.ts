@@ -3,7 +3,7 @@ import { createGateway, generateText, Output } from "ai";
 import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { fallbackAgentPlan } from "@/lib/product-blueprint";
+import { fallbackAgentPlan, routeProductIntent, type AgentProductPlan } from "@/lib/product-blueprint";
 import { presets, type PresetId } from "@/lib/presets";
 
 export const runtime = "nodejs";
@@ -35,6 +35,7 @@ const planSchema = z.object({
     dropsTabUse: z.array(z.string().min(2).max(140)).min(2).max(10),
     dropsBotUse: z.array(z.string().min(2).max(140)).min(1).max(10),
     acceptanceChecks: z.array(z.string().min(4).max(180)).min(3).max(10),
+    revisionNotes: z.array(z.string().min(4).max(180)).max(8).optional(),
     content: z.object({
       headline: z.string().min(2).max(100),
       subheadline: z.string().min(3).max(180),
@@ -116,6 +117,25 @@ The output must describe a distinct runtime:
 For a request resembling an existing copyrighted game or cartoon, preserve the requested mechanic and era mood but invent original characters, names and artwork.
 
 Return one strict JSON object matching the requested schema. No markdown, no prose outside JSON.`;
+
+function alignPlanToRequestedOutput(plan: AgentProductPlan, prompt: string): AgentProductPlan {
+  const intent = routeProductIntent(prompt);
+  if (plan.presetId === intent.presetId) {
+    const parsed = planSchema.parse(plan);
+    return { ...parsed, provider: plan.provider, model: plan.model };
+  }
+  const fallback = fallbackAgentPlan(prompt, intent.presetId);
+  const parsed = planSchema.parse({
+    ...fallback,
+    theme: { ...fallback.theme, ...plan.theme },
+    design: { ...fallback.design, ...plan.design },
+  });
+  return {
+    ...parsed,
+    provider: plan.provider,
+    model: plan.model,
+  };
+}
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -299,7 +319,7 @@ export async function POST(request: NextRequest) {
   if (openRouterKey) {
     try {
       const model = body?.model?.trim() || "openrouter/free";
-      const plan = await runOpenRouter(prompt, openRouterKey, model);
+      const plan = alignPlanToRequestedOutput(await runOpenRouter(prompt, openRouterKey, model), prompt);
       return NextResponse.json({ plan, tier: "byok", remaining: null }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "OpenRouter planning failed." }, { status: 502 });
@@ -319,7 +339,7 @@ export async function POST(request: NextRequest) {
     };
     try {
       const model = body?.model?.trim() || defaults[directProvider];
-      const plan = await runDirectProvider(prompt, directKey, directProvider, model);
+      const plan = alignPlanToRequestedOutput(await runDirectProvider(prompt, directKey, directProvider, model), prompt);
       return NextResponse.json({ plan, tier: "byok", remaining: null }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Connected model planning failed." }, { status: 502 });
@@ -334,7 +354,8 @@ export async function POST(request: NextRequest) {
   const guestId = (body?.guestId || request.headers.get("x-drops-guest") || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
   try {
     const result = await runGuestGateway(prompt, guestId || crypto.randomUUID());
-    return responseWithQuota({ plan: result.plan, tier: "guest", model: result.model, usage: result.usage, remaining: GUEST_DAILY_LIMIT - used - 1 }, used + 1);
+    const plan = alignPlanToRequestedOutput(result.plan, prompt);
+    return responseWithQuota({ plan, tier: "guest", model: result.model, usage: result.usage, remaining: GUEST_DAILY_LIMIT - used - 1 }, used + 1);
   } catch (error) {
     const fallback = fallbackAgentPlan(prompt);
     return responseWithQuota({

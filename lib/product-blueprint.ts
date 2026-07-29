@@ -1,5 +1,7 @@
 import { presets, type PresetId } from "@/lib/presets";
 import type { GeneratedProjectSpec, ProjectBlueprint, ProjectGameDirection } from "@/lib/project-types";
+import { routeProductIntent } from "@/lib/product-intent";
+export { routeProductIntent, type ProductIntentRoute } from "@/lib/product-intent";
 
 export interface AgentProductPlan {
   presetId: PresetId;
@@ -19,6 +21,41 @@ export interface AgentProductPlan {
 type BlueprintSeed = Omit<ProjectBlueprint, "locale" | "content"> & {
   content: ProjectBlueprint["content"];
 };
+
+type ExperienceSeed = Pick<GeneratedProjectSpec["experience"], "archetype" | "layout" | "dataView" | "engagement" | "audience" | "assetSource">;
+
+const experienceSeeds: Record<PresetId, ExperienceSeed> = {
+  "action-engine": { archetype: "decision-cockpit", layout: "split", dataView: "graph", engagement: "realtime", audience: "Active crypto operators", assetSource: "free-vector" },
+  "alpha-channel": { archetype: "creator-feed", layout: "feed", dataView: "timeline", engagement: "social", audience: "Telegram crypto creators", assetSource: "free-vector" },
+  "morning-alpha": { archetype: "editorial-brief", layout: "focus", dataView: "cards", engagement: "scheduled", audience: "Daily crypto decision makers", assetSource: "free-vector" },
+  "prediction-impact": { archetype: "impact-map", layout: "split", dataView: "map", engagement: "realtime", audience: "Event-driven traders", assetSource: "free-vector" },
+  "smart-money-copy": { archetype: "strategy-monitor", layout: "dashboard", dataView: "timeline", engagement: "realtime", audience: "Risk-aware onchain traders", assetSource: "free-vector" },
+  "crypto-aggregator": { archetype: "market-explorer", layout: "dashboard", dataView: "table", engagement: "realtime", audience: "Crypto researchers and communities", assetSource: "free-vector" },
+  "crypto-game": { archetype: "game-world", layout: "spatial", dataView: "graph", engagement: "social", audience: "Crypto-curious players", assetSource: "ai-generated" },
+  "personal-companion": { archetype: "discovery-companion", layout: "feed", dataView: "cards", engagement: "personal", audience: "Personalized crypto explorers", assetSource: "free-vector" },
+  "portfolio-tamagotchi": { archetype: "character-habitat", layout: "split", dataView: "cards", engagement: "personal", audience: "Portfolio holders who want playful risk feedback", assetSource: "ai-generated" },
+  "crypto-product-hunt": { archetype: "launch-board", layout: "feed", dataView: "cards", engagement: "social", audience: "Crypto builders and early adopters", assetSource: "free-vector" },
+  "crypto-radio": { archetype: "audio-studio", layout: "split", dataView: "timeline", engagement: "scheduled", audience: "Listeners who prefer audio intelligence", assetSource: "free-vector" },
+  "crypto-siri": { archetype: "voice-assistant", layout: "focus", dataView: "cards", engagement: "personal", audience: "Voice-first crypto users", assetSource: "free-vector" },
+};
+
+function createDefaultExperience(presetId: PresetId, blueprint: ProjectBlueprint): GeneratedProjectSpec["experience"] {
+  return {
+    ...experienceSeeds[presetId],
+    primaryLoop: blueprint.primaryLoop,
+    modules: blueprint.modules.slice(0, 12),
+  };
+}
+
+function prioritizeUnique(existing: string[], required: string[], limit: number, label: string, revisionNotes: string[]): string[] {
+  const items = Array.from(new Set([...required, ...existing]));
+  const kept = items.slice(0, limit);
+  const replaced = existing.filter((item) => !kept.includes(item));
+  if (replaced.length) {
+    revisionNotes.push(`${label}: requested capabilities replaced ${replaced.join(", ")} in this revision; the prior checkpoint can restore them.`.slice(0, 180));
+  }
+  return kept;
+}
 
 const seeds: Record<PresetId, BlueprintSeed> = {
   "action-engine": {
@@ -280,19 +317,7 @@ export function applyAgentPlan(spec: GeneratedProjectSpec, plan: AgentProductPla
 }
 
 export function presetFromPrompt(prompt: string): PresetId {
-  const text = prompt.toLowerCase();
-  if (/game|игр|arcade|аркад|wolf|волк|tetris|тетрис/.test(text)) return "crypto-game";
-  if (/radio|радио|podcast|audio|аудио/.test(text)) return "crypto-radio";
-  if (/siri|voice|голос|ассистент/.test(text)) return "crypto-siri";
-  if (/tamagotchi|тамагочи|pet|питом/.test(text)) return "portfolio-tamagotchi";
-  if (/product hunt|launch board|каталог|запуск/.test(text)) return "crypto-product-hunt";
-  if (/aggregator|агрегатор|coinmarketcap|coingecko|market cap/.test(text)) return "crypto-aggregator";
-  if (/prediction|polymarket|ставк|odds|вероятност/.test(text)) return "prediction-impact";
-  if (/copy|копи|wallet|кошел|smart money/.test(text)) return "smart-money-copy";
-  if (/channel|канал|alpha feed|сигнал/.test(text)) return "alpha-channel";
-  if (/morning|утрен|brief|дайджест/.test(text)) return "morning-alpha";
-  if (/recommend|персонал|companion|лента/.test(text)) return "personal-companion";
-  return "action-engine";
+  return routeProductIntent(prompt).presetId;
 }
 
 function revisionInstruction(prompt: string): string {
@@ -332,8 +357,22 @@ export function fallbackAgentPlan(prompt: string, presetId = presetFromPrompt(pr
     && currentBlueprint.content
     && typeof currentBlueprint.content === "object";
   const blueprint = hasSafeBlueprintArrays
-    ? { ...currentBlueprint, modules: [...currentBlueprint.modules], screens: [...currentBlueprint.screens], interactions: [...currentBlueprint.interactions], dropsTabUse: [...currentBlueprint.dropsTabUse], dropsBotUse: [...currentBlueprint.dropsBotUse], acceptanceChecks: [...currentBlueprint.acceptanceChecks], content: { ...currentBlueprint.content }, ...(currentBlueprint.game ? { game: { ...currentBlueprint.game } } : {}) }
+    ? { ...currentBlueprint, modules: [...currentBlueprint.modules], screens: [...currentBlueprint.screens], interactions: [...currentBlueprint.interactions], dropsTabUse: [...currentBlueprint.dropsTabUse], dropsBotUse: [...currentBlueprint.dropsBotUse], acceptanceChecks: [...currentBlueprint.acceptanceChecks], ...(currentBlueprint.revisionNotes ? { revisionNotes: [...currentBlueprint.revisionNotes] } : {}), content: { ...currentBlueprint.content }, ...(currentBlueprint.game ? { game: { ...currentBlueprint.game } } : {}) }
     : createDefaultBlueprint(preset.id, prompt);
+  const revisionNotes = [...(blueprint.revisionNotes ?? [])];
+  const hasWalletCapability = /wallet|кошел|smart money|кит|whale/i.test(instruction);
+  const hasAlertRules = /alert|алерт|trigger|триггер|rule|правил/i.test(instruction);
+  if ((preset.id === "alpha-channel" || preset.id === "morning-alpha") && hasWalletCapability) {
+    blueprint.modules = prioritizeUnique(blueprint.modules, ["Wallet source tracker", "Editable alert rules"], 12, "Modules", revisionNotes);
+    blueprint.screens = prioritizeUnique(blueprint.screens, ["Wallet source setup", "Alert rule editor"], 10, "Screens", revisionNotes);
+    blueprint.interactions = prioritizeUnique(blueprint.interactions, ["Choose public or user-provided wallets", "Edit threshold and quiet hours"], 14, "Interactions", revisionNotes);
+    blueprint.dropsBotUse = prioritizeUnique(blueprint.dropsBotUse, ["Public wallet move alerts", "Editable thresholds and Telegram channel delivery"], 10, "Drops Bot capabilities", revisionNotes);
+    blueprint.acceptanceChecks = prioritizeUnique(blueprint.acceptanceChecks, ["Wallet tracking is configured as a source inside the Telegram workflow"], 10, "Acceptance checks", revisionNotes);
+  } else if (hasAlertRules) {
+    blueprint.modules = prioritizeUnique(blueprint.modules, ["Editable alert rules"], 12, "Modules", revisionNotes);
+    blueprint.interactions = prioritizeUnique(blueprint.interactions, ["Edit trigger thresholds and delivery schedule"], 14, "Interactions", revisionNotes);
+  }
+  if (revisionNotes.length) blueprint.revisionNotes = Array.from(new Set(revisionNotes)).slice(-8);
   const retroWolf = preset.id === "crypto-game" && isRetroWolfPrompt(prompt);
   const seconds = requestedSeconds(instruction);
   const asksComic = /(?:comic|комикс)/i.test(instruction);
@@ -373,8 +412,8 @@ export function fallbackAgentPlan(prompt: string, presetId = presetFromPrompt(pr
     blueprint,
     ...(Object.keys(theme).length ? { theme } : {}),
     ...(Object.keys(design).length ? { design } : {}),
+    experience: createDefaultExperience(preset.id, blueprint),
     ...(preset.id === "crypto-game" ? {
-      experience: { archetype: "game-world", layout: "spatial", dataView: "graph", engagement: "social", audience: "Casual crypto players", primaryLoop: blueprint.primaryLoop, modules: blueprint.modules, assetSource: "ai-generated" },
       gameDirection: { genre: "catcher", artStyle: gameArtStyle, world: retroWolf ? "retro-factory" : "cyber-arcade", mascot: retroWolf ? "retro-wolf" : "coin-crew", roundSeconds: seconds ?? 45, difficulty: "normal", sound: true, assetSource: "ai-generated", gameLoop: blueprint.primaryLoop, ...blueprint.game },
     } : {}),
     model: "Fallback product compiler",
