@@ -14,6 +14,7 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
+  ChevronRight,
   Cloud,
   Code2,
   Copy,
@@ -50,7 +51,8 @@ import {
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { compileProject } from "@/lib/project-compiler";
-import { createFreeDirectorProposal, DESIGN_DIRECTIONS, type DirectorProposal } from "@/lib/project-director";
+import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
+import { createFreeDirectorProposal, createFreeElementDirectorProposal, DESIGN_DIRECTIONS, type DirectorProposal } from "@/lib/project-director";
 import { createProjectArchive } from "@/lib/project-export";
 import { applyAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import { evaluateProjectQuality } from "@/lib/project-quality";
@@ -61,6 +63,7 @@ import type {
   ProjectChatMessage,
   ProjectCheckpoint,
   ProjectDesignKit,
+  ProjectElementConfig,
   ProjectProvider,
   ProjectRuntimeSmokeResult,
 } from "@/lib/project-types";
@@ -68,10 +71,27 @@ import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
 import { validateProjectSpec } from "@/lib/project-validator";
 import { presets } from "@/lib/presets";
 
-type InspectorTab = "director" | "design" | "data" | "logic" | "brain" | "quality" | "code" | "history";
+type InspectorTab = "director" | "design" | "data" | "logic" | "connections" | "quality" | "code" | "history";
 type HostingProvider = "vercel" | "cloudflare" | "netlify" | "github";
 type DeviceMode = "desktop" | "mobile";
 type SourceFile = "index.html" | "project.json" | "quality-report.json";
+
+type SelectedCanvasItem = {
+  id: string;
+  label: string;
+  kind: "block";
+} | {
+  id: string;
+  label: string;
+  kind: "element";
+  tag: string;
+  text: string;
+  textEditable: boolean;
+  imageEditable: boolean;
+  imageSrc: string;
+  styles: Required<Omit<ProjectElementConfig, "text" | "imageSrc">>;
+  overrides: ProjectElementConfig;
+};
 
 const modelLabels: Record<ProjectProvider, string> = {
   free: "Free Director",
@@ -116,6 +136,13 @@ const categoryPrompts: Record<GeneratedProjectSpec["presetId"], string[]> = {
 
 function nowId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function colorInputValue(value: string, fallback = "#ffffff"): string {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
+  const channels = value.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (!channels) return fallback;
+  return `#${channels.slice(1, 4).map((channel) => Math.max(0, Math.min(255, Number(channel))).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function normalizeRuntimeSmoke(value: unknown): ProjectRuntimeSmokeResult | null {
@@ -231,11 +258,16 @@ function directorModelContext(spec: GeneratedProjectSpec) {
 async function projectArchive(project: GeneratedProject): Promise<Uint8Array> {
   const quality = project.quality ?? evaluateProjectQuality(project.spec, project.html);
   let gameAsset: Uint8Array | undefined;
+  let gameSprite: Uint8Array | undefined;
   if (project.spec.presetId === "crypto-game") {
-    const response = await fetch("/assets/market-catcher-retro.png");
-    if (response.ok) gameAsset = new Uint8Array(await response.arrayBuffer());
+    const [backgroundResponse, spriteResponse] = await Promise.all([
+      fetch("/assets/market-catcher-retro.png"),
+      fetch("/assets/market-wolf-catcher.png"),
+    ]);
+    if (backgroundResponse.ok) gameAsset = new Uint8Array(await backgroundResponse.arrayBuffer());
+    if (spriteResponse.ok) gameSprite = new Uint8Array(await spriteResponse.arrayBuffer());
   }
-  return createProjectArchive(project, quality, gameAsset);
+  return createProjectArchive(project, quality, gameAsset, gameSprite);
 }
 
 function assistantWelcome(spec: GeneratedProjectSpec): ProjectChatMessage {
@@ -259,7 +291,7 @@ export function ProjectStudio() {
   const [tab, setTab] = useState<InspectorTab>("director");
   const [device, setDevice] = useState<DeviceMode>("desktop");
   const [designMode, setDesignMode] = useState(false);
-  const [selectedBlock, setSelectedBlock] = useState<{ id: string; label: string } | null>(null);
+  const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [directing, setDirecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -271,7 +303,7 @@ export function ProjectStudio() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [newModule, setNewModule] = useState("");
-  const [previewGameArt, setPreviewGameArt] = useState("");
+  const [previewGameAssets, setPreviewGameAssets] = useState({ background: "", sprite: "" });
   const [runtimeSmoke, setRuntimeSmoke] = useState<ProjectRuntimeSmokeResult | null>(null);
 
   useEffect(() => {
@@ -332,7 +364,22 @@ export function ProjectStudio() {
           .catch(() => (event.source as Window).postMessage({ type: "drops-studio-data-response", payload: { source: "Saved DropsTab-compatible snapshot" } }, "*"));
       }
       if (event.data.type === "drops-studio-block-selected") {
-        setSelectedBlock({ id: String(event.data.blockId || "application"), label: String(event.data.label || event.data.blockId || "Application") });
+        setSelectedBlock({ id: String(event.data.blockId || "application"), label: String(event.data.label || event.data.blockId || "Application"), kind: "block" });
+        setTab("design");
+      }
+      if (["drops-studio-element-selected", "drops-studio-element-inline-edit"].includes(event.data.type) && event.data.styles) {
+        setSelectedBlock({
+          id: String(event.data.elementId || "element"),
+          label: String(event.data.label || event.data.elementId || "Element"),
+          kind: "element",
+          tag: String(event.data.tag || "element"),
+          text: String(event.data.text || ""),
+          textEditable: event.data.textEditable === true,
+          imageEditable: event.data.imageEditable === true,
+          imageSrc: String(event.data.imageSrc || ""),
+          styles: event.data.styles,
+          overrides: event.data.overrides && typeof event.data.overrides === "object" ? event.data.overrides : {},
+        });
         setTab("design");
       }
     }
@@ -349,19 +396,24 @@ export function ProjectStudio() {
     if (project?.spec.presetId !== "crypto-game") {
       return;
     }
-    void fetch("/assets/market-catcher-retro.png")
-      .then((response) => {
-        if (!response.ok) throw new Error("Game artwork unavailable.");
-        return response.blob();
+    void Promise.all([
+      fetch("/assets/market-catcher-retro.png"),
+      fetch("/assets/market-wolf-catcher.png"),
+    ])
+      .then(async ([backgroundResponse, spriteResponse]) => {
+        if (!backgroundResponse.ok || !spriteResponse.ok) throw new Error("Game artwork unavailable.");
+        const [backgroundBlob, spriteBlob] = await Promise.all([backgroundResponse.blob(), spriteResponse.blob()]);
+        const toDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        const [background, sprite] = await Promise.all([toDataUrl(backgroundBlob), toDataUrl(spriteBlob)]);
+        if (cancelled) return;
+        setPreviewGameAssets({ background, sprite });
       })
-      .then((blob) => new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
-      }))
-      .then((dataUrl) => { if (!cancelled) setPreviewGameArt(dataUrl); })
-      .catch(() => { if (!cancelled) setPreviewGameArt(""); });
+      .catch(() => { if (!cancelled) setPreviewGameAssets({ background: "", sprite: "" }); });
     return () => { cancelled = true; };
   }, [project?.spec.presetId]);
 
@@ -369,9 +421,11 @@ export function ProjectStudio() {
   const runtimeHtml = useMemo(() => {
     if (!project) return "";
     if (project.spec.presetId !== "crypto-game") return project.html;
-    const safePreviewArt = previewGameArt || "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-    return project.html.replace("/assets/market-catcher-retro.png", safePreviewArt);
-  }, [previewGameArt, project]);
+    const transparentPixel = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+    return project.html
+      .replaceAll('src="/assets/market-catcher-retro.png"', `src="${previewGameAssets.background || transparentPixel}"`)
+      .replaceAll('src="/assets/market-wolf-catcher.png"', `src="${previewGameAssets.sprite || transparentPixel}"`);
+  }, [previewGameAssets, project]);
   const qualityReport = useMemo(() => project ? evaluateProjectQuality(project.spec, project.html, runtimeSmoke) : null, [project, runtimeSmoke]);
   const activeProvider = useMemo(() => {
     if (!project) return "free" as ProjectProvider;
@@ -430,9 +484,61 @@ export function ProjectStudio() {
   }
 
   function updateSelectedBlock(update: { visible?: boolean; variant?: "default" | "compact" | "wide" | "spotlight" }) {
-    if (!project || !selectedBlock) return;
+    if (!project || !selectedBlock || selectedBlock.kind !== "block") return;
     const current = project.spec.blocks[selectedBlock.id] ?? { visible: true, variant: "default" as const };
     commitSpec(validateProjectSpec({ ...project.spec, blocks: { ...project.spec.blocks, [selectedBlock.id]: { ...current, ...update } } }), `Edited ${selectedBlock.label}`, "design");
+  }
+
+  function previewSelectedElement(update: { text?: string; imageSrc?: string; styles?: Partial<Omit<ProjectElementConfig, "text" | "imageSrc">> }) {
+    if (!selectedBlock || selectedBlock.kind !== "element") return;
+    const overrides: ProjectElementConfig = {
+      ...selectedBlock.overrides,
+      ...(update.styles ?? {}),
+      ...(update.text !== undefined ? { text: update.text } : {}),
+      ...(update.imageSrc !== undefined ? { imageSrc: update.imageSrc } : {}),
+    };
+    const next: Extract<SelectedCanvasItem, { kind: "element" }> = {
+      ...selectedBlock,
+      ...(update.text !== undefined ? { text: update.text } : {}),
+      ...(update.imageSrc !== undefined ? { imageSrc: update.imageSrc } : {}),
+      styles: { ...selectedBlock.styles, ...(update.styles ?? {}) },
+      overrides,
+    };
+    setSelectedBlock(next);
+    iframeRef.current?.contentWindow?.postMessage({
+      type: "drops-studio-element-preview",
+      elementId: next.id,
+      config: overrides,
+    }, "*");
+  }
+
+  async function previewElementImage(file?: File) {
+    if (!selectedBlock || selectedBlock.kind !== "element" || !selectedBlock.imageEditable || !file) return;
+    try {
+      setToast("Optimizing the selected image…");
+      previewSelectedElement({ imageSrc: await prepareArtwork(file) });
+      setToast("Image replaced in preview — save a version when ready");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Image could not be applied.");
+    }
+  }
+
+  function commitSelectedElement() {
+    if (!project || !selectedBlock || selectedBlock.kind !== "element") return;
+    commitSpec(validateProjectSpec({
+      ...project.spec,
+      elements: { ...(project.spec.elements ?? {}), [selectedBlock.id]: selectedBlock.overrides },
+    }), `Edited ${selectedBlock.label}`, "design");
+    setToast(`${selectedBlock.label} saved as a reversible version`);
+  }
+
+  function resetSelectedElement() {
+    if (!project || !selectedBlock || selectedBlock.kind !== "element") return;
+    const nextElements = { ...(project.spec.elements ?? {}) };
+    delete nextElements[selectedBlock.id];
+    commitSpec(validateProjectSpec({ ...project.spec, elements: nextElements }), `Reset ${selectedBlock.label}`, "design");
+    setSelectedBlock(null);
+    setToast("Element reset to the generated design");
   }
 
   function undo() {
@@ -470,8 +576,8 @@ export function ProjectStudio() {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
           body: JSON.stringify({ model, temperature: 0.2, max_tokens: 900, messages: [
-            { role: "system", content: "Return JSON only. You may improve name, tagline, description, theme, design, experience and gameDirection. Preserve the preset and DropsTab/Drops Bot foundations. Never return code, URLs or API keys." },
-            { role: "user", content: JSON.stringify({ instruction, product: directorModelContext(project.spec) }) },
+            { role: "system", content: "Return JSON only. You may improve name, tagline, description, theme, design, experience, gameDirection and elements. When selectedCanvas is an element, edit only its exact id inside elements unless the user explicitly asks for a whole-product change. Preserve the preset and DropsTab/Drops Bot foundations. Never return code, URLs or API keys." },
+            { role: "user", content: JSON.stringify({ instruction, selectedCanvas: selectedBlock, product: directorModelContext(project.spec) }) },
           ] }),
         });
         const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
@@ -486,10 +592,16 @@ export function ProjectStudio() {
           theme: { ...project.spec.theme, ...(suggestion.theme ?? {}) },
           design: { ...project.spec.design, ...(suggestion.design ?? {}) },
           experience: { ...project.spec.experience, ...(suggestion.experience ?? {}) },
+          elements: { ...(project.spec.elements ?? {}), ...(suggestion.elements ?? {}) },
           gameDirection: project.spec.gameDirection ? { ...project.spec.gameDirection, ...(suggestion.gameDirection ?? {}) } : undefined,
           brain: { provider: "custom", model, enhanced: true },
         });
-        proposal = { label: `${model} proposal`, summary: ["Applied the requested direction through your custom model.", "Preserved the validated crypto product contract."], affected: ["Product brief", "Experience", "Design"], spec: customSpec };
+        if (selectedBlock?.kind === "element" && !suggestion.elements?.[selectedBlock.id]) {
+          const focused = createFreeElementDirectorProposal(project.spec, instruction, selectedBlock);
+          proposal = { ...focused, label: `${model} · focused element guard`, summary: [...focused.summary, "Kept the edit isolated because the connected model returned no valid element override."] };
+        } else {
+          proposal = { label: `${model} proposal`, summary: ["Applied the requested direction through your custom model.", "Preserved the validated crypto product contract."], affected: ["Product brief", "Experience", "Design"], spec: customSpec };
+        }
       } else {
         const model = window.sessionStorage.getItem(`drops-studio:${provider}:model`) || project.spec.brain.model;
         const headers: Record<string, string> = { "content-type": "application/json" };
@@ -502,23 +614,32 @@ export function ProjectStudio() {
             provider: provider === "free" || provider === "gateway" ? undefined : provider,
             model,
             guestId: window.sessionStorage.getItem("drops-studio:guest-id"),
-            prompt: `Revise the existing product without changing its category (${project.spec.presetId}).\nUser change: ${instruction}\nSelected block: ${selectedBlock?.label ?? "whole product"}.\nCurrent product: ${JSON.stringify({ name: project.spec.name, tagline: project.spec.tagline, description: project.spec.description, tools: project.spec.tools })}\nCurrent blueprint: ${JSON.stringify(project.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: project.spec.theme, design: project.spec.design, experience: project.spec.experience, gameDirection: project.spec.gameDirection })}`,
+            prompt: `Revise the existing product without changing its category (${project.spec.presetId}).\nUser change: ${instruction}\nSelected canvas item: ${JSON.stringify(selectedBlock ?? { kind: "product", label: "whole product" })}.\nIf the selected item kind is element, use its exact id in elementEdit and return only the requested focused style/copy change there while preserving the rest of the product.\nCurrent product: ${JSON.stringify({ name: project.spec.name, tagline: project.spec.tagline, description: project.spec.description, tools: project.spec.tools })}\nCurrent blueprint: ${JSON.stringify(project.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: project.spec.theme, design: project.spec.design, experience: project.spec.experience, gameDirection: project.spec.gameDirection, elements: project.spec.elements })}`,
           }),
         });
         const payload = await response.json() as { plan?: AgentProductPlan; error?: string; model?: string; warning?: string };
         if (!response.ok || !payload.plan) throw new Error(payload.error || "AI Director failed.");
         const aiPlan: AgentProductPlan = { ...payload.plan, presetId: project.spec.presetId };
-        const revised = validateProjectSpec(applyAgentPlan(project.spec, aiPlan));
-        proposal = {
-          label: `${payload.model || aiPlan.model || modelLabels[provider]} change set`,
-          summary: [
-            `Rebuilt ${selectedBlock?.label ?? "the product direction"} from the full instruction.`,
-            `${aiPlan.blueprint.screens.length} native screens · ${aiPlan.blueprint.interactions.length} working interactions.`,
-            aiPlan.blueprint.revisionNotes?.[0] || payload.warning || "DropsTab evidence and Drops Bot action boundaries remain explicit.",
-          ],
-          affected: [selectedBlock?.label ?? "Product blueprint", "Runtime", "Design system"],
-          spec: revised,
-        };
+        if (selectedBlock?.kind === "element" && !aiPlan.elementEdit) {
+          const focused = createFreeElementDirectorProposal(project.spec, instruction, selectedBlock);
+          proposal = {
+            ...focused,
+            label: `${payload.model || modelLabels[provider]} · focused element edit`,
+            summary: [...focused.summary, payload.warning || "The selected element stayed isolated from the rest of the product."],
+          };
+        } else {
+          const revised = validateProjectSpec(applyAgentPlan(project.spec, aiPlan));
+          proposal = {
+            label: `${payload.model || aiPlan.model || modelLabels[provider]} change set`,
+            summary: [
+              `Rebuilt ${selectedBlock?.label ?? "the product direction"} from the full instruction.`,
+              `${aiPlan.blueprint.screens.length} native screens · ${aiPlan.blueprint.interactions.length} working interactions.`,
+              aiPlan.blueprint.revisionNotes?.[0] || payload.warning || "DropsTab evidence and Drops Bot action boundaries remain explicit.",
+            ],
+            affected: [selectedBlock?.label ?? "Product blueprint", "Runtime", "Design system"],
+            spec: revised,
+          };
+        }
       }
       const assistant: ProjectChatMessage = {
         id: nowId("assistant"),
@@ -531,7 +652,9 @@ export function ProjectStudio() {
       saveProject(next);
       setProject(next);
     } catch (error) {
-      const fallback = createFreeDirectorProposal(project.spec, instruction, selectedBlock?.id);
+      const fallback = selectedBlock?.kind === "element"
+        ? createFreeElementDirectorProposal(project.spec, instruction, selectedBlock)
+        : createFreeDirectorProposal(project.spec, instruction, selectedBlock?.id);
       const assistant: ProjectChatMessage = {
         id: nowId("assistant"), role: "assistant", createdAt: new Date().toISOString(),
         content: `${error instanceof Error ? error.message : "The connected model is unavailable."} I prepared the same request with Free Director instead.`,
@@ -707,7 +830,7 @@ export function ProjectStudio() {
     { id: "design", label: "Design", icon: Palette },
     { id: "data", label: "Data", icon: Database },
     { id: "logic", label: "Logic", icon: Blocks },
-    { id: "brain", label: "AI", icon: BrainCircuit },
+    { id: "connections", label: "Connect", icon: KeyRound },
     { id: "quality", label: "Tests", icon: ShieldCheck },
     { id: "code", label: "Code", icon: Code2 },
     { id: "history", label: "Versions", icon: History },
@@ -724,10 +847,10 @@ export function ProjectStudio() {
     <main className="project-studio-shell">
       <header className="project-studio-topbar">
         <div className="project-crumbs"><a href="/" aria-label="Back to builder"><ArrowLeft /></a><span className="studio-brand-mark"><Image src="https://dropstab.com/images/dropstab-logo-drop-default.svg" alt="DropsTab" width={20} height={20} unoptimized /></span><strong>Drops Studio</strong><i>/</i><span>{project.spec.name}</span><b className={published && !dirty ? "running" : "draft"}><i />{published && !dirty ? externalSetup ? "Setup app published" : researchOnly ? "Research app published" : "Web app published" : dirty ? "Edits pending" : externalSetup ? "Setup required" : "Draft"}</b></div>
-        <div className="workspace-actions"><button type="button" onClick={undo} disabled={checkpoints.length < 2}><Undo2 /> Undo</button><button type="button" onClick={openRuntime}><Play /> Run app</button><button type="button" onClick={share} disabled={publishing}><Share2 /> Share</button><button className="publish-top" type="button" onClick={() => setPublishOpen(true)}><UploadCloud /> {published && dirty ? "Publish update" : published ? "Published" : "Publish"}<ChevronDown /></button></div>
+        <div className="workspace-actions"><button type="button" onClick={undo} disabled={checkpoints.length < 2}><Undo2 /> Undo</button><button type="button" onClick={openRuntime}><Play /> Run app</button><button type="button" onClick={() => setTab("connections")}><KeyRound /> Connections</button><button type="button" onClick={share} disabled={publishing}><Share2 /> Share</button><button className="publish-top" type="button" onClick={() => setPublishOpen(true)}><UploadCloud /> {published && dirty ? "Publish update" : published ? "Published" : "Publish"}<ChevronDown /></button></div>
       </header>
 
-      <div className="project-studio-layout">
+      <div className={`project-studio-layout tab-${tab}`}>
         <aside className="studio-rail">
           {nav.map((item) => { const Icon = item.icon; return <button type="button" title={item.label} aria-label={item.label} className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}><Icon /><span>{item.label}</span></button>; })}
           <div className="rail-foundation"><span title="DropsTab attached"><Database /></span><span title="Drops Bot attached"><Bot /></span></div>
@@ -748,8 +871,37 @@ export function ProjectStudio() {
 
           {tab === "design" && <section className="inspector-section">
             <div className="inspector-heading"><span><Palette /> Design Canvas</span><b className="free-badge">FREE</b></div>
-            <button type="button" className={`design-mode-control ${designMode ? "active" : ""}`} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /><span><strong>{designMode ? "Selecting elements" : "Select in preview"}</strong><small>Click any outlined block to edit it</small></span><i>{designMode ? "ON" : "OFF"}</i></button>
-            {selectedBlock && <div className="selected-inspector"><div><span>Selected block</span><strong><Layers3 /> {selectedBlock.label}</strong></div><label>Variant<select value={project.spec.blocks[selectedBlock.id]?.variant ?? "default"} onChange={(event) => updateSelectedBlock({ variant: event.target.value as "default" | "compact" | "wide" | "spotlight" })}><option value="default">Default</option><option value="compact">Compact</option><option value="wide">Wide</option><option value="spotlight">Spotlight</option></select></label><label className="toggle-line"><input type="checkbox" checked={project.spec.blocks[selectedBlock.id]?.visible !== false} onChange={(event) => updateSelectedBlock({ visible: event.target.checked })} /> Visible in the app</label></div>}
+            <button type="button" className={`design-mode-control ${designMode ? "active" : ""}`} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /><span><strong>{designMode ? "Selecting elements" : "Select in preview"}</strong><small>{designMode ? "Click to inspect · double-click text to type" : "Choose any text, image, button or block"}</small></span><i>{designMode ? "ON" : "OFF"}</i></button>
+            {selectedBlock?.kind === "block" && (
+              <div className="selected-inspector">
+                <div><span>Selected block</span><strong><Layers3 /> {selectedBlock.label}</strong></div>
+                <label>Variant<select value={project.spec.blocks[selectedBlock.id]?.variant ?? "default"} onChange={(event) => updateSelectedBlock({ variant: event.target.value as "default" | "compact" | "wide" | "spotlight" })}><option value="default">Default</option><option value="compact">Compact</option><option value="wide">Wide</option><option value="spotlight">Spotlight</option></select></label>
+                <label className="toggle-line"><input type="checkbox" checked={project.spec.blocks[selectedBlock.id]?.visible !== false} onChange={(event) => updateSelectedBlock({ visible: event.target.checked })} /> Visible in the app</label>
+              </div>
+            )}
+            {selectedBlock?.kind === "element" && (
+              <div className="selected-inspector element-inspector">
+                <div className="element-inspector-head"><span>Selected {selectedBlock.tag}</span><strong><MousePointer2 /> {selectedBlock.label}</strong><button type="button" onClick={resetSelectedElement}>Reset</button></div>
+                {selectedBlock.textEditable && <label>Text<textarea rows={3} value={selectedBlock.text} onChange={(event) => previewSelectedElement({ text: event.target.value })} /></label>}
+                {selectedBlock.imageEditable && <label className="element-image-upload"><ImageIcon /><span><strong>Replace this image</strong><small>PNG, JPG or WebP · optimized into the published app</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void previewElementImage(event.target.files?.[0])} /></label>}
+                <div className="element-control-grid">
+                  <label>Font size<input type="number" min="8" max="120" value={selectedBlock.styles.fontSize} onChange={(event) => previewSelectedElement({ styles: { fontSize: Number(event.target.value) } })} /></label>
+                  <label>Weight<select value={selectedBlock.styles.fontWeight} onChange={(event) => previewSelectedElement({ styles: { fontWeight: Number(event.target.value) } })}><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Extra bold</option><option value="900">Black</option></select></label>
+                  <label>Text color<span className="element-color"><input type="color" value={colorInputValue(selectedBlock.styles.color)} onChange={(event) => previewSelectedElement({ styles: { color: event.target.value } })} /><b>{selectedBlock.styles.color}</b></span></label>
+                  <label>Background<span className="element-color"><input type="color" value={colorInputValue(selectedBlock.styles.backgroundColor)} onChange={(event) => previewSelectedElement({ styles: { backgroundColor: event.target.value } })} /><b>{selectedBlock.styles.backgroundColor === "transparent" ? "No fill" : selectedBlock.styles.backgroundColor}</b><button type="button" aria-label="Remove background fill" onClick={() => previewSelectedElement({ styles: { backgroundColor: "transparent" } })}>×</button></span></label>
+                  <label>Alignment<select value={selectedBlock.styles.textAlign} onChange={(event) => previewSelectedElement({ styles: { textAlign: event.target.value as ProjectElementConfig["textAlign"] } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+                  <label>Width %<input type="number" min="10" max="100" value={selectedBlock.styles.width} onChange={(event) => previewSelectedElement({ styles: { width: Number(event.target.value) } })} /></label>
+                  <label>Padding<input type="number" min="0" max="80" value={selectedBlock.styles.padding} onChange={(event) => previewSelectedElement({ styles: { padding: Number(event.target.value) } })} /></label>
+                  <label>Corner radius<input type="number" min="0" max="80" value={selectedBlock.styles.borderRadius} onChange={(event) => previewSelectedElement({ styles: { borderRadius: Number(event.target.value) } })} /></label>
+                  <label>Move X<input type="number" min="-500" max="500" value={selectedBlock.styles.translateX} onChange={(event) => previewSelectedElement({ styles: { translateX: Number(event.target.value) } })} /></label>
+                  <label>Move Y<input type="number" min="-500" max="500" value={selectedBlock.styles.translateY} onChange={(event) => previewSelectedElement({ styles: { translateY: Number(event.target.value) } })} /></label>
+                  <label>Opacity<input type="number" min="0" max="1" step="0.05" value={selectedBlock.styles.opacity} onChange={(event) => previewSelectedElement({ styles: { opacity: Number(event.target.value) } })} /></label>
+                  <label>Layer<input type="number" min="-10" max="100" value={selectedBlock.styles.zIndex} onChange={(event) => previewSelectedElement({ styles: { zIndex: Number(event.target.value) } })} /></label>
+                </div>
+                <label className="toggle-line"><input type="checkbox" checked={selectedBlock.styles.visible} onChange={(event) => previewSelectedElement({ styles: { visible: event.target.checked } })} /> Visible in the app</label>
+                <div className="element-actions"><button type="button" onClick={commitSelectedElement}><Check /> Save version</button><button type="button" onClick={() => setTab("director")}><Sparkles /> Edit with AI</button></div>
+              </div>
+            )}
             <span className="section-label">Design directions</span>
             <div className="design-kits">{DESIGN_DIRECTIONS.map((direction) => <button type="button" className={project.spec.design.kit === direction.id ? "active" : ""} key={direction.id} onClick={() => applyKit(direction.id)}><span className="kit-preview" style={{ background: `linear-gradient(135deg,${direction.palette.join(",")})` }}><i /><i /><i /></span><span><strong>{direction.name}</strong><small>{direction.bestFor}</small></span>{project.spec.design.kit === direction.id && <Check />}</button>)}</div>
             <div className="design-tokens"><label>Accent<div className="color-field"><input type="color" value={project.spec.theme.accent} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, theme: { ...spec.theme, accent: event.target.value } }))} /><input value={project.spec.theme.accent} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, theme: { ...spec.theme, accent: event.target.value } }))} /></div></label><label>Density<select value={project.spec.design.density} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, design: { ...spec.design, density: event.target.value as GeneratedProjectSpec["design"]["density"] } }))}><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="cinematic">Cinematic</option></select></label><label>Motion<select value={project.spec.design.motion} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, design: { ...spec.design, motion: event.target.value as GeneratedProjectSpec["design"]["motion"] } }))}><option value="reduced">Reduced</option><option value="smooth">Smooth</option><option value="expressive">Expressive</option></select></label></div>
@@ -796,7 +948,7 @@ export function ProjectStudio() {
             </section>
           )}
 
-          {tab === "brain" && <section className="inspector-section"><div className="inspector-heading"><span><BrainCircuit /> AI brain</span><b>{activeProvider === "free" || activeProvider === "gateway" ? "FREE" : "BYO"}</b></div><div className="brain-card"><span><Sparkles /></span><div><strong>{modelLabels[activeProvider]}</strong><small>{activeProvider === "free" || activeProvider === "gateway" ? "Platform-funded AI with category-aware fallback" : "Connected account · session only"}</small></div><b>Ready</b></div><div className="ai-capabilities"><span><Check /> Full prompt-to-product planning</span><span><Check /> Category-native screens and interactions</span><span><Check /> AI revisions with reviewable checkpoints</span><span><Check /> No key compiled into projects</span></div><button className="inspector-primary" type="button" onClick={() => { window.location.href = "/?connections=1"; }}><KeyRound /> Connect or change AI</button><div className="upgrade-card"><strong>Professional model layer</strong><p>Connect OpenRouter in one click or bring your OpenAI, Claude, Kimi or compatible endpoint. Your own budget is used without being bundled into the app.</p><span>OpenRouter OAuth · OpenAI · Claude · Kimi · Custom</span></div></section>}
+          {tab === "connections" && <section className="inspector-section connections-inspector"><div className="inspector-heading"><span><KeyRound /> Connections</span><b>SESSION SAFE</b></div><p className="inspector-copy">Your models, data, Telegram accounts and deployment targets in one place. Connected secrets never enter the generated app.</p><div className="connection-summary-grid"><button type="button" onClick={() => { window.location.href = "/?connections=1"; }}><BrainCircuit /><span><strong>AI models</strong><small>{modelLabels[activeProvider]} · OpenAI, Claude, OpenRouter, Kimi or custom</small></span><ChevronRight /></button><button type="button" onClick={() => { window.location.href = "/?connections=1"; }}><Database /><span><strong>DropsTab data</strong><small>Platform cache or your own API key</small></span><ChevronRight /></button><button type="button" onClick={() => setPublishOpen(true)}><Cloud /><span><strong>Hosting and source</strong><small>Free public URL, Vercel, Cloudflare and GitHub export</small></span><ChevronRight /></button></div><TelegramChannelWizard defaultTitle={project.spec.name} defaultAbout={`${project.spec.tagline} Powered by DropsTab and Drops Bot.`} defaultFirstPost={`${project.spec.name}\n\n${project.spec.tagline}\n\nBuilt with Drops Studio on DropsTab × Drops Bot.`} /></section>}
 
           {tab === "quality" && <section className="inspector-section"><div className="inspector-heading"><span><ShieldCheck /> Release checks</span><b className={quality.readyToPublish ? "quality-pass" : "quality-fail"}>{quality.score}/100</b></div><div className={`quality-hero ${quality.readyToPublish ? "passed" : "failed"}`}><span><ShieldCheck /></span><div><strong>{quality.readyToPublish ? releaseLabel : "Build needs attention"}</strong><small>{externalSetup ? "The web setup app can publish, but the external outcome is not live until it is connected and verified." : "Deterministic checks run on every edit and before every publish."}</small></div></div><div className="experience-brief"><span><Zap /> Reality contract</span><p>{reality.deliverable}</p><dl><div><dt>Works now</dt><dd>{reality.worksNow.join(" · ")}</dd></div><div><dt>Requires</dt><dd>{reality.requires.join(" · ")}</dd></div></dl></div><div className="quality-list">{quality.checks.map((item) => <div className={item.passed ? "passed" : "failed"} key={item.id}><span>{item.passed ? <Check /> : <X />}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div>{item.critical && <b>GATE</b>}</div>)}</div><button className="inspector-secondary" type="button" onClick={() => openSource("quality-report.json")}><Code2 /> Inspect quality-report.json</button></section>}
 
@@ -807,11 +959,11 @@ export function ProjectStudio() {
 
         <section className="runtime-stage">
           <div className="stage-toolbar"><div className="device-switch"><button type="button" className={device === "desktop" ? "active" : ""} onClick={() => setDevice("desktop")}><Monitor /> Desktop</button><button type="button" className={device === "mobile" ? "active" : ""} onClick={() => setDevice("mobile")}><Smartphone /> Mobile</button></div><div><button type="button" className={designMode ? "active" : ""} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /> Design mode</button><button type="button" onClick={() => openSource("index.html")}><Code2 /> Code</button><button type="button" className={quality.readyToPublish ? "quality-ready" : ""} onClick={() => setTab("quality")}><ShieldCheck /> {quality.score}</button><button type="button" onClick={openRuntime}><ExternalLink /> Fullscreen</button></div></div>
-          <div className={`runtime-browser ${device}`}><div className="browser-bar"><span><i /><i /><i /></span><strong>{project.spec.slug}.live</strong><b><i /> Live preview</b></div><iframe ref={iframeRef} key={`${project.updatedAt}:${Boolean(previewGameArt)}`} title={`${project.spec.name} live application`} srcDoc={runtimeHtml} sandbox="allow-scripts allow-forms allow-popups allow-downloads" onLoad={() => iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*")} /></div>
+          <div className={`runtime-browser ${device}`}><div className="browser-bar"><span><i /><i /><i /></span><strong>{project.spec.slug}.live</strong><b><i /> Live preview</b></div><iframe ref={iframeRef} key={`${project.updatedAt}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`} title={`${project.spec.name} live application`} srcDoc={runtimeHtml} sandbox="allow-scripts allow-forms allow-popups allow-downloads" onLoad={() => iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*")} /></div>
         </section>
 
         <aside className="assistant-panel">
-          <header><span><span className="director-avatar"><Sparkles /></span><span><strong>Drops Director</strong><small>{modelLabels[activeProvider]} · project context on</small></span></span><button type="button" onClick={() => setTab("brain")}><Settings2 /></button></header>
+          <header><span><span className="director-avatar"><Sparkles /></span><span><strong>Drops Director</strong><small>{modelLabels[activeProvider]} · project context on</small></span></span><button type="button" aria-label="Open connections" onClick={() => setTab("connections")}><Settings2 /></button></header>
           {selectedBlock && <div className="chat-context"><MousePointer2 /><span>Editing context: <strong>{selectedBlock.label}</strong></span><button type="button" onClick={() => setSelectedBlock(null)}><X /></button></div>}
           <div className="conversation">{(project.conversation?.length ?? 0) <= 1 && <div className="assistant-guide"><strong>Build with context, not from zero</strong><p>I already know this preset’s user loop, modules, Drops data contract and action boundaries.</p><span><MousePointer2 /><b>Select a block</b><small>then describe a targeted change</small></span><span><Palette /><b>Ask for directions</b><small>cartoon, terminal, editorial, glass</small></span><span><Blocks /><b>Change behavior</b><small>layout, data view, rules and social loop</small></span><span><Undo2 /><b>Experiment safely</b><small>every Apply creates a checkpoint</small></span></div>}{(project.conversation ?? []).map((message) => <article className={message.role} key={message.id}><span>{message.role === "assistant" ? <Sparkles /> : "You"}</span><p>{message.content}</p>{message.proposal && <div className="proposal-card"><header><span><WandSparkles /><strong>{message.proposal.label}</strong></span><b>Preview</b></header><ul>{message.proposal.summary.map((item) => <li key={item}><Check />{item}</li>)}</ul><div><button type="button" onClick={() => dismissProposal(message)}>Dismiss</button><button type="button" onClick={() => applyChatProposal(message)}><Check /> Apply changes</button></div></div>}</article>)}{directing && <article className="assistant thinking"><span><LoaderCircle className="spin" /></span><p>Planning a bounded change set, checking the product category and preserving Drops foundations…</p></article>}<div ref={chatEndRef} /></div>
           <div className="quick-prompts">{quickPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => void sendDirectorPrompt(prompt)}>{prompt}</button>)}</div>

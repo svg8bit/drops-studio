@@ -31,7 +31,7 @@ test("server-renders the complete Drops Studio builder", async () => {
 });
 
 test("starter preview is removed and source contains the required product surfaces", async () => {
-  const [page, component, dropstabRoute, dropstabClient, agentRoute, compiler, packageJson, studio] = await Promise.all([
+  const [page, component, dropstabRoute, dropstabClient, agentRoute, compiler, packageJson, studio, telegramAccount, telegramWizard] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dropstab/route.ts", import.meta.url), "utf8"),
@@ -40,11 +40,13 @@ test("starter preview is removed and source contains the required product surfac
     readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../components/project-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/telegram-account.ts", import.meta.url), "utf8"),
+    readFile(new URL("../components/telegram-channel-wizard.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /<DropsStudio \/>/);
   assert.match(component, /providerList/);
-  assert.match(component, /AI & API Vault/);
+  assert.match(component, /Connections Hub/);
   assert.match(component, /\/api\/agent\/plan/);
   assert.match(component, /OpenRouter/);
   assert.match(agentRoute, /poolside\/laguna-s-2\.1-free/);
@@ -53,13 +55,31 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(compiler, /renderGameNative/);
   assert.match(compiler, /dropsbotSetup/);
   assert.match(compiler, /market-catcher-retro\.png/);
+  assert.match(compiler, /market-wolf-catcher\.png/);
+  assert.match(compiler, /drops-studio-element-selected/);
+  assert.match(compiler, /drops-studio-element-inline-edit/);
+  assert.match(compiler, /data-studio-element/);
+  assert.match(compiler, /trustedParentMessage/);
+  assert.match(compiler, /postParent/);
+  assert.doesNotMatch(compiler, /window\.parent\.postMessage\([^\n]+,"\*"\)/);
+  assert.match(compiler, /originalText/);
+  assert.match(compiler, /editableOwnerKey/);
   assert.match(component, /sessionStorage/);
   assert.match(component, /Start from a blank canvas/);
   assert.match(component, /PROJECTS_STORAGE_KEY/);
   assert.match(component, /router\.push\(`\/studio\//);
   assert.match(studio, /Publish free now/);
   assert.match(studio, /Download runnable app \+ source/);
+  assert.match(studio, /Replace this image/);
+  assert.match(studio, /Save version/);
   assert.match(studio, /Export & continue/);
+  assert.match(telegramAccount, /claimTelegramChannelRequest/);
+  assert.match(telegramAccount, /channels\.DeleteChannel/);
+  assert.match(telegramAccount, /TELEGRAM_AUTH_DEADLINE_MS/);
+  assert.match(telegramAccount, /Omit<TelegramChannelResult, "accountToken">/);
+  assert.match(telegramAccount, /expiresAt: createdAt \+ ACCOUNT_TTL_MS/);
+  assert.match(telegramAccount, /accountToken: seal\(refreshedAccount\)/);
+  assert.match(telegramWizard, /creationRequestId/);
   assert.match(dropstabRoute, /fetchDropsTabCoins\(key/);
   assert.match(dropstabClient, /"x-dropstab-api-key": key/);
   assert.match(packageJson, /"name": "drops-studio"/);

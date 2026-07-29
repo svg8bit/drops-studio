@@ -1,6 +1,6 @@
 import { presets, type PresetId } from "@/lib/presets";
 import { createDefaultBlueprint } from "@/lib/product-blueprint";
-import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectBlueprint, ProjectDesignKit, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
+import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectBlueprint, ProjectDesignKit, ProjectElementConfig, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
 
 const presetIds = new Set(presets.map((preset) => preset.id));
 const providers = new Set<ProjectProvider>(["free", "gateway", "openai", "anthropic", "openrouter", "kimi", "custom"]);
@@ -11,6 +11,7 @@ const densities = new Set(["compact", "comfortable", "cinematic"]);
 const motions = new Set(["reduced", "smooth", "expressive"]);
 const fonts = new Set(["inter", "space-grotesk", "ibm-plex"]);
 const blockVariants = new Set<ProjectBlockConfig["variant"]>(["default", "compact", "wide", "spotlight"]);
+const textAlignments = new Set<ProjectElementConfig["textAlign"]>(["left", "center", "right"]);
 const gameGenres = new Set<ProjectGameDirection["genre"]>(["market-race", "coin-quiz", "portfolio-battle", "unlock-dodge", "catcher"]);
 const artStyles = new Set<ProjectGameDirection["artStyle"]>(["3d-toy", "comic", "pixel", "neon", "retro-cartoon"]);
 const gameWorlds = new Set<ProjectGameDirection["world"]>(["cloud-city", "space-exchange", "token-island", "cyber-arcade", "retro-factory"]);
@@ -112,6 +113,68 @@ function blocks(value: unknown): Record<string, ProjectBlockConfig> {
     const item = rawValue && typeof rawValue === "object" ? rawValue as Record<string, unknown> : {};
     const variant = blockVariants.has(item.variant as ProjectBlockConfig["variant"]) ? item.variant as ProjectBlockConfig["variant"] : "default";
     return [key, { visible: item.visible !== false, variant } satisfies ProjectBlockConfig];
+  }));
+}
+
+function elementColor(value: unknown, allowTransparent = false): string | undefined {
+  if (allowTransparent && value === "transparent") return "transparent";
+  if (typeof value !== "string") return undefined;
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
+  const rgba = value.match(/^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*\)$/i);
+  if (!rgba) return undefined;
+  const channels = rgba.slice(1, 4).map(Number);
+  const alpha = Number(rgba[4]);
+  if (channels.some((channel) => channel < 0 || channel > 255) || alpha < 0 || alpha > 1) return undefined;
+  return `rgba(${channels.join(", ")}, ${alpha})`;
+}
+
+function elements(value: unknown): Record<string, ProjectElementConfig> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const seen = new Set<string>();
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 96).map(([rawKey, rawValue]) => {
+    const baseKey = cleanText(rawKey, "element", 96).toLowerCase().replace(/[^a-z0-9-]/g, "-") || "element";
+    let key = baseKey;
+    let suffix = 2;
+    while (seen.has(key)) {
+      const tail = `-${suffix}`;
+      key = `${baseKey.slice(0, 96 - tail.length)}${tail}`;
+      suffix += 1;
+    }
+    seen.add(key);
+    const item = rawValue && typeof rawValue === "object" ? rawValue as Record<string, unknown> : {};
+    const optionalNumber = (field: string, min: number, max: number) => {
+      if (item[field] === undefined || item[field] === null || item[field] === "") return undefined;
+      const candidate = Number(item[field]);
+      return Number.isFinite(candidate) ? Math.min(max, Math.max(min, candidate)) : undefined;
+    };
+    const text = typeof item.text === "string"
+      ? item.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").slice(0, 800)
+      : undefined;
+    const imageSrc = typeof item.imageSrc === "string" && (
+      /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(item.imageSrc)
+      || (/^\/assets\/[a-z0-9._/-]+$/i.test(item.imageSrc) && !item.imageSrc.includes(".."))
+      || /^https:\/\/[^\s]+$/i.test(item.imageSrc)
+    ) && item.imageSrc.length <= 360_000 ? item.imageSrc : undefined;
+    const safeColor = elementColor(item.color);
+    const safeBackground = elementColor(item.backgroundColor, true);
+    const textAlign = textAlignments.has(item.textAlign as ProjectElementConfig["textAlign"]) ? item.textAlign as ProjectElementConfig["textAlign"] : undefined;
+    return [key, {
+      ...(text !== undefined ? { text } : {}),
+      ...(imageSrc ? { imageSrc } : {}),
+      ...(typeof item.visible === "boolean" ? { visible: item.visible } : {}),
+      ...(safeColor ? { color: safeColor } : {}),
+      ...(safeBackground ? { backgroundColor: safeBackground } : {}),
+      ...(optionalNumber("fontSize", 8, 120) !== undefined ? { fontSize: Math.round(optionalNumber("fontSize", 8, 120) as number) } : {}),
+      ...(optionalNumber("fontWeight", 300, 950) !== undefined ? { fontWeight: Math.round(optionalNumber("fontWeight", 300, 950) as number) } : {}),
+      ...(textAlign ? { textAlign } : {}),
+      ...(optionalNumber("width", 10, 100) !== undefined ? { width: optionalNumber("width", 10, 100) } : {}),
+      ...(optionalNumber("padding", 0, 80) !== undefined ? { padding: Math.round(optionalNumber("padding", 0, 80) as number) } : {}),
+      ...(optionalNumber("borderRadius", 0, 80) !== undefined ? { borderRadius: Math.round(optionalNumber("borderRadius", 0, 80) as number) } : {}),
+      ...(optionalNumber("translateX", -500, 500) !== undefined ? { translateX: Math.round(optionalNumber("translateX", -500, 500) as number) } : {}),
+      ...(optionalNumber("translateY", -500, 500) !== undefined ? { translateY: Math.round(optionalNumber("translateY", -500, 500) as number) } : {}),
+      ...(optionalNumber("opacity", 0, 1) !== undefined ? { opacity: optionalNumber("opacity", 0, 1) } : {}),
+      ...(optionalNumber("zIndex", -10, 100) !== undefined ? { zIndex: Math.round(optionalNumber("zIndex", -10, 100) as number) } : {}),
+    } satisfies ProjectElementConfig];
   }));
 }
 
@@ -248,6 +311,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
       font: fonts.has(String(designInput.font)) ? designInput.font as GeneratedProjectSpec["design"]["font"] : presetId === "crypto-game" ? "space-grotesk" : "inter",
     },
     blocks: blocks(input.blocks),
+    elements: elements(input.elements),
     experience: experienceDirection(input.experience, presetId),
     blueprint: blueprint(input.blueprint, presetId, safePrompt),
     ...(presetId === "crypto-game" ? { gameDirection: gameDirection(input.gameDirection) } : {}),

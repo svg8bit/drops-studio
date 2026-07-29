@@ -1,5 +1,5 @@
 import { presets, type PresetId } from "@/lib/presets";
-import type { GeneratedProjectSpec, ProjectBlueprint, ProjectGameDirection } from "@/lib/project-types";
+import type { GeneratedProjectSpec, ProjectBlueprint, ProjectElementConfig, ProjectGameDirection } from "@/lib/project-types";
 import { routeProductIntent } from "@/lib/product-intent";
 export { routeProductIntent, type ProductIntentRoute } from "@/lib/product-intent";
 
@@ -14,6 +14,7 @@ export interface AgentProductPlan {
   design?: Partial<GeneratedProjectSpec["design"]>;
   experience?: Partial<GeneratedProjectSpec["experience"]>;
   gameDirection?: Partial<ProjectGameDirection>;
+  elementEdit?: { elementId: string; config: ProjectElementConfig };
   model?: string;
   provider?: GeneratedProjectSpec["brain"]["provider"];
 }
@@ -284,6 +285,15 @@ export function applyAgentPlan(spec: GeneratedProjectSpec, plan: AgentProductPla
       primaryLoop: plan.experience?.primaryLoop || plan.blueprint.primaryLoop,
       modules: plan.experience?.modules?.length ? plan.experience.modules : plan.blueprint.modules,
     },
+    ...(plan.elementEdit ? {
+      elements: {
+        ...(spec.elements ?? {}),
+        [plan.elementEdit.elementId]: {
+          ...(spec.elements?.[plan.elementEdit.elementId] ?? {}),
+          ...plan.elementEdit.config,
+        },
+      },
+    } : {}),
     ...(spec.gameDirection || plan.presetId === "crypto-game" ? {
       gameDirection: {
         ...(spec.gameDirection ?? {

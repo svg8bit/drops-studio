@@ -29,6 +29,24 @@ export interface ProjectBlockConfig {
   variant: "default" | "compact" | "wide" | "spotlight";
 }
 
+export interface ProjectElementConfig {
+  text?: string;
+  imageSrc?: string;
+  visible?: boolean;
+  color?: string;
+  backgroundColor?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  textAlign?: "left" | "center" | "right";
+  width?: number;
+  padding?: number;
+  borderRadius?: number;
+  translateX?: number;
+  translateY?: number;
+  opacity?: number;
+  zIndex?: number;
+}
+
 export interface ProjectGameDirection {
   genre: "market-race" | "coin-quiz" | "portfolio-battle" | "unlock-dodge" | "catcher";
   artStyle: "3d-toy" | "comic" | "pixel" | "neon" | "retro-cartoon";
@@ -144,6 +162,7 @@ export interface GeneratedProjectSpec {
     font: "inter" | "space-grotesk" | "ibm-plex";
   };
   blocks: Record<string, ProjectBlockConfig>;
+  elements?: Record<string, ProjectElementConfig>;
   experience: ProjectExperienceDirection;
   blueprint: ProjectBlueprint;
   gameDirection?: ProjectGameDirection;
