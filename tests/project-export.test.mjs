@@ -26,7 +26,12 @@ const quality = {
 };
 
 test("creates a runnable, host-ready ZIP with source, safeguards and game assets", () => {
-  const archive = createProjectArchive(project, quality, new Uint8Array([137, 80, 78, 71]));
+  const archive = createProjectArchive(
+    project,
+    quality,
+    new Uint8Array([137, 80, 78, 71]),
+    new Uint8Array([137, 80, 78, 71]),
+  );
   assert.deepEqual([...archive.slice(0, 4)], [80, 75, 3, 4]);
   const files = unzipSync(archive);
   const names = Object.keys(files).sort();
@@ -35,6 +40,7 @@ test("creates a runnable, host-ready ZIP with source, safeguards and game assets
     "README.md",
     "api/telegram/verify.mjs",
     "assets/market-catcher-retro.png",
+    "assets/market-wolf-catcher.png",
     "drops.config.json",
     "index.html",
     "netlify.toml",

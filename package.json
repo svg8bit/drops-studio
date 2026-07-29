@@ -27,6 +27,7 @@
     "next": "^16.2.12",
     "react": "19.2.6",
     "react-dom": "19.2.6",
+    "teleproto": "^1.228.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {

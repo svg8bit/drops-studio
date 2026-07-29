@@ -96,6 +96,10 @@ test("professional editing and category direction apply to every product", async
   for (const id of presetIds) assert.match(validator, new RegExp(`"${id}": \\{ archetype:`));
   assert.match(director, /draft\.experience\.layout = "dashboard"/);
   assert.match(director, /draft\.experience\.dataView = "table"/);
+  assert.match(director, /wantsBackgroundRemoval/);
+  assert.match(director, /quotedCopy \? copy : copy\.replace/);
+  assert.match(director, /Math\.max\(-500, x - 24\)/);
+  assert.match(director, /Math\.min\(500, y \+ 24\)/);
   assert.match(compiler, /data-experience-layout=/);
   assert.match(compiler, /data-studio-block=/);
   assert.match(compiler, /module-strip/);

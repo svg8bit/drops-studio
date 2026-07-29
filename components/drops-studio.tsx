@@ -42,9 +42,10 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PreviewCanvas, type MarketCoin, type PredictionEvent } from "@/components/preview-canvas";
+import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
 import { compileProject } from "@/lib/project-compiler";
 import { createProjectSpec } from "@/lib/project-factory";
 import { evaluateProjectQuality } from "@/lib/project-quality";
@@ -85,7 +86,7 @@ interface Provider {
 const providerList: Provider[] = [
   { id: "free", name: "Free Auto", eyebrow: "No key", description: "Local planner plus the best available free workflow. Nothing to connect." },
   { id: "dropstab", name: "DropsTab API", eyebrow: "Live data", description: "Use your DropsTab API key for live prices, rankings, FDV, unlocks and research data.", keyLabel: "DropsTab API key", docs: "https://api-docs.dropstab.com/" },
-  { id: "dropsbot", name: "Drops Bot", eyebrow: "Telegram", description: "Continue in the official bot to create profiles, wallet alerts, price alerts and channel delivery.", docs: "https://t.me/Drops" },
+  { id: "dropsbot", name: "Telegram + Drops Bot", eyebrow: "Account, bot and channels", description: "Connect your Telegram account, create a real channel, add a bot as administrator and publish the first post.", docs: "https://core.telegram.org/method/channels.createChannel" },
   { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use your own OpenAI API project as the reasoning layer and choose any model available to that key.", keyLabel: "OpenAI API key", docs: "https://platform.openai.com/api-keys" },
   { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Connect Claude for long-form research, editorial voice and strategy explanations.", keyLabel: "Anthropic API key", docs: "https://console.anthropic.com/settings/keys" },
   { id: "openrouter", name: "OpenRouter Free", eyebrow: "Free + paid models", description: "Start with OpenRouter's free-model router, or enter any paid model ID available to your account.", keyLabel: "OpenRouter API key", docs: "https://openrouter.ai/keys" },
@@ -210,6 +211,9 @@ export function DropsStudio() {
   const selectedPreset = useMemo(() => presets.find((preset) => preset.id === selectedId) ?? presets[0], [selectedId]);
   const values = valuesByPreset[selectedId];
   const provider = providerList.find((item) => item.id === providerId) ?? providerList[0];
+  const handleTelegramConnected = useCallback((connected: boolean) => {
+    setConnections((current) => ({ ...current, dropsbot: connected }));
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -742,11 +746,11 @@ export function DropsStudio() {
         <nav className={menuOpen ? "open" : ""} aria-label="Primary navigation">
           <button type="button" onClick={() => { document.querySelector(".preset-section")?.scrollIntoView({ behavior: "smooth" }); setMenuOpen(false); }}>Templates</button>
           <button type="button" onClick={() => { setProjectsOpen(true); setMenuOpen(false); }}>My Projects <span>{projects.length}</span></button>
-          <button type="button" onClick={() => { setConnectionOpen(true); setMenuOpen(false); }}>AI Connections</button>
+          <button type="button" onClick={() => { setConnectionOpen(true); setMenuOpen(false); }}>Connections</button>
           <a href="https://api-docs.dropstab.com/" target="_blank" rel="noreferrer">Docs <ExternalLink size={13} /></a>
         </nav>
         <div className="header-actions">
-          <button className="api-vault-button" type="button" onClick={() => setConnectionOpen(true)}><KeyRound size={16} /> API Vault</button>
+          <button className="api-vault-button" type="button" onClick={() => setConnectionOpen(true)}><KeyRound size={16} /> Connections</button>
           <button className="mobile-menu" type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle menu">{menuOpen ? <X /> : <Menu />}</button>
         </div>
       </header>
@@ -813,7 +817,7 @@ export function DropsStudio() {
                         return <button type="button" className={active ? "active" : ""} key={tool.id} onClick={() => toggleTool(tool.id)}><Icon size={16} />{tool.label}{active && <Check size={14} />}</button>;
                       })}
                     </div>
-                    <button className="add-custom-tool" type="button" onClick={() => setToast("Custom HTTPS tools are added through API Vault.")}><Plus size={15} /> Add API, skill or custom endpoint</button>
+                    <button className="add-custom-tool" type="button" onClick={() => setToast("APIs, Telegram, AI and deployment accounts are added through Connections.")}><Plus size={15} /> Add API, skill or custom endpoint</button>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -846,23 +850,32 @@ export function DropsStudio() {
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
           <Dialog.Content className="connections-dialog">
-            <div className="dialog-top"><div><Dialog.Title>AI & API Vault</Dialog.Title><Dialog.Description>Connect your own tools. Secrets stay in this browser tab; official providers use a narrow verification proxy and custom calls go directly to your endpoint.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>
+            <div className="dialog-top"><div><Dialog.Title>Connections Hub</Dialog.Title><Dialog.Description>Connect AI, DropsTab data, Telegram accounts and bots. Sensitive credentials remain scoped to this browser session and are never compiled into public projects.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>
             <div className="connection-layout">
               <div className="provider-list">
                 {providerList.map((item) => <button type="button" key={item.id} className={providerId === item.id ? "active" : ""} onClick={() => { setProviderId(item.id); setProviderKey(""); setProviderModel(window.sessionStorage.getItem(`drops-studio:${item.id}:model`) ?? defaultModels[item.id] ?? ""); setCustomEndpoint(window.sessionStorage.getItem("drops-studio:custom-endpoint") ?? ""); }}><span>{item.id === "free" ? <Sparkles /> : item.id === "dropstab" ? <Database /> : item.id === "dropsbot" ? <Bot /> : item.id === "custom" ? <Code2 /> : <Cloud />}</span><div><strong>{item.name}</strong><small>{item.eyebrow}</small></div>{connections[item.id] && <Check className="provider-check" />}</button>)}
               </div>
-              <div className="provider-detail">
-                <span className="detail-icon">{provider.id === "free" ? <Sparkles /> : provider.id === "dropstab" ? <Database /> : provider.id === "dropsbot" ? <Bot /> : provider.id === "custom" ? <Code2 /> : <Cloud />}</span>
-                <div className="detail-copy"><span>{provider.eyebrow}</span><h3>{provider.name}</h3><p>{provider.description}</p></div>
-                {provider.id === "openrouter" && <div className="oauth-connect-card"><div><BadgeCheck /><span><strong>Connect account in one click</strong><small>OpenRouter creates a user-controlled key. It stays only in this browser tab.</small></span></div><button type="button" onClick={() => void connectOpenRouterAccount()}>Continue with OpenRouter <ArrowRight size={15} /></button><em>or use an existing API key below</em></div>}
-                {provider.endpoint && <label className="key-field"><span>HTTPS chat-completions endpoint</span><input type="url" value={customEndpoint} onChange={(event) => setCustomEndpoint(event.target.value)} placeholder="https://api.example.com/v1/chat/completions" /></label>}
-                {provider.keyLabel && <label className="key-field"><span>{provider.keyLabel}</span><div><LockKeyhole size={16} /><input type="password" autoComplete="off" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="••••••••••••••••" /></div></label>}
-                {["openai", "anthropic", "openrouter", "kimi", "custom"].includes(provider.id) && <label className="key-field"><span>Model ID</span><input type="text" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} placeholder="Enter a model ID" /></label>}
-                <div className="privacy-note"><LockKeyhole size={15} /><p><strong>Session-only storage.</strong> The key is never written to the project, database or local project history.{provider.id === "custom" ? " Custom requests go directly from your browser to the endpoint you choose." : ""}</p></div>
-                <div className="provider-detail-actions">
-                  {provider.docs && <a href={provider.docs} target="_blank" rel="noreferrer">Open official docs <ExternalLink size={14} /></a>}
-                  <button type="button" onClick={connectProvider} disabled={testingConnection}>{testingConnection ? <><LoaderCircle className="spin" /> Testing…</> : provider.id === "dropsbot" ? <>Open Drops Bot <ExternalLink size={15} /></> : provider.id === "custom" ? <>Save custom API <ArrowRight size={15} /></> : connections[provider.id] ? <>Re-test connection <BadgeCheck size={15} /></> : <>Connect & test <ArrowRight size={15} /></>}</button>
-                </div>
+              <div className={`provider-detail ${provider.id === "dropsbot" ? "telegram-provider-detail" : ""}`}>
+                {provider.id === "dropsbot" ? (
+                  <TelegramChannelWizard
+                    defaultTitle={selectedId === "morning-alpha" ? "Morning Alpha" : selectedId === "alpha-channel" ? "My Alpha Channel" : "My Drops Channel"}
+                    defaultAbout="Sourced crypto intelligence powered by DropsTab and automated with Drops Bot."
+                    defaultFirstPost="Channel created with Drops Studio. DropsTab market context and Drops Bot automation are ready to configure."
+                    onConnected={handleTelegramConnected}
+                  />
+                ) : <>
+                  <span className="detail-icon">{provider.id === "free" ? <Sparkles /> : provider.id === "dropstab" ? <Database /> : provider.id === "custom" ? <Code2 /> : <Cloud />}</span>
+                  <div className="detail-copy"><span>{provider.eyebrow}</span><h3>{provider.name}</h3><p>{provider.description}</p></div>
+                  {provider.id === "openrouter" && <div className="oauth-connect-card"><div><BadgeCheck /><span><strong>Connect account in one click</strong><small>OpenRouter creates a user-controlled key. It stays only in this browser tab.</small></span></div><button type="button" onClick={() => void connectOpenRouterAccount()}>Continue with OpenRouter <ArrowRight size={15} /></button><em>or use an existing API key below</em></div>}
+                  {provider.endpoint && <label className="key-field"><span>HTTPS chat-completions endpoint</span><input type="url" value={customEndpoint} onChange={(event) => setCustomEndpoint(event.target.value)} placeholder="https://api.example.com/v1/chat/completions" /></label>}
+                  {provider.keyLabel && <label className="key-field"><span>{provider.keyLabel}</span><div><LockKeyhole size={16} /><input type="password" autoComplete="off" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="••••••••••••••••" /></div></label>}
+                  {["openai", "anthropic", "openrouter", "kimi", "custom"].includes(provider.id) && <label className="key-field"><span>Model ID</span><input type="text" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} placeholder="Enter a model ID" /></label>}
+                  <div className="privacy-note"><LockKeyhole size={15} /><p><strong>Session-only storage.</strong> The key is never written to the project, database or local project history.{provider.id === "custom" ? " Custom requests go directly from your browser to the endpoint you choose." : ""}</p></div>
+                  <div className="provider-detail-actions">
+                    {provider.docs && <a href={provider.docs} target="_blank" rel="noreferrer">Open official docs <ExternalLink size={14} /></a>}
+                    <button type="button" onClick={connectProvider} disabled={testingConnection}>{testingConnection ? <><LoaderCircle className="spin" /> Testing…</> : provider.id === "custom" ? <>Save custom API <ArrowRight size={15} /></> : connections[provider.id] ? <>Re-test connection <BadgeCheck size={15} /></> : <>Connect & test <ArrowRight size={15} /></>}</button>
+                  </div>
+                </>}
               </div>
             </div>
           </Dialog.Content>

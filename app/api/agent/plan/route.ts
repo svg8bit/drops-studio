@@ -91,6 +91,25 @@ const planSchema = z.object({
     sound: z.boolean(),
     assetSource: z.enum(["free-vector", "uploaded", "ai-generated"]),
   }).optional(),
+  elementEdit: z.object({
+    elementId: z.string().regex(/^[a-z0-9-]{3,96}$/),
+    config: z.object({
+      text: z.string().max(800).optional(),
+      visible: z.boolean().optional(),
+      color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      backgroundColor: z.union([z.string().regex(/^#[0-9a-f]{6}$/i), z.literal("transparent")]).optional(),
+      fontSize: z.number().int().min(8).max(120).optional(),
+      fontWeight: z.number().int().min(300).max(950).optional(),
+      textAlign: z.enum(["left", "center", "right"]).optional(),
+      width: z.number().min(10).max(100).optional(),
+      padding: z.number().int().min(0).max(80).optional(),
+      borderRadius: z.number().int().min(0).max(80).optional(),
+      translateX: z.number().int().min(-500).max(500).optional(),
+      translateY: z.number().int().min(-500).max(500).optional(),
+      opacity: z.number().min(0).max(1).optional(),
+      zIndex: z.number().int().min(-10).max(100).optional(),
+    }),
+  }).optional(),
 });
 
 const systemPrompt = `You are Drops Director, the product architect inside Drops Studio — a vertical Replit/Lovable for real crypto products.
@@ -115,6 +134,8 @@ The output must describe a distinct runtime:
 - decision/copy/prediction tools must have evidence, rules, risk gates and audit state.
 
 For a request resembling an existing copyrighted game or cartoon, preserve the requested mechanic and era mood but invent original characters, names and artwork.
+
+When the prompt contains a selected canvas element, keep its exact elementId and return a focused elementEdit with only the requested text/style/visibility changes. Do not use elementEdit for whole-product requests and never invent an image URL.
 
 Return one strict JSON object matching the requested schema. No markdown, no prose outside JSON.`;
 

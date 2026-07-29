@@ -60,7 +60,12 @@ export default async function handler(req, res) {
 }
 `;
 
-export function buildProjectArchiveFiles(project: GeneratedProject, quality: ProjectQualityReport, gameAsset?: Uint8Array): Record<string, Uint8Array> {
+export function buildProjectArchiveFiles(
+  project: GeneratedProject,
+  quality: ProjectQualityReport,
+  gameAsset?: Uint8Array,
+  gameSprite?: Uint8Array,
+): Record<string, Uint8Array> {
   const slug = project.spec.slug;
   const reality = getProductReality(project.spec.presetId);
   const integrationManifest = {
@@ -86,9 +91,17 @@ export function buildProjectArchiveFiles(project: GeneratedProject, quality: Pro
   if (project.spec.presetId === "crypto-game" && gameAsset?.length) {
     files["assets/market-catcher-retro.png"] = gameAsset;
   }
+  if (project.spec.presetId === "crypto-game" && gameSprite?.length) {
+    files["assets/market-wolf-catcher.png"] = gameSprite;
+  }
   return files;
 }
 
-export function createProjectArchive(project: GeneratedProject, quality: ProjectQualityReport, gameAsset?: Uint8Array): Uint8Array {
-  return zipSync(buildProjectArchiveFiles(project, quality, gameAsset), { level: 6 });
+export function createProjectArchive(
+  project: GeneratedProject,
+  quality: ProjectQualityReport,
+  gameAsset?: Uint8Array,
+  gameSprite?: Uint8Array,
+): Uint8Array {
+  return zipSync(buildProjectArchiveFiles(project, quality, gameAsset, gameSprite), { level: 6 });
 }

@@ -1,4 +1,4 @@
-import type { GeneratedProjectSpec, ProjectDesignKit } from "@/lib/project-types";
+import type { GeneratedProjectSpec, ProjectDesignKit, ProjectElementConfig } from "@/lib/project-types";
 import { validateProjectSpec } from "@/lib/project-validator";
 
 export interface DirectorProposal {
@@ -30,6 +30,96 @@ function includesAny(value: string, words: string[]): boolean {
 function nextKit(current: ProjectDesignKit): ProjectDesignKit {
   const order = DESIGN_DIRECTIONS.map((item) => item.id);
   return order[(order.indexOf(current) + 1) % order.length];
+}
+
+export function createFreeElementDirectorProposal(
+  current: GeneratedProjectSpec,
+  instruction: string,
+  element: { id: string; label: string; text: string; textEditable: boolean; styles: ProjectElementConfig; overrides?: ProjectElementConfig },
+): DirectorProposal {
+  const query = instruction.trim().toLowerCase();
+  const config: ProjectElementConfig = { ...(element.overrides ?? {}) };
+  const summary: string[] = [];
+  const note = (message: string) => summary.push(message);
+  const fontSize = Number(element.styles.fontSize || config.fontSize || 16);
+  const x = Number(element.styles.translateX || config.translateX || 0);
+  const y = Number(element.styles.translateY || config.translateY || 0);
+  const color = instruction.match(/#[0-9a-f]{6}\b/i)?.[0]?.toLowerCase();
+  const copyMatch = instruction.match(/(?:replace(?: the)? text(?: with)?|change(?: the)? text(?: to)?|set(?: the)? text(?: to)?|замени(?:ть)? текст(?: на)?|измени(?:ть)? текст(?: на)?)\s*(["«]?)([^"»\n]{1,180})(["»]?)/i);
+  const copy = copyMatch?.[2]?.trim();
+  const quotedCopy = Boolean(copyMatch && ((copyMatch[1] === '"' && copyMatch[3] === '"') || (copyMatch[1] === "«" && copyMatch[3] === "»")));
+  const wantsBackgroundRemoval = includesAny(query, ["no background", "remove background", "без фона", "убери фон"]);
+
+  if (copy && element.textEditable) {
+    config.text = quotedCopy ? copy : copy.replace(/[.!?]+$/, "");
+    note(`Replaced the selected copy with “${config.text}”.`);
+  }
+  if (!wantsBackgroundRemoval && includesAny(query, ["hide", "remove", "убери", "скрой"])) {
+    config.visible = false;
+    note("Hid the selected element.");
+  } else if (includesAny(query, ["show", "верни", "покажи"])) {
+    config.visible = true;
+    note("Restored the selected element.");
+  }
+  if (includesAny(query, ["smaller", "уменьш", "меньше"])) {
+    config.fontSize = Math.max(8, Math.round(fontSize * 0.82));
+    note(`Reduced the selected type to ${config.fontSize}px.`);
+  } else if (includesAny(query, ["bigger", "larger", "увелич", "крупнее", "больше"])) {
+    config.fontSize = Math.min(120, Math.round(fontSize * 1.18));
+    note(`Increased the selected type to ${config.fontSize}px.`);
+  }
+  if (includesAny(query, ["bold", "жирн", "stronger"])) {
+    config.fontWeight = 800;
+    note("Strengthened the selected type weight.");
+  } else if (includesAny(query, ["lighter", "тоньше", "легче"])) {
+    config.fontWeight = 500;
+    note("Reduced the selected type weight.");
+  }
+  if (includesAny(query, ["align center", "center it", "по центру", "центрируй"])) {
+    config.textAlign = "center";
+    note("Centered the selected element.");
+  } else if (includesAny(query, ["align right", "по правому"])) {
+    config.textAlign = "right";
+    note("Right-aligned the selected element.");
+  } else if (includesAny(query, ["align left", "по левому"])) {
+    config.textAlign = "left";
+    note("Left-aligned the selected element.");
+  }
+  if (includesAny(query, ["move left", "сдвинь влево", "левее"])) { config.translateX = Math.max(-500, x - 24); note("Moved the selected element left."); }
+  if (includesAny(query, ["move right", "сдвинь вправо", "правее"])) { config.translateX = Math.min(500, x + 24); note("Moved the selected element right."); }
+  if (includesAny(query, ["move up", "подними", "выше"])) { config.translateY = Math.max(-500, y - 24); note("Moved the selected element up."); }
+  if (includesAny(query, ["move down", "опусти", "ниже"])) { config.translateY = Math.min(500, y + 24); note("Moved the selected element down."); }
+  if (wantsBackgroundRemoval) {
+    config.backgroundColor = "transparent";
+    note("Removed the selected element fill.");
+  } else if (color && includesAny(query, ["background", "fill", "фон", "заливк"])) {
+    config.backgroundColor = color;
+    note(`Set the selected fill to ${color}.`);
+  } else if (color) {
+    config.color = color;
+    note(`Set the selected text color to ${color}.`);
+  }
+  const radius = instruction.match(/(?:radius|corner|скругл)[^0-9]{0,10}(\d{1,3})/i)?.[1];
+  if (radius) {
+    config.borderRadius = Math.min(80, Number(radius));
+    note(`Set the selected corner radius to ${config.borderRadius}px.`);
+  }
+  if (!summary.length) {
+    config.fontWeight = Math.max(700, Number(element.styles.fontWeight || 700));
+    config.backgroundColor = config.backgroundColor ?? "transparent";
+    note("Prepared a cleaner, stronger treatment for the selected element.");
+  }
+
+  const draft = validateProjectSpec({
+    ...current,
+    elements: { ...(current.elements ?? {}), [element.id]: config },
+  });
+  return {
+    label: `Focused edit · ${element.label}`,
+    summary,
+    affected: [element.label],
+    spec: draft,
+  };
 }
 
 export function createFreeDirectorProposal(current: GeneratedProjectSpec, instruction: string, selectedBlock?: string): DirectorProposal {
