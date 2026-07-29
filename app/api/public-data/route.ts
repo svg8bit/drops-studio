@@ -5,9 +5,9 @@ import { DROPSTAB_SHARED_CACHE_SECONDS, fetchDropsTabCoins, type DropsTabMarketC
 export const revalidate = 900;
 
 const assets = [
-  { symbol: "BTC", name: "Bitcoin", product: "BTC-USD", marketCap: "$2.35T" },
-  { symbol: "ETH", name: "Ethereum", product: "ETH-USD", marketCap: "$463B" },
-  { symbol: "SOL", name: "Solana", product: "SOL-USD", marketCap: "$91.7B" },
+  { symbol: "BTC", name: "Bitcoin", product: "BTC-USD" },
+  { symbol: "ETH", name: "Ethereum", product: "ETH-USD" },
+  { symbol: "SOL", name: "Solana", product: "SOL-USD" },
 ];
 
 type MarketResult = {
@@ -52,8 +52,8 @@ async function fetchPublicFallbackMarket(): Promise<DropsTabMarketCoin[]> {
       symbol: asset.symbol,
       name: asset.name,
       price: money(price),
-      change: Number.isFinite(price) && Number.isFinite(open) && open > 0 ? ((price - open) / open) * 100 : 0,
-      marketCap: asset.marketCap,
+      change: Number.isFinite(price) && Number.isFinite(open) && open > 0 ? ((price - open) / open) * 100 : null,
+      marketCap: "—",
     };
   }));
 }
@@ -89,7 +89,7 @@ export async function GET() {
       }).catch(() => null),
     ]);
 
-    const events: Array<{ title: string; probability: number; change: number; url: string }> = [];
+    const events: Array<{ title: string; probability: number; change: number | null; url: string }> = [];
     if (predictionResponse?.ok) {
       const rows = await predictionResponse.json() as Array<Record<string, unknown>>;
       for (const event of rows.slice(0, 6)) {
@@ -99,12 +99,16 @@ export async function GET() {
           const outcomes = typeof market?.outcomes === "string" ? JSON.parse(market.outcomes) : market?.outcomes;
           const prices = typeof market?.outcomePrices === "string" ? JSON.parse(market.outcomePrices) : market?.outcomePrices;
           const yesIndex = Array.isArray(outcomes) ? outcomes.findIndex((item) => String(item).toLowerCase() === "yes") : 0;
-          const probability = Array.isArray(prices) ? Math.round(Number(prices[yesIndex >= 0 ? yesIndex : 0]) * 100) : 50;
+          const rawProbability = Array.isArray(prices) ? Number(prices[yesIndex >= 0 ? yesIndex : 0]) : Number.NaN;
+          if (!Number.isFinite(rawProbability)) continue;
+          const probability = Math.round(rawProbability * 100);
           if (probability <= 1 || probability >= 99) continue;
+          const upstreamChange = market?.oneDayPriceChange;
+          const rawChange = upstreamChange === null || upstreamChange === undefined ? Number.NaN : Number(upstreamChange);
           events.push({
             title: String(event.title ?? event.question ?? "Live crypto prediction"),
             probability,
-            change: Math.round(Number(market?.oneDayPriceChange ?? 0) * 100),
+            change: Number.isFinite(rawChange) ? Math.round(rawChange * 100) : null,
             url: event.slug ? `https://polymarket.com/event/${event.slug}` : "https://polymarket.com/",
           });
         } catch { /* Ignore malformed upstream event rows. */ }

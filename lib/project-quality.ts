@@ -1,4 +1,5 @@
 import type { GeneratedProjectSpec, ProjectQualityCheck, ProjectQualityReport, ProjectRuntimeSmokeResult } from "@/lib/project-types";
+import { getProductReality, launchStatusFor, truthfulnessViolations } from "./product-reality.ts";
 
 const expectedArchetype: Record<GeneratedProjectSpec["presetId"], GeneratedProjectSpec["experience"]["archetype"]> = {
   "action-engine": "decision-cockpit",
@@ -32,8 +33,12 @@ function categoryNative(spec: GeneratedProjectSpec): boolean {
 
 export function evaluateProjectQuality(spec: GeneratedProjectSpec, html: string, runtimeSmoke?: ProjectRuntimeSmokeResult | null): ProjectQualityReport {
   const smokePassed = Boolean(runtimeSmoke?.executed && runtimeSmoke.errors.length === 0);
+  const reality = getProductReality(spec.presetId);
+  const truthfulness = truthfulnessViolations(spec.presetId, html);
+  const deliveryMarker = `data-delivery-mode="${reality.deliveryMode}"`;
   const checks: ProjectQualityCheck[] = [
     check("category", "Category-native product", categoryNative(spec), `${spec.experience.archetype} matches ${spec.presetId}`, 3, true),
+    check("truthfulness", "Truthful delivery contract", truthfulness.length === 0 && html.includes(deliveryMarker), truthfulness.length ? `Unsupported claims: ${truthfulness.join(", ")}` : `${reality.deliveryMode} contract is visible in the runtime`, 3, true),
     check("runtime", "Runnable standalone output", html.length > 18_000 && html.includes(`data-project-kind="${spec.presetId}"`) && smokePassed && Boolean(runtimeSmoke?.runtime), runtimeSmoke ? "Compiled app executed inside the sandbox and rendered its category runtime" : "Waiting for the sandboxed runtime smoke test", 3, true),
     check("screens", "Complete experience map", spec.blueprint.screens.length >= 3 && spec.blueprint.modules.length >= 4, `${spec.blueprint.screens.length} screens · ${spec.blueprint.modules.length} modules`, 2),
     check("interactions", "Working interaction contract", spec.blueprint.interactions.length >= 4 && /addEventListener\("click"/.test(html) && smokePassed && Boolean(runtimeSmoke?.interactions), runtimeSmoke ? `${spec.blueprint.interactions.length} declared interactions and live controls verified` : "Waiting for live controls to execute in the sandbox", 2, true),
@@ -53,6 +58,9 @@ export function evaluateProjectQuality(spec: GeneratedProjectSpec, html: string,
   return {
     score,
     readyToPublish: score >= 85 && criticalFailures.length === 0,
+    launchStatus: launchStatusFor(spec.presetId),
+    deliveryMode: reality.deliveryMode,
+    externalSetupRequired: reality.externalSetupRequired,
     checkedAt: new Date().toISOString(),
     checks,
     criticalFailures,

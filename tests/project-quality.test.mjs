@@ -17,7 +17,7 @@ const spec = {
   blocks: {},
 };
 
-const html = `${"x".repeat(19_000)}<html data-project-kind="morning-alpha"><head><title>Brief</title><meta name="viewport"></head><body data-studio-block="application">approval required<script>function refreshData(){} function dropsbotSetup(){} function save(){localStorage.setItem("x","y")} document.addEventListener("click",()=>{})</script><style>@media(max-width:760px){}</style></body></html>`;
+const html = `${"x".repeat(19_000)}<html data-project-kind="morning-alpha" data-delivery-mode="connection-required"><head><title>Brief</title><meta name="viewport"></head><body data-studio-block="application">approval required<script>function refreshData(){} function dropsbotSetup(){} function save(){localStorage.setItem("x","y")} document.addEventListener("click",()=>{})</script><style>@media(max-width:760px){}</style></body></html>`;
 
 test("publish readiness requires a successful executed runtime smoke", () => {
   const pending = evaluateProjectQuality(spec, html);
@@ -37,6 +37,7 @@ test("publish readiness requires a successful executed runtime smoke", () => {
   const passed = evaluateProjectQuality(spec, html, smoke);
   assert.equal(passed.readyToPublish, true);
   assert.equal(passed.score, 100);
+  assert.equal(passed.launchStatus, "external-setup-required");
 });
 
 test("a runtime error blocks publishing even when static markers pass", () => {

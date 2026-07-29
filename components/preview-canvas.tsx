@@ -9,10 +9,8 @@ import {
   AudioLines,
   BadgeCheck,
   BarChart3,
-  CircleDollarSign,
   Clock3,
   ExternalLink,
-  Flame,
   Gamepad2,
   HeartPulse,
   ListPlus,
@@ -27,7 +25,6 @@ import {
   Star,
   TrendingUp,
   Trophy,
-  UsersRound,
   Volume2,
   Zap,
 } from "lucide-react";
@@ -38,14 +35,14 @@ export interface MarketCoin {
   symbol: string;
   name: string;
   price: string;
-  change: number;
+  change: number | null;
   marketCap: string;
 }
 
 export interface PredictionEvent {
   title: string;
-  probability: number;
-  change: number;
+  probability: number | null;
+  change: number | null;
   url?: string;
 }
 
@@ -61,7 +58,7 @@ interface PreviewCanvasProps {
   onAction: (label: string) => void;
 }
 
-const formatSigned = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+const formatSigned = (value: number | null) => value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 function Metric({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
   return (
@@ -99,17 +96,17 @@ function BriefPreview({ market, spec, onAction }: { market: MarketCoin[]; spec?:
       </div>
       <div className="brief-block">
         <div className="brief-heading"><TrendingUp size={17} /><strong>Biggest move</strong><b>{leader.symbol} {formatSigned(leader.change)}</b></div>
-        <p>{leader.name} leads your watchlist as market activity accelerates.</p>
+        <p>{leader.change === null ? "Live percentage change is not available yet." : `${leader.name} leads your watchlist as market activity accelerates.`}</p>
         <button type="button" onClick={() => onAction("OPEN IN DROPSTAB")}>Open in DropsTab <ExternalLink size={13} /></button>
       </div>
       <div className="brief-block">
-        <div className="brief-heading"><Clock3 size={17} /><strong>Next catalyst</strong><b>2 days</b></div>
-        <p>ARB unlock and two project activities deserve attention.</p>
-        <button type="button" onClick={() => onAction("SET ALERT")}>Create a Drops alert <ArrowRight size={13} /></button>
+        <div className="brief-heading"><Clock3 size={17} /><strong>Next unlock</strong><b>Not connected</b></div>
+        <p>Connect the DropsTab unlock endpoint before this section can show a sourced event.</p>
+        <button type="button" onClick={() => onAction("CONNECT DROPSTAB")}>Open data setup <ArrowRight size={13} /></button>
       </div>
       <div className="brief-block last">
-        <div className="brief-heading"><Rocket size={17} /><strong>Fresh funding</strong><b>$18.7M</b></div>
-        <p>Three projects raised in the last 24 hours.</p>
+        <div className="brief-heading"><Rocket size={17} /><strong>Fresh funding</strong><b>Not connected</b></div>
+        <p>No funding value is shown until a DropsTab funding response is available.</p>
       </div>
     </div>
   );
@@ -118,37 +115,36 @@ function BriefPreview({ market, spec, onAction }: { market: MarketCoin[]; spec?:
 function EnginePreview({ values, onAction }: { values: Record<string, string>; onAction: (label: string) => void }) {
   return (
     <div className="engine-card">
-      <div className="engine-status"><span><Activity size={14} /> Signal confirmed</span><b>82 / 100</b></div>
-      <h3>SOL catalyst setup</h3>
-      <p className="engine-thesis">{values.signal || "Unlock + catalyst"} is now confirmed by {values.trigger || "a whale move"}.</p>
+      <div className="engine-status"><span><Activity size={14} /> Decision rule draft</span><b>Research mode</b></div>
+      <h3>Build a sourced decision rule</h3>
+      <p className="engine-thesis">Watch {values.signal || "a market catalyst"}; require {values.trigger || "a verified trigger"} before review.</p>
       <div className="reason-grid">
-        <Metric label="WHY" value="Catalyst strength: High" positive />
-        <Metric label="WHEN" value="Whale buy: $1.2M" positive />
-        <Metric label="RISK" value="Unlock exposure: Low" />
+        <Metric label="WHY" value="Connect DropsTab evidence" />
+        <Metric label="WHEN" value="Await verified trigger" />
+        <Metric label="RISK" value="Set review limits" />
       </div>
       <div className="engine-decision"><Zap size={18} /><div><span>Recommended next step</span><strong>{values.action || "Alert + trade plan"}</strong></div></div>
-      <ActionRow actions={["BUY", "HEDGE", "WAIT"]} onAction={onAction} />
+      <ActionRow actions={["BUILD RULE", "OPEN RESEARCH", "SET ALERT"]} onAction={onAction} />
     </div>
   );
 }
 
 function ChannelPreview({ spec, onAction }: { spec?: GeneratedProjectSpec; onAction: (label: string) => void }) {
+  const trackedAsset = spec?.market?.[0]?.symbol;
   return (
     <div className="telegram-card alpha-message">
       <div className="message-title">
         <span className="message-icon purple"><Zap size={17} /></span>
-        <div><strong>{spec?.blueprint.content.headline ?? "Alpha caught early"}</strong><span>{spec?.values.niche ?? "Solana smart money"} · now</span></div>
-        <BadgeCheck className="verified" size={17} />
+        <div><strong>{spec?.blueprint.content.headline ?? "Sourced alpha draft"}</strong><span>{spec?.values.niche ?? "Selected crypto niche"} · preview</span></div>
       </div>
       <div className="alpha-token-row">
-        <div className="token-orb">JUP</div>
-        <div><strong>Jupiter</strong><span>Whale accumulation</span></div>
-        <b>+7.2%</b>
+        <div className="token-orb">{trackedAsset ?? "—"}</div>
+        <div><strong>{trackedAsset ?? "Tracked asset"}</strong><span>{trackedAsset ? "Waiting for a verified signal" : "Awaiting asset selection"}</span></div>
+        <b>—</b>
       </div>
-      <p className="alpha-copy">Two tracked wallets bought $428K while volume expanded 2.4×. No major unlock is scheduled in the next 14 days.</p>
-      <div className="source-row"><ShieldCheck size={14} /> Sources attached · DropsTab context</div>
-      <ActionRow actions={["BUY IN DROPS", "TRACK", "SHARE"]} onAction={onAction} />
-      <div className="caller-note"><CircleDollarSign size={15} /> Caller revenue is enabled for this channel.</div>
+      <p className="alpha-copy">A real post appears here after the market adapter returns data and you generate a sourced draft.</p>
+      <div className="source-row"><ShieldCheck size={14} /> PREVIEW · NOT PUBLISHED</div>
+      <ActionRow actions={["CONNECT CHANNEL", "OPEN DROPSTAB", "EDIT DRAFT"]} onAction={onAction} />
     </div>
   );
 }
@@ -158,17 +154,17 @@ function PredictionPreview({ market, prediction, onAction }: { market: MarketCoi
     <div className="prediction-card">
       <div className="prediction-question"><span>POLYMARKET EVENT</span><strong>{prediction.title}</strong></div>
       <div className="odds-row">
-        <div><span>YES</span><strong>{prediction.probability}¢</strong><small>{prediction.change ? `${prediction.change > 0 ? "+" : ""}${prediction.change}¢ today` : "live probability"}</small></div>
+        <div><span>YES</span><strong>{prediction.probability === null ? "—" : `${prediction.probability}¢`}</strong><small>{prediction.change === null ? "Awaiting live probability" : `${prediction.change > 0 ? "+" : ""}${prediction.change}¢ today`}</small></div>
         <div className="odds-chart"><i /><i /><i /><i /><i /><i /></div>
       </div>
-      <div className="impact-label">RELATED MARKET REACTION</div>
+      <div className="impact-label">SELECTED ASSETS · HEURISTIC MAP</div>
       <div className="impact-list">
         {market.slice(0, 3).map((coin, index) => (
-          <div key={coin.symbol}><span>{coin.symbol}</span><div className="impact-bar"><i style={{ width: `${72 - index * 13}%` }} /></div><b>{formatSigned(Math.abs(coin.change) + 2.1)}</b></div>
+          <div key={coin.symbol}><span>{coin.symbol}</span><div className="impact-bar"><i style={{ width: `${72 - index * 13}%` }} /></div><b>{formatSigned(coin.change)}</b></div>
         ))}
       </div>
-      <div className="ai-note"><Sparkles size={16} /><p><strong>AI read:</strong> Odds moved before the broader Solana basket. Momentum remains positive, but reversal risk rises below 55¢.</p></div>
-      <ActionRow actions={["TRADE MARKET", "BUY BASKET", "SET REVERSAL"]} onAction={onAction} />
+      <div className="ai-note"><Sparkles size={16} /><p><strong>Research note:</strong> These assets come from the selected market universe; no causal relationship or historical sensitivity is implied.</p></div>
+      <ActionRow actions={["OPEN MARKET", "RESEARCH ASSETS", "SET ALERT"]} onAction={onAction} />
     </div>
   );
 }
@@ -176,15 +172,15 @@ function PredictionPreview({ market, prediction, onAction }: { market: MarketCoi
 function CopyPreview({ onAction }: { onAction: (label: string) => void }) {
   return (
     <div className="copy-card">
-      <div className="copy-wallet"><div className="wallet-avatar">0x</div><div><strong>Smart Wallet 07</strong><span>Verified public address</span></div><b>88 score</b></div>
-      <div className="copy-trade"><span>BOUGHT</span><strong>$84,200 JUP</strong><small>Entry $0.91 · 2 minutes ago</small></div>
+      <div className="copy-wallet"><div className="wallet-avatar">0x</div><div><strong>Add a public wallet</strong><span>No event feed connected</span></div><b>Setup</b></div>
+      <div className="copy-trade"><span>PAPER MODE</span><strong>No wallet event yet</strong><small>Add an address, then connect Drops Bot or an onchain feed.</small></div>
       <div className="copy-checks">
-        <div><BadgeCheck size={15} /> Volume confirmation</div>
-        <div><BadgeCheck size={15} /> No near-term unlock</div>
-        <div><BadgeCheck size={15} /> Position cap respected</div>
+        <div><Clock3 size={15} /> Wallet event awaiting source</div>
+        <div><Clock3 size={15} /> Unlock check awaiting DropsTab</div>
+        <div><BadgeCheck size={15} /> Paper-only risk cap available</div>
       </div>
-      <div className="risk-limit"><span>Your planned size</span><strong>$420 · 2% max</strong></div>
-      <ActionRow actions={["COPY", "PAPER TRADE", "SKIP"]} onAction={onAction} />
+      <div className="risk-limit"><span>Your local paper rule</span><strong>2% max · no amount assumed</strong></div>
+      <ActionRow actions={["ADD WALLET", "CONNECT ALERTS", "PAPER RULE"]} onAction={onAction} />
     </div>
   );
 }
@@ -193,14 +189,14 @@ function AggregatorPreview({ market, onAction }: { market: MarketCoin[]; onActio
   return (
     <div className="aggregator-card">
       <div className="aggregator-toolbar"><div><BarChart3 size={17} /><strong>PulseCap</strong></div><span>Markets</span><span>Unlocks</span><span>Funding</span></div>
-      <div className="aggregator-stats"><Metric label="MARKET CAP" value="$2.48T" /><Metric label="24H VOLUME" value="$98.4B" /><Metric label="BTC DOM." value="52.8%" /></div>
+      <div className="aggregator-stats"><Metric label="MARKET CAP" value="Connect DropsTab" /><Metric label="24H VOLUME" value="—" /><Metric label="BTC DOM." value="—" /></div>
       <div className="market-table">
         <div className="market-row head"><span># / Asset</span><span>Price</span><span>24h</span></div>
         {market.map((coin, index) => (
           <button className="market-row" key={coin.symbol} type="button" onClick={() => onAction(`VIEW ${coin.symbol}`)}>
             <span><i>{index + 1}</i><b>{coin.symbol}</b><small>{coin.name}</small></span>
             <strong>{coin.price}</strong>
-            <em className={coin.change >= 0 ? "positive" : "negative"}>{formatSigned(coin.change)}</em>
+            <em className={coin.change === null ? undefined : coin.change >= 0 ? "positive" : "negative"}>{formatSigned(coin.change)}</em>
           </button>
         ))}
       </div>
@@ -228,10 +224,10 @@ function GamePreview({ market, spec, onAction }: { market: MarketCoin[]; spec?: 
         }
         return value - 1;
       });
-      setScore((value) => value + 10 + Math.floor(Math.random() * 8));
+      setScore((value) => value + 10 + Math.max(0, Math.round(Math.abs(market[0]?.change ?? 0))));
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [playing]);
+  }, [market, playing]);
 
   function start() {
     setPlaying(true);
@@ -248,12 +244,12 @@ function GamePreview({ market, spec, onAction }: { market: MarketCoin[]; spec?: 
 
   return (
     <div className={`catcher-game ${retro ? "retro" : ""}`} style={{ backgroundImage: retro ? "linear-gradient(rgba(28,20,18,.05), rgba(42,19,10,.2)), url('/assets/market-catcher-retro.png')" : undefined }}>
-      <div className="catcher-hud"><span><Gamepad2 /> DAILY MARKET RUN</span><div><b>{score.toLocaleString()}</b><small>SCORE</small></div><div><b>{"♥".repeat(lives)}</b><small>LIVES</small></div><strong>{seconds}s</strong></div>
+      <div className="catcher-hud"><span><Gamepad2 /> LOCAL MARKET RUN</span><div><b>{score.toLocaleString()}</b><small>LOCAL SCORE</small></div><div><b>{"♥".repeat(lives)}</b><small>LIVES</small></div><strong>{seconds}s</strong></div>
       <div className="catcher-title"><span>POWERED BY DROPSTAB MOMENTUM</span><h3>{title}</h3><p>{spec?.blueprint.content.subheadline ?? "Catch market leaders. Dodge unlock risk."}</p></div>
       {playing && <div className="falling-layer" aria-hidden="true">{market.slice(0, 3).map((coin, index) => <i className={`falling-token lane-${index}`} style={{ animationDelay: `${index * -.72}s` }} key={coin.symbol}>{coin.symbol}</i>)}<i className="falling-token hazard lane-3">!</i></div>}
       <div className="catcher-character-marker" style={{ left: `${15 + lane * 23}%` }}><i /><span>{retro ? "WOLF" : "PLAYER"}</span></div>
       {!playing && seconds > 0 && <button className="catcher-start" type="button" onClick={start}><Play /> {spec?.blueprint.content.primaryAction ?? "PLAY NOW"}</button>}
-      {!playing && seconds === 0 && <div className="catcher-result"><Trophy /><strong>{score} points</strong><span>Round complete · Drops Bot challenge ready</span><button type="button" onClick={start}><RotateCcw /> Play again</button></div>}
+      {!playing && seconds === 0 && <div className="catcher-result"><Trophy /><strong>{score} points</strong><span>Local score · this preview session only</span><button type="button" onClick={start}><RotateCcw /> Play again</button></div>}
       <div className="catcher-controls"><button type="button" onClick={() => move(-1)} aria-label="Move left"><ArrowLeft /></button><span>{playing ? "Move the baskets" : "Keyboard + touch ready"}</span><button type="button" onClick={() => move(1)} aria-label="Move right"><ArrowRight /></button></div>
     </div>
   );
@@ -262,9 +258,9 @@ function GamePreview({ market, spec, onAction }: { market: MarketCoin[]; spec?: 
 function CompanionPreview({ onAction }: { onAction: (label: string) => void }) {
   return (
     <div className="companion-card">
-      <div className="companion-greeting"><Sparkles size={18} /><div><strong>For you, not for everyone</strong><span>Based on your SOL + AI interests</span></div></div>
-      <div className="discovery-card"><span>BECAUSE YOU FOLLOW JUP</span><strong>Three Solana infrastructure projects are gaining volume</strong><p>One has a funding catalyst; two have low near-term unlock pressure.</p><div><button type="button" onClick={() => onAction("MORE LIKE THIS")}>More like this</button><button type="button" onClick={() => onAction("EXPLAIN")}>Explain</button></div></div>
-      <div className="companion-mini"><Star size={16} /><div><strong>New topic unlocked</strong><span>AI x DePIN · 7 related assets</span></div><ArrowRight size={16} /></div>
+      <div className="companion-greeting"><Sparkles size={18} /><div><strong>Build your local taste graph</strong><span>No interests or portfolio are assumed</span></div></div>
+      <div className="discovery-card"><span>STARTER MARKET CONTEXT</span><strong>Choose assets and topics to change this ranking</strong><p>Likes and dismissals stay in this browser. Connected DropsTab categories and AI explanations are added only after setup.</p><div><button type="button" onClick={() => onAction("CHOOSE INTERESTS")}>Choose interests</button><button type="button" onClick={() => onAction("OPEN DROPSTAB")}>Open research</button></div></div>
+      <div className="companion-mini"><Star size={16} /><div><strong>Preference memory</strong><span>Local only · resettable</span></div><ArrowRight size={16} /></div>
     </div>
   );
 }
@@ -277,31 +273,20 @@ function TamagotchiPreview({ onAction }: { onAction: (label: string) => void }) 
         <div className="pet-body"><span className="pet-eye left" /><span className="pet-eye right" /><span className="pet-mouth" /></div>
         <div className="pet-shadow" />
       </div>
-      <div className="pet-header"><div><strong>Porty is thriving</strong><span>Your portfolio creature</span></div><b>82 health</b></div>
-      <div className="pet-bars"><span><i style={{ width: "82%" }} />Diversification</span><span><i style={{ width: "64%" }} />Momentum</span><span className="warning"><i style={{ width: "38%" }} />Unlock risk</span></div>
-      <div className="pet-message"><HeartPulse size={16} /> “SOL is carrying us today. Maybe feed me one less volatile asset?”</div>
-      <ActionRow actions={["FEED", "CHECK HEALTH", "SHARE PET"]} onAction={onAction} />
+      <div className="pet-header"><div><strong>Waiting to hatch</strong><span>Enter holdings to calculate health</span></div><b>0 health</b></div>
+      <div className="pet-bars"><span><i style={{ width: "0%" }} />Diversification</span><span><i style={{ width: "0%" }} />Momentum</span><span className="warning"><i style={{ width: "0%" }} />Concentration</span></div>
+      <div className="pet-message"><HeartPulse size={16} /> No wallet is assumed. Health appears only after you add portfolio weights.</div>
+      <ActionRow actions={["ADD HOLDINGS", "CALCULATE", "ALERT SETUP"]} onAction={onAction} />
     </div>
   );
 }
 
 function HuntPreview({ onAction }: { onAction: (label: string) => void }) {
-  const projects = [
-    { name: "OrbitKit", note: "Wallet automation for teams", votes: 482, tag: "TOOLS" },
-    { name: "ProofRadio", note: "Live crypto audio intelligence", votes: 319, tag: "AI" },
-    { name: "MintBase", note: "Transparent token launch studio", votes: 271, tag: "LAUNCH" },
-  ];
   return (
     <div className="hunt-card">
-      <div className="hunt-title"><Rocket size={18} /><div><strong>Today in crypto</strong><span>Ranked with DropsTab context</span></div><button type="button" onClick={() => onAction("SUBMIT")}>Submit</button></div>
-      <div className="hunt-list">
-        {projects.map((project, index) => (
-          <button key={project.name} type="button" onClick={() => onAction(`OPEN ${project.name}`)}>
-            <span className="hunt-rank">{index + 1}</span><div><b>{project.name}</b><small>{project.note}</small><em>{project.tag}</em></div><span className="hunt-votes"><TrendingUp size={13} />{project.votes}</span>
-          </button>
-        ))}
-      </div>
-      <div className="hunt-footer"><ListPlus size={14} /> 12 launches added today</div>
+      <div className="hunt-title"><Rocket size={18} /><div><strong>Your private launch board</strong><span>Local drafts · no public community yet</span></div><button type="button" onClick={() => onAction("ADD LOCAL DRAFT")}>Add draft</button></div>
+      <div className="hunt-list"><button type="button" onClick={() => onAction("ADD LOCAL DRAFT")}><span className="hunt-rank">+</span><div><b>No saved launches</b><small>Add a product, then verify its DropsTab context.</small><em>LOCAL</em></div></button></div>
+      <div className="hunt-footer"><ListPlus size={14} /> Public voting requires auth and a database</div>
     </div>
   );
 }
@@ -309,9 +294,9 @@ function HuntPreview({ onAction }: { onAction: (label: string) => void }) {
 function RadioPreview({ isPlaying, onToggleAudio }: { isPlaying: boolean; onToggleAudio: () => void }) {
   return (
     <div className="radio-card">
-      <div className="radio-live"><i /> DROPS RADIO · LIVE</div>
-      <div className="radio-cover"><div className="cover-orbit one" /><div className="cover-orbit two" /><Radio size={54} /><strong>Market in 5</strong><span>AI Morning Broadcast</span></div>
-      <div className="radio-now"><div><span>NOW PLAYING</span><strong>SOL leads as ETF odds jump</strong><small>Up next: today’s unlock map</small></div><button type="button" onClick={onToggleAudio} aria-label={isPlaying ? "Pause radio" : "Play radio"}>{isPlaying ? <Pause /> : <Play />}</button></div>
+      <div className="radio-live"><i /> BROWSER AUDIO PREVIEW</div>
+      <div className="radio-cover"><div className="cover-orbit one" /><div className="cover-orbit two" /><Radio size={54} /><strong>Market in 5</strong><span>Browser Audio Brief</span></div>
+      <div className="radio-now"><div><span>{isPlaying ? "BROWSER SPEECH" : "READY"}</span><strong>Current market snapshot rundown</strong><small>Unlocks appear only after DropsTab connection</small></div><button type="button" onClick={onToggleAudio} aria-label={isPlaying ? "Pause audio" : "Play audio"}>{isPlaying ? <Pause /> : <Play />}</button></div>
       <div className={`waveform ${isPlaying ? "playing" : ""}`}>{Array.from({ length: 22 }).map((_, index) => <i key={index} style={{ height: `${12 + ((index * 17) % 27)}px` }} />)}</div>
       <div className="radio-footer"><Volume2 size={15} /> Generated from live DropsTab intelligence</div>
     </div>
@@ -324,7 +309,7 @@ function SiriPreview({ isPlaying, onToggleAudio, onAction }: { isPlaying: boolea
       <div className="siri-orb"><span /><span /><span /><AudioLines size={48} /></div>
       <span className="siri-label">ASK DROPS</span>
       <h3>“What moved my portfolio today?”</h3>
-      <div className="siri-answer"><Sparkles size={16} /><p>SOL contributed most of today’s gain. ETF odds rose 26¢, while your other assets stayed inside normal ranges.</p></div>
+      <div className="siri-answer"><Sparkles size={16} /><p>Add holdings or ask about an available market asset. No portfolio is assumed in this preview.</p></div>
       <div className="siri-suggestions"><button type="button" onClick={() => onAction("CREATE ALERT")}>Alert me on reversal</button><button type="button" onClick={() => onAction("OPEN DROPSTAB")}>Show the data</button></div>
       <button className={`mic-button ${isPlaying ? "listening" : ""}`} type="button" onClick={onToggleAudio}><Mic2 size={20} />{isPlaying ? "Listening…" : "Hold to ask"}</button>
     </div>
@@ -357,21 +342,21 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
   return (
     <section className="preview-column" aria-live="polite">
       <div className="preview-status-row">
-        <span className="preview-ready"><BadgeCheck size={17} /> {spec ? "AI build" : preset.shortTitle} · Preview updated</span>
+        <span className="preview-ready"><BadgeCheck size={17} /> {spec ? "Product plan" : preset.shortTitle} · Concept preview</span>
         <span className={`data-mode ${dataMode}`}><i /> {dataMode === "live" ? "Live DropsTab data" : "Sample data"}</span>
       </div>
       <div className={`preview-device ${surface}`} style={{ "--preview-accent": preset.accent, "--preview-tint": preset.tint } as React.CSSProperties}>
         <div className="preview-device-header">
-          {isTelegram && <button className="telegram-back" type="button" aria-label="Back"><ArrowLeft /></button>}
+          {isTelegram && <span className="telegram-back" aria-hidden="true"><ArrowLeft /></span>}
           <div className="preview-brand-mark"><Image src="https://dropstab.com/images/dropstab-logo-drop-default.svg" alt="" width={26} height={26} unoptimized /></div>
-          <div className="preview-profile"><strong>{visibleName}</strong><span>{isTelegram ? `${values.audience ?? "10,842"} subscribers · built with DropsTab` : isGame ? "Playable build · DropsTab live market adapter" : spec?.tagline ?? "Built with Drops Studio"}</span></div>
-          <button type="button" aria-label="Preview options"><span /><span /><span /></button>
+          <div className="preview-profile"><strong>{visibleName}</strong><span>{isTelegram ? "PREVIEW · NOT PUBLISHED · built with DropsTab" : isGame ? "Playable local build · market-data adapter" : spec?.tagline ?? "Built with Drops Studio"}</span></div>
+          <span className="preview-options" aria-hidden="true"><span /><span /><span /></span>
         </div>
         {!isTelegram && !isGame && spec && <div className="native-screen-tabs">{spec.blueprint.screens.slice(0, 4).map((screen, index) => <span className={index === 0 ? "active" : ""} key={screen}>{screen}</span>)}</div>}
         <div className="preview-stage">{content}</div>
-        {isTelegram && <div className="preview-reactions"><span><Flame size={15} />128</span><span><Star size={15} />64</span><span><UsersRound size={15} />23</span><button type="button" onClick={() => onAction("SHARE")}><ArrowRight size={16} /></button></div>}
+        {isTelegram && <div className="preview-reactions"><span><ShieldCheck size={15} /> Faithful layout preview</span><button type="button" onClick={() => onAction("CONNECT REAL CHANNEL")}><ArrowRight size={16} /></button></div>}
       </div>
-      <p className="preview-footnote"><ShieldCheck size={14} /> Preview changes live. No key or trade is executed without your approval.</p>
+      <p className="preview-footnote"><ShieldCheck size={14} /> Concept preview only. Real data, delivery and public state are labelled separately.</p>
     </section>
   );
 }

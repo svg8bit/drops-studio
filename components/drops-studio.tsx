@@ -101,15 +101,15 @@ const defaultModels: Partial<Record<ProviderId, string>> = {
 };
 
 const sampleMarket: MarketCoin[] = [
-  { symbol: "BTC", name: "Bitcoin", price: "$118,420", change: 4.21, marketCap: "$2.35T" },
-  { symbol: "ETH", name: "Ethereum", price: "$3,842", change: 2.84, marketCap: "$463B" },
-  { symbol: "SOL", name: "Solana", price: "$192.40", change: 7.18, marketCap: "$91.7B" },
+  { symbol: "BTC", name: "Bitcoin", price: "—", change: null, marketCap: "—" },
+  { symbol: "ETH", name: "Ethereum", price: "—", change: null, marketCap: "—" },
+  { symbol: "SOL", name: "Solana", price: "—", change: null, marketCap: "—" },
 ];
 
 const defaultPrediction: PredictionEvent = {
-  title: "Solana ETF approved in 2026?",
-  probability: 68,
-  change: 26,
+  title: "Waiting for a live crypto prediction market",
+  probability: null,
+  change: null,
 };
 
 const iconMap = {
@@ -692,9 +692,15 @@ export function DropsStudio() {
       setIsPlaying(false);
       return;
     }
+    const available = market.filter((coin) => coin.price !== "—");
+    const marketCopy = available.length
+      ? available.slice(0, 3).map((coin) => coin.change === null
+        ? `${coin.name} percentage change is unavailable`
+        : `${coin.name} is ${coin.change >= 0 ? "up" : "down"} ${Math.abs(coin.change).toFixed(2)} percent`).join(". ")
+      : "The live market adapter has not returned data yet";
     const copy = selectedPreset.preview === "siri"
-      ? "Solana contributed most of today's portfolio gain. ETF odds rose while your other assets stayed inside normal ranges."
-      : "Drops Radio. Solana leads the market as ETF probability rises. Bitcoin is up four point two percent. Next, your token unlock map.";
+      ? `No portfolio is connected. Current market context: ${marketCopy}.`
+      : `Drops browser audio briefing. ${marketCopy}. Unlock and funding stories require a connected DropsTab endpoint.`;
     if ("speechSynthesis" in window) {
       const utterance = new SpeechSynthesisUtterance(copy);
       utterance.rate = 1.02;

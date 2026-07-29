@@ -57,6 +57,12 @@ function finite(value: unknown, fallback: number, min: number, max: number): num
   return Number.isFinite(candidate) ? Math.min(max, Math.max(min, candidate)) : fallback;
 }
 
+function optionalFinite(value: unknown, min: number, max: number): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const candidate = Number(value);
+  return Number.isFinite(candidate) ? Math.min(max, Math.max(min, candidate)) : null;
+}
+
 function backgroundImage(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 760_000) return undefined;
   if (/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/i.test(value)) return value;
@@ -80,7 +86,7 @@ function market(value: unknown): ProjectMarketCoin[] {
       symbol,
       name: cleanText(item.name, symbol, 40),
       price: cleanText(item.price, "—", 24),
-      change: finite(item.change, 0, -99.99, 999.99),
+      change: optionalFinite(item.change, -99.99, 999.99),
       marketCap: cleanText(item.marketCap, "—", 24),
     };
   }).filter((item): item is ProjectMarketCoin => Boolean(item));
@@ -89,10 +95,12 @@ function market(value: unknown): ProjectMarketCoin[] {
 function prediction(value: unknown): ProjectPrediction {
   const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const url = typeof item.url === "string" && /^https:\/\//i.test(item.url) ? item.url.slice(0, 500) : undefined;
+  const probability = optionalFinite(item.probability, 0, 100);
+  const probabilityChange = optionalFinite(item.change, -100, 100);
   return {
-    title: cleanText(item.title, "Will crypto momentum continue this week?", 180),
-    probability: Math.round(finite(item.probability, 58, 0, 100)),
-    change: Math.round(finite(item.change, 6, -100, 100)),
+    title: cleanText(item.title, "Waiting for a live crypto prediction market", 180),
+    probability: probability === null ? null : Math.round(probability),
+    change: probabilityChange === null ? null : Math.round(probabilityChange),
     ...(url ? { url } : {}),
   };
 }
@@ -244,9 +252,9 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
     blueprint: blueprint(input.blueprint, presetId, safePrompt),
     ...(presetId === "crypto-game" ? { gameDirection: gameDirection(input.gameDirection) } : {}),
     market: safeMarket.length ? safeMarket : [
-      { symbol: "BTC", name: "Bitcoin", price: "$118,420", change: 4.21, marketCap: "$2.35T" },
-      { symbol: "ETH", name: "Ethereum", price: "$3,842", change: 2.84, marketCap: "$463B" },
-      { symbol: "SOL", name: "Solana", price: "$192.40", change: 7.18, marketCap: "$91.7B" },
+      { symbol: "BTC", name: "Bitcoin", price: "—", change: null, marketCap: "—" },
+      { symbol: "ETH", name: "Ethereum", price: "—", change: null, marketCap: "—" },
+      { symbol: "SOL", name: "Solana", price: "—", change: null, marketCap: "—" },
     ],
     prediction: prediction(input.prediction),
     dataEndpoint,

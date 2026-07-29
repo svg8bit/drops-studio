@@ -33,6 +33,7 @@ test("creates a runnable, host-ready ZIP with source, safeguards and game assets
   for (const expected of [
     ".github/workflows/pages.yml",
     "README.md",
+    "api/telegram/verify.mjs",
     "assets/market-catcher-retro.png",
     "drops.config.json",
     "index.html",
@@ -53,6 +54,9 @@ test("creates a runnable, host-ready ZIP with source, safeguards and game assets
   });
   assert.equal(manifest.actions.automaticExecution, false);
   assert.equal(manifest.ai.keyIncluded, false);
+  assert.match(strFromU8(files["api/telegram/verify.mjs"]), /getChatMember/);
+  assert.match(strFromU8(files["api/telegram/verify.mjs"]), /sendMessage/);
+  assert.match(strFromU8(files["README.md"]), /does not claim that an external Telegram channel/);
   assert.match(strFromU8(files["tests/smoke.mjs"]), /data-project-kind="crypto-game"/);
   assert.doesNotMatch(strFromU8(files["index.html"]), /sk-(?:proj-|ant-|or-v1-)/i);
 });

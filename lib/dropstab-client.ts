@@ -5,7 +5,7 @@ export interface DropsTabMarketCoin {
   symbol: string;
   name: string;
   price: string;
-  change: number;
+  change: number | null;
   marketCap: string;
 }
 
@@ -18,23 +18,24 @@ function compact(value: number): string {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
 }
 
-function money(value: number): string {
-  if (!Number.isFinite(value)) return "—";
+function money(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
   if (value >= 1_000) return `$${compact(value)}`;
   if (value >= 1) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   return `$${value.toLocaleString("en-US", { maximumSignificantDigits: 4 })}`;
 }
 
-function firstNumber(...values: unknown[]): number {
+function firstNumber(...values: unknown[]): number | null {
   for (const value of values) {
     if (value === null || value === undefined) continue;
     const candidate = typeof value === "object" && "USD" in value
       ? (value as { USD?: unknown }).USD
       : value;
+    if (candidate === null || candidate === undefined || (typeof candidate === "string" && !candidate.trim())) continue;
     const numeric = Number(candidate);
     if (Number.isFinite(numeric)) return numeric;
   }
-  return 0;
+  return null;
 }
 
 export function normalizeDropsTabCoins(body: unknown, limit = 10): DropsTabMarketCoin[] {

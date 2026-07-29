@@ -12,6 +12,17 @@ export type ProjectDesignKit =
 
 export type ProjectDensity = "compact" | "comfortable" | "cinematic";
 export type ProjectMotion = "reduced" | "smooth" | "expressive";
+export type ProjectDeliveryMode = "web-native" | "connection-required" | "research-only";
+export type ProjectLaunchStatus = "web-ready" | "external-setup-required" | "research-only";
+
+export interface ProjectRealityContract {
+  deliveryMode: ProjectDeliveryMode;
+  externalSetupRequired: boolean;
+  deliverable: string;
+  worksNow: string[];
+  requires: string[];
+  forbiddenClaims: string[];
+}
 
 export interface ProjectBlockConfig {
   visible: boolean;
@@ -93,14 +104,14 @@ export interface ProjectMarketCoin {
   symbol: string;
   name: string;
   price: string;
-  change: number;
+  change: number | null;
   marketCap: string;
 }
 
 export interface ProjectPrediction {
   title: string;
-  probability: number;
-  change: number;
+  probability: number | null;
+  change: number | null;
   url?: string;
 }
 
@@ -168,6 +179,9 @@ export interface ProjectQualityCheck {
 export interface ProjectQualityReport {
   score: number;
   readyToPublish: boolean;
+  launchStatus: ProjectLaunchStatus;
+  deliveryMode: ProjectDeliveryMode;
+  externalSetupRequired: boolean;
   checkedAt: string;
   checks: ProjectQualityCheck[];
   criticalFailures: string[];
