@@ -168,11 +168,11 @@ export interface ContextIndexSnapshot {
 
 export interface ContextIndexBackend {
   upsertChunks(chunks: StoredContextChunk[]): Promise<void>;
-  deleteSource(sourceUri: string, sourceVersion?: string, scope?: ContextScope): Promise<void>;
+  deleteSource(sourceUri: string, sourceVersion: string | undefined, scope: ContextScope): Promise<void>;
   lexicalSearch(query: LexicalQuery): Promise<ContextCandidate[]>;
   vectorSearch(query: VectorQuery): Promise<ContextCandidate[]>;
-  getChunks(chunkIds: string[], scope?: ContextScope): Promise<ContextChunk[]>;
-  getNeighbors(chunkIds: string[], radius: number, scope?: ContextScope): Promise<ContextChunk[]>;
+  getChunks(chunkIds: string[], scope: ContextScope): Promise<ContextChunk[]>;
+  getNeighbors(chunkIds: string[], radius: number, scope: ContextScope): Promise<ContextChunk[]>;
   persistSnapshot(): Promise<ContextIndexSnapshot>;
   loadSnapshot(snapshot: ContextIndexSnapshot): Promise<void>;
   getIndexVersion(): number;

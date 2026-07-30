@@ -63,8 +63,21 @@ export class ContextCompiler {
       revision: input.revision,
       includeWorkspaceSources: true,
     };
-    const mandatoryChunks = input.mandatoryChunkIds?.length ? await this.#backend.getChunks(input.mandatoryChunkIds, scope) : [];
-    const exactChunks = input.exactChunkIds?.length ? await this.#backend.getChunks(input.exactChunkIds, scope) : [];
+    const mandatoryIds = [...new Set(input.mandatoryChunkIds ?? [])];
+    const requestedExactIds = [...new Set(input.exactChunkIds ?? [])];
+    const mandatoryChunks = mandatoryIds.length ? await this.#backend.getChunks(mandatoryIds, scope) : [];
+    const fetchedExactChunks = requestedExactIds.length ? await this.#backend.getChunks(requestedExactIds, scope) : [];
+    const availableMandatoryIds = new Set(mandatoryChunks.map((chunk) => chunk.chunkId));
+    const availableExactIds = new Set(fetchedExactChunks.map((chunk) => chunk.chunkId));
+    const missingIds = [
+      ...mandatoryIds.filter((chunkId) => !availableMandatoryIds.has(chunkId)),
+      ...requestedExactIds.filter((chunkId) => !availableExactIds.has(chunkId)),
+    ];
+    if (missingIds.length) {
+      throw new Error(`Required context chunks are unavailable in the requested scope: ${[...new Set(missingIds)].sort(compareContextText).join(", ")}.`);
+    }
+    const mandatoryIdSet = new Set(mandatoryIds);
+    const exactChunks = fetchedExactChunks.filter((chunk) => !mandatoryIdSet.has(chunk.chunkId));
     const omitted: CompiledContextPackage["omitted"] = [];
     const mandatoryPolicies = mandatoryChunks
       .filter((chunk) => {
@@ -92,7 +105,7 @@ export class ContextCompiler {
       embeddingProvider: this.#embeddingProvider,
       reranker: this.#reranker,
       policy: this.#retrievalPolicy,
-      exactChunkIds: input.exactChunkIds,
+      exactChunkIds: requestedExactIds.filter((chunkId) => !mandatoryIdSet.has(chunkId)),
     });
     const projectMemory: ContextItem[] = [];
     const retrievedProjectContext: ContextItem[] = [];

@@ -34,6 +34,42 @@ function sourceTypeAllowed(chunk: ContextChunk, sourceTypes: ContextChunk["sourc
   return !sourceTypes?.length || sourceTypes.includes(chunk.sourceType);
 }
 
+function validateStoredChunk(chunk: StoredContextChunk): StoredContextChunk {
+  if (!chunk || typeof chunk !== "object" || !chunk.tenantId || !chunk.workspaceId || !chunk.chunkId || !chunk.sourceUri || !chunk.contentHash) {
+    throw new Error("Context chunk is missing required identity metadata.");
+  }
+  if (!Array.isArray(chunk.lexicalTerms) || !chunk.lexicalTerms.every((term) => typeof term === "string")) {
+    throw new Error(`Context chunk ${chunk.chunkId} has invalid lexical terms.`);
+  }
+  if (!Array.isArray(chunk.neighborChunkIds) || !chunk.neighborChunkIds.every((chunkId) => typeof chunkId === "string")) {
+    throw new Error(`Context chunk ${chunk.chunkId} has invalid neighbor metadata.`);
+  }
+  if (!Array.isArray(chunk.injectionFlags) || typeof chunk.content !== "string") {
+    throw new Error(`Context chunk ${chunk.chunkId} has invalid content metadata.`);
+  }
+  if ((chunk.sensitivity as string) === "secret-like" || (chunk.sensitivity as string) === "prohibited") {
+    throw new Error(`Context chunk ${chunk.chunkId} has a non-indexable sensitivity.`);
+  }
+  const redacted = redactContextContent(chunk.content);
+  if (redacted.content !== chunk.content) throw new Error(`Context chunk ${chunk.chunkId} contains unredacted secret material.`);
+  if (chunk.embedding && (chunk.embedding.length > MAX_VECTOR_DIMENSIONS || chunk.embedding.some((value) => !Number.isFinite(value)))) {
+    throw new Error(`Context chunk ${chunk.chunkId} has an invalid embedding.`);
+  }
+  return structuredClone(chunk);
+}
+
+function buildInvertedIndex(chunks: Map<string, StoredContextChunk>): Map<string, Set<string>> {
+  const inverted = new Map<string, Set<string>>();
+  for (const chunk of chunks.values()) {
+    for (const term of chunk.lexicalTerms) {
+      const ids = inverted.get(term) ?? new Set<string>();
+      ids.add(chunk.chunkId);
+      inverted.set(term, ids);
+    }
+  }
+  return inverted;
+}
+
 export class InProcessHybridIndexBackend implements ContextIndexBackend {
   readonly #chunks = new Map<string, StoredContextChunk>();
   readonly #inverted = new Map<string, Set<string>>();
@@ -44,28 +80,27 @@ export class InProcessHybridIndexBackend implements ContextIndexBackend {
   }
 
   async upsertChunks(chunks: StoredContextChunk[]): Promise<void> {
-    if (this.#chunks.size + chunks.filter((chunk) => !this.#chunks.has(chunk.chunkId)).length > MAX_INDEX_CHUNKS) {
+    const copies = chunks.map(validateStoredChunk);
+    const batchIds = new Set<string>();
+    for (const chunk of copies) {
+      if (batchIds.has(chunk.chunkId)) throw new Error(`Context upsert contains duplicate chunk ID ${chunk.chunkId}.`);
+      batchIds.add(chunk.chunkId);
+    }
+    const newChunkCount = [...batchIds].filter((chunkId) => !this.#chunks.has(chunkId)).length;
+    if (this.#chunks.size + newChunkCount > MAX_INDEX_CHUNKS) {
       throw new Error(`Context index exceeds ${MAX_INDEX_CHUNKS} chunks.`);
     }
-    for (const chunk of chunks) {
-      if (!chunk.tenantId || !chunk.workspaceId || !chunk.chunkId || !chunk.sourceUri || !chunk.contentHash) {
-        throw new Error("Context chunk is missing required identity metadata.");
-      }
-      const redacted = redactContextContent(chunk.content);
-      if (redacted.content !== chunk.content) throw new Error(`Context chunk ${chunk.chunkId} contains unredacted secret material.`);
-      if (chunk.embedding && (chunk.embedding.length > MAX_VECTOR_DIMENSIONS || chunk.embedding.some((value) => !Number.isFinite(value)))) {
-        throw new Error(`Context chunk ${chunk.chunkId} has an invalid embedding.`);
-      }
-      const prior = this.#chunks.get(chunk.chunkId);
-      if (prior) this.#removeTerms(prior);
-      const copy = structuredClone(chunk);
-      this.#chunks.set(copy.chunkId, copy);
-      this.#addTerms(copy);
-    }
-    if (chunks.length) this.#indexVersion += 1;
+    const stagedChunks = new Map(this.#chunks);
+    for (const copy of copies) stagedChunks.set(copy.chunkId, copy);
+    const stagedInverted = buildInvertedIndex(stagedChunks);
+    this.#chunks.clear();
+    for (const [chunkId, chunk] of stagedChunks) this.#chunks.set(chunkId, chunk);
+    this.#inverted.clear();
+    for (const [term, ids] of stagedInverted) this.#inverted.set(term, ids);
+    if (copies.length) this.#indexVersion += 1;
   }
 
-  async deleteSource(sourceUri: string, sourceVersion?: string, scope?: ContextScope): Promise<void> {
+  async deleteSource(sourceUri: string, sourceVersion: string | undefined, scope: ContextScope): Promise<void> {
     const boundedScope = requireScope(scope);
     let changed = false;
     for (const [chunkId, chunk] of this.#chunks) {
@@ -118,7 +153,7 @@ export class InProcessHybridIndexBackend implements ContextIndexBackend {
     return candidates.sort(compareCandidates).slice(0, query.limit);
   }
 
-  async getChunks(chunkIds: string[], scope?: ContextScope): Promise<ContextChunk[]> {
+  async getChunks(chunkIds: string[], scope: ContextScope): Promise<ContextChunk[]> {
     const boundedScope = requireScope(scope);
     return [...new Set(chunkIds)]
       .map((chunkId) => this.#chunks.get(chunkId))
@@ -126,7 +161,7 @@ export class InProcessHybridIndexBackend implements ContextIndexBackend {
       .map(publicChunk);
   }
 
-  async getNeighbors(chunkIds: string[], radius: number, scope?: ContextScope): Promise<ContextChunk[]> {
+  async getNeighbors(chunkIds: string[], radius: number, scope: ContextScope): Promise<ContextChunk[]> {
     const boundedScope = requireScope(scope);
     if (!Number.isSafeInteger(radius) || radius < 0 || radius > 3) throw new Error("Neighbor radius must be between 0 and 3.");
     const seeds = await this.getChunks(chunkIds, boundedScope);
@@ -147,26 +182,29 @@ export class InProcessHybridIndexBackend implements ContextIndexBackend {
   }
 
   async persistScopeSnapshot(scope: ContextScope): Promise<ContextIndexSnapshot> {
-    const chunks = [...this.#chunks.values()].filter((chunk) => sameContextScope(chunk, scope)).sort((left, right) => compareContextText(left.chunkId, right.chunkId)).map((chunk) => structuredClone(chunk));
+    const boundedScope = requireScope(scope);
+    const chunks = [...this.#chunks.values()].filter((chunk) => sameContextScope(chunk, boundedScope)).sort((left, right) => compareContextText(left.chunkId, right.chunkId)).map((chunk) => structuredClone(chunk));
     const createdAt = chunks.reduce((latest, chunk) => chunk.updatedAt > latest ? chunk.updatedAt : latest, "1970-01-01T00:00:00.000Z");
     return { schemaVersion: 1, indexVersion: this.#indexVersion, chunks, createdAt };
   }
 
   async loadSnapshot(snapshot: ContextIndexSnapshot): Promise<void> {
-    if (snapshot.schemaVersion !== 1 || !Number.isSafeInteger(snapshot.indexVersion) || !Array.isArray(snapshot.chunks)) throw new Error("Context index snapshot is invalid.");
-    this.#chunks.clear();
-    this.#inverted.clear();
-    this.#indexVersion = 0;
-    await this.upsertChunks(snapshot.chunks);
-    this.#indexVersion = snapshot.indexVersion;
-  }
-
-  #addTerms(chunk: StoredContextChunk): void {
-    for (const term of chunk.lexicalTerms) {
-      const ids = this.#inverted.get(term) ?? new Set<string>();
-      ids.add(chunk.chunkId);
-      this.#inverted.set(term, ids);
+    if (!snapshot || snapshot.schemaVersion !== 1 || !Number.isSafeInteger(snapshot.indexVersion) || snapshot.indexVersion < 0 || !Array.isArray(snapshot.chunks)) {
+      throw new Error("Context index snapshot is invalid.");
     }
+    if (snapshot.chunks.length > MAX_INDEX_CHUNKS) throw new Error(`Context index exceeds ${MAX_INDEX_CHUNKS} chunks.`);
+    const stagedChunks = new Map<string, StoredContextChunk>();
+    for (const rawChunk of snapshot.chunks) {
+      const chunk = validateStoredChunk(rawChunk);
+      if (stagedChunks.has(chunk.chunkId)) throw new Error(`Context snapshot contains duplicate chunk ID ${chunk.chunkId}.`);
+      stagedChunks.set(chunk.chunkId, chunk);
+    }
+    const stagedInverted = buildInvertedIndex(stagedChunks);
+    this.#chunks.clear();
+    for (const [chunkId, chunk] of stagedChunks) this.#chunks.set(chunkId, chunk);
+    this.#inverted.clear();
+    for (const [term, ids] of stagedInverted) this.#inverted.set(term, ids);
+    this.#indexVersion = snapshot.indexVersion;
   }
 
   #removeTerms(chunk: StoredContextChunk): void {

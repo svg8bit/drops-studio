@@ -119,6 +119,7 @@ export async function retrieveContext(input: HybridRetrievalInput): Promise<Retr
     else if (candidate.chunk.trust === "project-authoritative") candidate.score += 0.025;
     if (candidate.chunk.revision === input.revision) candidate.score += 0.02;
   }
+  const retrievedCandidateCount = fused.size;
   const exactChunks = input.exactChunkIds?.length ? await input.backend.getChunks(input.exactChunkIds, scope) : [];
   for (const chunk of exactChunks) fused.set(chunk.chunkId, { chunk, score: 10, rankSources: ["exact"] });
   let candidates = [...fused.values()].sort((left, right) => right.score - left.score || compareContextText(left.chunk.chunkId, right.chunk.chunkId)).slice(0, policy.fusedCandidates);
@@ -136,7 +137,7 @@ export async function retrieveContext(input: HybridRetrievalInput): Promise<Retr
   }
   selected = selected.sort((left, right) => Number(right.rankSources.includes("exact")) - Number(left.rankSources.includes("exact")) || right.score - left.score || compareContextText(left.chunk.chunkId, right.chunk.chunkId));
   return {
-    mode: input.embeddingProvider ? "hybrid" : exactChunks.length && !fused.size ? "exact-files-only" : "lexical-only",
+    mode: exactChunks.length && retrievedCandidateCount === 0 ? "exact-files-only" : input.embeddingProvider ? "hybrid" : "lexical-only",
     queries,
     candidates,
     selected,

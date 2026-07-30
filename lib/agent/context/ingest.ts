@@ -2,7 +2,7 @@ import { chunkContextSource } from "./chunkers/index.ts";
 import { embedContextChunks } from "./embeddings.ts";
 import { contextRedactionVersion, redactContextContent } from "./redaction.ts";
 import type { ContextIndexBackend, ContextScope, ContextSource, EmbeddingProvider, StoredContextChunk } from "./types.ts";
-import { canonicalizeSourceUri, contextSha256, estimateContextTokens, lexicalTerms, normalizeContextText, stableContextJson } from "./utils.ts";
+import { boundedInteger, canonicalizeSourceUri, contextSha256, estimateContextTokens, isEnvironmentContextSource, lexicalTerms, normalizeContextText, stableContextJson } from "./utils.ts";
 
 export const CONTEXT_CHUNKER_VERSION = "context-chunker-v1";
 
@@ -16,22 +16,32 @@ export interface ContextIngestionResult {
   cacheHit: boolean;
 }
 
+export interface ContextIngestorOptions {
+  maxCacheEntries?: number;
+}
+
 export class ContextIngestor {
   readonly #backend: ContextIndexBackend;
   readonly #embeddingProvider?: EmbeddingProvider;
   readonly #cache = new Map<string, ContextIngestionResult>();
+  readonly #maxCacheEntries: number;
 
-  constructor(backend: ContextIndexBackend, embeddingProvider?: EmbeddingProvider) {
+  constructor(backend: ContextIndexBackend, embeddingProvider?: EmbeddingProvider, options: ContextIngestorOptions = {}) {
     this.#backend = backend;
     this.#embeddingProvider = embeddingProvider;
+    this.#maxCacheEntries = boundedInteger(options.maxCacheEntries ?? 1_024, 1, 10_000, "Context ingestion cache capacity");
+  }
+
+  get cacheSize(): number {
+    return this.#cache.size;
   }
 
   async ingest(source: ContextSource): Promise<ContextIngestionResult> {
-    if (source.sensitivity === "prohibited" || source.noIndex) {
+    if (source.sensitivity === "prohibited" || source.sensitivity === "secret-like" || source.noIndex) {
       return { sourceUri: source.sourceUri, sourceVersion: source.sourceVersion, sourceHash: "", chunkIds: [], redactionCount: 0, embedded: false, cacheHit: false };
     }
     const sourceUri = canonicalizeSourceUri(source.sourceUri);
-    const environmentFile = Boolean(source.path && /(?:^|\/)\.env(?:\.|$)/i.test(source.path));
+    const environmentFile = isEnvironmentContextSource(source.path, sourceUri);
     const redacted = redactContextContent(source.content, { environmentFile });
     const content = normalizeContextText(redacted.content);
     const sourceHash = await contextSha256(content);
@@ -46,7 +56,11 @@ export class ContextIngestor {
       embeddingVersion,
     }));
     const cached = this.#cache.get(cacheKey);
-    if (cached) return { ...cached, chunkIds: [...cached.chunkIds], cacheHit: true };
+    if (cached) {
+      this.#cache.delete(cacheKey);
+      this.#cache.set(cacheKey, cached);
+      return { ...cached, chunkIds: [...cached.chunkIds], cacheHit: true };
+    }
 
     const safeSource: ContextSource = { ...source, sourceUri, content };
     const drafts = chunkContextSource(safeSource);
@@ -120,6 +134,11 @@ export class ContextIngestor {
       cacheHit: false,
     };
     this.#cache.set(cacheKey, structuredClone(result));
+    while (this.#cache.size > this.#maxCacheEntries) {
+      const oldest = this.#cache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.#cache.delete(oldest);
+    }
     return result;
   }
 
@@ -130,9 +149,10 @@ export class ContextIngestor {
   }
 
   async invalidateSource(scope: ContextScope, sourceUri: string, sourceVersion?: string): Promise<void> {
-    await this.#backend.deleteSource(sourceUri, sourceVersion, scope);
+    const canonicalUri = canonicalizeSourceUri(sourceUri);
+    await this.#backend.deleteSource(canonicalUri, sourceVersion, scope);
     for (const [key, result] of this.#cache) {
-      if (result.sourceUri === sourceUri && (sourceVersion === undefined || result.sourceVersion === sourceVersion)) this.#cache.delete(key);
+      if (result.sourceUri === canonicalUri && (sourceVersion === undefined || result.sourceVersion === sourceVersion)) this.#cache.delete(key);
     }
   }
 }
