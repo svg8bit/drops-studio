@@ -59,6 +59,9 @@ export function evaluateQuickEditPatch(
   const allowed = new Set(input.allowedPaths);
   for (const file of bundle.files) {
     if (!SAFE_PATH.test(file.path) || !allowed.has(file.path)) reasons.push("OUT_OF_SCOPE_PATH");
+    if (file.operation === "rename" && !file.newPath) {
+      reasons.push("RENAME_TARGET_REQUIRED");
+    }
     if (file.newPath && (!SAFE_PATH.test(file.newPath) || !allowed.has(file.newPath))) {
       reasons.push("OUT_OF_SCOPE_PATH");
     }

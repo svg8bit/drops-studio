@@ -43,6 +43,10 @@ export interface VerificationReport {
     relevantPaths: string[];
   }>;
   userSummary: string;
+  advisoryEscalation: {
+    verdict: VerifierVerdict;
+    rationale: string;
+  } | null;
   verifierModel: string;
   verifierPromptVersion: string;
 }
@@ -125,13 +129,21 @@ export function verifyReleaseEvidence(
     verifierModel: string;
     verifierPromptVersion: string;
     advisoryVerdict?: VerifierVerdict;
+    advisoryRationale?: string;
   },
 ): VerificationReport {
   const deterministic = deterministicVerdict(evidence);
   const advisory = input.advisoryVerdict;
+  const advisoryRationale = input.advisoryRationale?.trim().slice(0, 800) ?? "";
+  const advisoryEscalation =
+    advisory &&
+      advisoryRationale &&
+      VERDICT_SEVERITY[advisory] > VERDICT_SEVERITY[deterministic.verdict]
+      ? { verdict: advisory, rationale: advisoryRationale }
+      : null;
   const verdict =
-    advisory && VERDICT_SEVERITY[advisory] > VERDICT_SEVERITY[deterministic.verdict]
-      ? advisory
+    advisoryEscalation
+      ? advisoryEscalation.verdict
       : deterministic.verdict;
   return {
     verdict,
@@ -147,7 +159,9 @@ export function verifyReleaseEvidence(
       task: `Resolve failed ${gate.name} gate.`,
       relevantPaths: [],
     })),
-    userSummary:
+    userSummary: advisoryEscalation
+      ? `Independent verifier escalated the deterministic result: ${advisoryEscalation.rationale}`
+      :
       verdict === "PASS"
         ? "All deterministic release and browser gates passed."
         : verdict === "PASS_WITH_SETUP_REQUIRED"
@@ -155,6 +169,7 @@ export function verifyReleaseEvidence(
           : verdict === "UNSAFE"
             ? "Release is unsafe because a security gate failed."
             : "Release remains blocked by deterministic evidence.",
+    advisoryEscalation,
     verifierModel: input.verifierModel,
     verifierPromptVersion: input.verifierPromptVersion,
   };

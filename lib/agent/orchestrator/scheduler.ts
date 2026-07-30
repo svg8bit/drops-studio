@@ -44,6 +44,8 @@ function abortError(reason: unknown): Error {
   return reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Agent run cancelled.");
 }
 
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 async function executeWithBoundary<T>(input: {
   task: AgentTask;
   runSignal?: AbortSignal;
@@ -53,9 +55,13 @@ async function executeWithBoundary<T>(input: {
   const cancel = () => controller.abort(input.runSignal?.reason ?? new Error("Agent run cancelled."));
   if (input.runSignal?.aborted) cancel();
   else input.runSignal?.addEventListener("abort", cancel, { once: true });
+  const requestedTimeout = input.task.limits.timeoutMs;
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.min(Math.max(1, requestedTimeout), MAX_TIMEOUT_MS)
+    : MAX_TIMEOUT_MS;
   const timeout = setTimeout(
     () => controller.abort(new Error(`Task ${input.task.taskId} exceeded ${input.task.limits.timeoutMs}ms.`)),
-    input.task.limits.timeoutMs,
+    timeoutMs,
   );
   try {
     return await Promise.race([

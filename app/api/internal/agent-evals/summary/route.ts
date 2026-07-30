@@ -5,6 +5,7 @@ import {
   authorizeAgentEvals,
   DefaultAgentEvalStore,
 } from "../../../../../lib/agent/evals/index.ts";
+import { createAgentV3PlatformEvidence } from "../../../../../lib/agent/evals/dashboard-evidence.ts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,9 +28,13 @@ export async function handleAgentEvalSummary(
   }
   try {
     const store = dependencies.store ?? new DefaultAgentEvalStore();
-    const [traces, reports] = await Promise.all([store.listTraces(100), store.listReports(20)]);
+    const [traces, reports, platform] = await Promise.all([
+      store.listTraces(100),
+      store.listReports(20),
+      createAgentV3PlatformEvidence({ env }),
+    ]);
     return NextResponse.json(
-      { summary: aggregateAgentEvals(traces, reports), storage: "private" },
+      { summary: aggregateAgentEvals(traces, reports), platform, storage: "private" },
       { headers: { "cache-control": "no-store" } },
     );
   } catch {

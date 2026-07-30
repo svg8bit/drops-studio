@@ -12,7 +12,16 @@ export function chunkMarkdownSource(source: ContextSource): ChunkDraft[] {
   const lines = source.content.split("\n");
   const headings: HeadingStart[] = [];
   const hierarchy: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | undefined;
   for (let index = 0; index < lines.length; index += 1) {
+    const fenceMatch = lines[index].match(/^\s{0,3}(`{3,}|~{3,})/u);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0] as "`" | "~";
+      if (!fence) fence = { marker, length: fenceMatch[1].length };
+      else if (fence.marker === marker && fenceMatch[1].length >= fence.length) fence = undefined;
+      continue;
+    }
+    if (fence) continue;
     const match = lines[index].match(/^(#{1,6})\s+(.+?)\s*#*\s*$/u);
     if (!match) continue;
     const level = match[1].length;

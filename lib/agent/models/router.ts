@@ -93,6 +93,24 @@ function inputCost(profile: ModelCapabilityProfile): number {
   return profile.cost.inputPerMillion ?? Number.POSITIVE_INFINITY;
 }
 
+const MIN_OUTPUT_BUDGET_TOKENS = 1_024;
+
+function outputBudgetForProfile(
+  profile: ModelCapabilityProfile,
+  requiredContext: number,
+): number {
+  const desired = Math.min(profile.maxOutputTokens ?? 8_000, 24_000);
+  if (profile.maxContextTokens === null) return desired;
+  return Math.min(desired, Math.max(0, profile.maxContextTokens - requiredContext));
+}
+
+function hasContextCapacity(
+  profile: ModelCapabilityProfile,
+  requiredContext: number,
+): boolean {
+  return outputBudgetForProfile(profile, requiredContext) >= MIN_OUTPUT_BUDGET_TOKENS;
+}
+
 function compareProfiles(
   left: ModelCapabilityProfile,
   right: ModelCapabilityProfile,
@@ -152,10 +170,7 @@ export function routeModel(
   let candidates = registry
     .listAuthorized(classification.role)
     .filter((profile) => supportsRole(profile, classification.role))
-    .filter(
-      (profile) =>
-        profile.maxContextTokens === null || profile.maxContextTokens >= requiredContext,
-    )
+    .filter((profile) => hasContextCapacity(profile, requiredContext))
     .filter((profile) => !request.task.needsVision || profile.supportsVision === true)
     .filter(
       (profile) =>
@@ -188,6 +203,20 @@ export function routeModel(
         true,
       );
     }
+    if (!hasContextCapacity(selected, requiredContext)) {
+      throw new ModelRoutingError(
+        "CAPABILITY_MISMATCH",
+        "The selected model cannot reserve both the required input context and bounded output.",
+        true,
+      );
+    }
+    if (request.task.needsVision && selected.supportsVision !== true) {
+      throw new ModelRoutingError(
+        "CAPABILITY_MISMATCH",
+        "The selected model does not have verified vision capability for this task.",
+        true,
+      );
+    }
     if (circuitBreaker?.isOpen(classification.role, request.selected)) {
       throw new ModelRoutingError(
         "SELECTED_MODEL_UNAVAILABLE",
@@ -199,6 +228,13 @@ export function routeModel(
     classification.reasons.push("SELECTED_MODEL_ONLY");
   }
 
+  if (!candidates.length) {
+    throw new ModelRoutingError(
+      "NO_AUTHORIZED_MODEL",
+      "No authorized model satisfies the required role capabilities and policy.",
+      true,
+    );
+  }
   if (request.maxInputCostPerMillion !== null && request.maxInputCostPerMillion !== undefined) {
     candidates = candidates.filter(
       (profile) =>
@@ -208,16 +244,17 @@ export function routeModel(
   }
   if (!candidates.length) {
     throw new ModelRoutingError(
-      request.maxInputCostPerMillion !== null &&
-        request.maxInputCostPerMillion !== undefined
-        ? "BUDGET_EXCEEDED"
-        : "NO_AUTHORIZED_MODEL",
-      "No authorized model satisfies the required role capabilities and policy.",
+      "BUDGET_EXCEEDED",
+      "Authorized models satisfy the required capabilities, but none fit the configured input-cost budget.",
       true,
     );
   }
   candidates.sort((left, right) => compareProfiles(left, right, request.mode));
   const selected = candidates[0];
+  const outputBudgetTokens = outputBudgetForProfile(selected, requiredContext);
+  const availableInputTokens = selected.maxContextTokens === null
+    ? Math.max(requiredContext, 16_000)
+    : selected.maxContextTokens - outputBudgetTokens;
   const fallbackChain = request.mode === "selected-only"
     ? []
     : candidates.slice(1, 4).map((profile) => ({
@@ -237,11 +274,8 @@ export function routeModel(
     provider: selected.provider,
     model: selected.model,
     fallbackChain,
-    contextBudgetTokens: Math.min(
-      selected.maxContextTokens ?? Math.max(requiredContext, 16_000),
-      Math.max(requiredContext, 16_000),
-    ),
-    outputBudgetTokens: Math.min(selected.maxOutputTokens ?? 8_000, 24_000),
+    contextBudgetTokens: Math.min(availableInputTokens, Math.max(requiredContext, 16_000)),
+    outputBudgetTokens,
     maxToolRounds: classification.role === "quick-edit" ? 4 : classification.role === "planner" ? 4 : 16,
     maxRepairRounds: 3,
     reasonCodes,

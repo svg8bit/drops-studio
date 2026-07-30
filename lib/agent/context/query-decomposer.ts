@@ -15,7 +15,7 @@ function addQuery(entries: Array<Omit<RetrievalQuery, "id">>, kind: RetrievalQue
 }
 
 export async function decomposeRetrievalQueries(task: string): Promise<RetrievalQuery[]> {
-  const boundedTask = redactContextContent(task.trim().slice(0, 12_000)).content;
+  const boundedTask = redactContextContent(task.trim()).content.slice(0, 12_000);
   if (!boundedTask) throw new Error("Context retrieval task cannot be empty.");
   const symbols = symbolsFromTask(boundedTask);
   const entries: Array<Omit<RetrievalQuery, "id">> = [];

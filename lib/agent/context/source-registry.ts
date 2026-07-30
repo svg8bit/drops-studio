@@ -1,6 +1,6 @@
 import { redactContextContent } from "./redaction.ts";
 import type { ContextScope, ContextSource } from "./types.ts";
-import { canonicalizeSourceUri, compareContextText, normalizeContextText, sameContextScope } from "./utils.ts";
+import { canonicalizeSourceUri, compareContextText, isEnvironmentContextSource, normalizeContextText, sameContextScope } from "./utils.ts";
 
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_SOURCES = 5_000;
@@ -30,7 +30,7 @@ function sanitizeSource(source: ContextSource): ContextSource | null {
   validateIdentifier(source.projectId, "Project ID");
   validateIdentifier(source.branch, "Branch");
   validateIdentifier(source.revision, "Revision");
-  if (source.sensitivity === "prohibited" || source.noIndex) return null;
+  if (source.sensitivity === "prohibited" || source.sensitivity === "secret-like" || source.noIndex) return null;
   const sourceUri = canonicalizeSourceUri(source.sourceUri);
   const path = source.path?.replace(/\\/g, "/").replace(/^\.\//, "");
   if (path && (path.includes("\0") || path.startsWith("/") || path.split("/").includes("..") || forbiddenPath.test(path))) {
@@ -39,7 +39,7 @@ function sanitizeSource(source: ContextSource): ContextSource | null {
   if (new TextEncoder().encode(source.content).byteLength > MAX_SOURCE_BYTES) {
     throw new Error(`Context source ${sourceUri} exceeds ${MAX_SOURCE_BYTES} bytes.`);
   }
-  const environmentFile = Boolean(path && /(?:^|\/)\.env(?:\.|$)/i.test(path));
+  const environmentFile = isEnvironmentContextSource(path, sourceUri);
   const redacted = redactContextContent(source.content, { environmentFile });
   return {
     ...source,

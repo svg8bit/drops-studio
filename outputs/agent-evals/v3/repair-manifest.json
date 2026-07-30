@@ -1,0 +1,47 @@
+{
+  "acceptedCount": 36,
+  "applicability": {
+    "browserEvidenceIds": 0,
+    "browserNotApplicableCount": 36,
+    "browserRequiredCount": 0,
+    "buildEvidenceIds": 0,
+    "buildNotApplicableCount": 36,
+    "buildRequiredCount": 0
+  },
+  "artifact": "drops-agent-v3-repair-manifest",
+  "datasetVersion": "verified-repairs-v3.0.0",
+  "evidenceScope": "synthetic-source-level-fixture-validation",
+  "failureClassCount": 12,
+  "failureClassDistribution": {
+    "bad-asset-path": 3,
+    "broken-api-route": 3,
+    "duplicate-dependency": 3,
+    "integration-response-shape": 3,
+    "invalid-import-export": 3,
+    "lucide-icon-name": 3,
+    "missing-dependency": 3,
+    "nextjs-client-boundary": 3,
+    "package-json-error": 3,
+    "relative-data-extension": 3,
+    "stale-patch-conflict": 3,
+    "typescript-mismatch": 3
+  },
+  "provenance": {
+    "automatedFixtureValidationCount": 36,
+    "licenseDistribution": {
+      "CC0-1.0": 36
+    },
+    "reviewedCount": 0,
+    "sourceDistribution": {
+      "synthetic": 36
+    }
+  },
+  "providerEvidence": {
+    "collected": false,
+    "reason": "The synthetic repair corpus contains no model or provider execution and therefore records no provider evidence."
+  },
+  "recordHash": "ff96539320816d460e6e0989dc35ca888794ead5bdde301cef472cfd2023133c",
+  "rejected": [],
+  "rejectedCount": 0,
+  "schemaVersion": 1
+}

@@ -1,6 +1,12 @@
 import { normalizeProjectV2Path } from "../../project-v2-path.ts";
 
 const SAFE_SCOPE_SEGMENT = /^[A-Za-z0-9@._+()[\]-]+$/;
+const MAX_SCOPE_BYTES = 240;
+const MAX_SCOPE_SEGMENTS = 64;
+
+function bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
 
 export function normalizeScopePattern(value: string): string {
   if (typeof value !== "string") throw new Error("File scope must be a string.");
@@ -9,6 +15,9 @@ export function normalizeScopePattern(value: string): string {
     throw new Error("File scope must be a relative POSIX pattern.");
   }
   const segments = pattern.split("/");
+  if (bytes(pattern) > MAX_SCOPE_BYTES || segments.length > MAX_SCOPE_SEGMENTS) {
+    throw new Error("File scope is too long or contains too many segments.");
+  }
   if (
     segments.some(
       (segment) =>
@@ -23,19 +32,28 @@ export function normalizeScopePattern(value: string): string {
   return segments.join("/");
 }
 
-function matchSegments(pattern: string[], path: string[], patternIndex = 0, pathIndex = 0): boolean {
-  if (patternIndex === pattern.length) return pathIndex === path.length;
-  const segment = pattern[patternIndex];
-  if (segment === "**") {
-    if (patternIndex === pattern.length - 1) return true;
-    for (let index = pathIndex; index <= path.length; index += 1) {
-      if (matchSegments(pattern, path, patternIndex + 1, index)) return true;
+function matchSegments(pattern: readonly string[], path: readonly string[]): boolean {
+  const memo = new Map<string, boolean>();
+  const visit = (patternIndex: number, pathIndex: number): boolean => {
+    const key = `${patternIndex}:${pathIndex}`;
+    const known = memo.get(key);
+    if (known !== undefined) return known;
+    if (patternIndex === pattern.length) {
+      const result = pathIndex === path.length;
+      memo.set(key, result);
+      return result;
     }
-    return false;
-  }
-  if (pathIndex >= path.length) return false;
-  if (segment !== "*" && segment !== path[pathIndex]) return false;
-  return matchSegments(pattern, path, patternIndex + 1, pathIndex + 1);
+    const segment = pattern[patternIndex];
+    const result = segment === "**"
+      ? visit(patternIndex + 1, pathIndex) ||
+        (pathIndex < path.length && visit(patternIndex, pathIndex + 1))
+      : pathIndex < path.length &&
+        (segment === "*" || segment === path[pathIndex]) &&
+        visit(patternIndex + 1, pathIndex + 1);
+    memo.set(key, result);
+    return result;
+  };
+  return visit(0, 0);
 }
 
 export function scopeMatchesPath(pattern: string, value: string): boolean {
@@ -44,29 +62,46 @@ export function scopeMatchesPath(pattern: string, value: string): boolean {
   return matchSegments(safePattern.split("/"), path.split("/"));
 }
 
-function staticPrefix(pattern: string): string[] {
-  const segments = normalizeScopePattern(pattern).split("/");
-  const wildcard = segments.findIndex((segment) => segment === "*" || segment === "**");
-  return wildcard < 0 ? segments : segments.slice(0, wildcard);
+function segmentsCanMatch(left: string, right: string): boolean {
+  return left === "*" || left === "**" || right === "*" || right === "**" || left === right;
 }
 
-function prefixCompatible(left: string[], right: string[]): boolean {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    if (left[index] !== right[index]) return false;
+function patternLanguagesIntersect(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  const queue: Array<readonly [number, number]> = [[0, 0]];
+  const visited = new Set<string>();
+  while (queue.length) {
+    const [leftIndex, rightIndex] = queue.shift()!;
+    const key = `${leftIndex}:${rightIndex}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    if (leftIndex === left.length && rightIndex === right.length) return true;
+
+    const leftSegment = left[leftIndex];
+    const rightSegment = right[rightIndex];
+    if (leftSegment === "**") queue.push([leftIndex + 1, rightIndex]);
+    if (rightSegment === "**") queue.push([leftIndex, rightIndex + 1]);
+    if (
+      leftSegment !== undefined &&
+      rightSegment !== undefined &&
+      segmentsCanMatch(leftSegment, rightSegment)
+    ) {
+      const nextLeft = leftSegment === "**" ? leftIndex : leftIndex + 1;
+      const nextRight = rightSegment === "**" ? rightIndex : rightIndex + 1;
+      if (nextLeft !== leftIndex || nextRight !== rightIndex) {
+        queue.push([nextLeft, nextRight]);
+      }
+    }
   }
-  return true;
+  return false;
 }
 
 export function scopePatternsOverlap(left: string, right: string): boolean {
-  const a = normalizeScopePattern(left);
-  const b = normalizeScopePattern(right);
-  const aWildcard = a.includes("*");
-  const bWildcard = b.includes("*");
-  if (!aWildcard && !bWildcard) return a === b;
-  if (!aWildcard) return scopeMatchesPath(b, a);
-  if (!bWildcard) return scopeMatchesPath(a, b);
-  return prefixCompatible(staticPrefix(a), staticPrefix(b));
+  const a = normalizeScopePattern(left).split("/");
+  const b = normalizeScopePattern(right).split("/");
+  return patternLanguagesIntersect(a, b);
 }
 
 export function scopesOverlap(left: readonly string[], right: readonly string[]): boolean {

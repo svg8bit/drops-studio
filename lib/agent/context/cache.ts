@@ -44,10 +44,21 @@ interface CacheEntry<T> {
 
 export class ContextCache<T> {
   readonly #entries = new Map<string, CacheEntry<T>>();
+  readonly #maxEntries: number;
+
+  constructor(maxEntries = 1_024) {
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 10_000) {
+      throw new Error("Context cache capacity must be an integer between 1 and 10000.");
+    }
+    this.#maxEntries = maxEntries;
+  }
 
   get(key: string): T | null {
     const entry = this.#entries.get(key);
-    return entry ? structuredClone(entry.value) : null;
+    if (!entry) return null;
+    this.#entries.delete(key);
+    this.#entries.set(key, entry);
+    return structuredClone(entry.value);
   }
 
   set(key: string, value: T, tags: string[]): void {
@@ -55,7 +66,13 @@ export class ContextCache<T> {
     if (redactContextContent(serialized).content !== serialized) {
       throw new Error("Secret-bearing context payloads cannot be cached.");
     }
+    this.#entries.delete(key);
     this.#entries.set(key, { value: structuredClone(value), tags: new Set(tags) });
+    while (this.#entries.size > this.#maxEntries) {
+      const oldest = this.#entries.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.#entries.delete(oldest);
+    }
   }
 
   invalidateTags(tags: string[]): number {

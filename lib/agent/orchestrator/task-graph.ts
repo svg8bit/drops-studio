@@ -6,6 +6,14 @@ import type { AgentTask } from "./types.ts";
 const idSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const stringList = z.array(z.string().min(1).max(240)).max(64);
+const integrationScopeList = z
+  .array(
+    z.string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "Invalid integration scope."),
+  )
+  .max(64);
 
 export const agentTaskSchema = z
   .object({
@@ -21,7 +29,7 @@ export const agentTaskSchema = z
     readScopes: stringList,
     writeScopes: stringList,
     protectedScopes: stringList,
-    integrationScopes: stringList,
+    integrationScopes: integrationScopeList,
     contextQueryIds: z.array(idSchema).max(64),
     selectedSkills: z.array(z.string().min(1).max(128)).max(16),
     modelRouteId: idSchema,
@@ -151,12 +159,16 @@ export function readyTasks(
   tasks: readonly AgentTask[],
   statuses: ReadonlyMap<string, AgentTask["status"]>,
 ): AgentTask[] {
+  const taskById = new Map(tasks.map((task) => [task.taskId, task]));
   return tasks
     .filter((task) => {
       const status = statuses.get(task.taskId) ?? task.status;
       return (
         (status === "queued" || status === "ready" || status === "waiting") &&
-        task.dependencies.every((dependency) => statuses.get(dependency) === "merged")
+        task.dependencies.every(
+          (dependency) =>
+            (statuses.get(dependency) ?? taskById.get(dependency)?.status) === "merged",
+        )
       );
     })
     .sort(taskCompare);

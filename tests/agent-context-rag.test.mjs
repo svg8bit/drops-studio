@@ -20,9 +20,12 @@ const {
   InProcessHybridIndexBackend,
   contextCacheTags,
   contextPackageCacheKey,
+  canonicalizeSourceUri,
+  chunkContextSource,
   decomposeRetrievalQueries,
   retrievalCacheKey,
   retrieveContext,
+  stableContextJson,
 } = await import("../lib/agent/context/index.ts");
 
 const NOW = "2026-07-30T20:00:00.000Z";
@@ -416,4 +419,213 @@ test("compileWithTrace emits privacy-safe retrieval and budget evidence", async 
   assert.ok(trace.candidateCount >= 1);
   assert.equal("content" in trace.selected[0], false);
   assert.ok(trace.estimatedTokens <= trace.tokenBudget - 250);
+});
+
+test("stable context serialization rejects unsupported values and source URIs are canonical and credential-safe", () => {
+  assert.equal(stableContextJson({ z: 1, a: [true, null] }), '{"a":[true,null],"z":1}');
+  assert.throws(() => stableContextJson(undefined), /unsupported/i);
+  assert.throws(() => stableContextJson(Number.NaN), /finite/i);
+  assert.throws(() => stableContextJson(new Date(NOW)), /plain objects/i);
+  assert.throws(() => stableContextJson(1n), /unsupported/i);
+  const cyclic = {};
+  cyclic.self = cyclic;
+  assert.throws(() => stableContextJson(cyclic), /cyclic/i);
+
+  assert.equal(
+    canonicalizeSourceUri("https://user:password@example.com/a/../b?z=2&monkey=kept&token=removed&a=1#fragment"),
+    "https://example.com/b?a=1&monkey=kept&z=2",
+  );
+  assert.equal(canonicalizeSourceUri("./docs/./agent/../rules.md"), "docs/rules.md");
+  assert.throws(() => canonicalizeSourceUri("../../escape.md"), /traversal/i);
+});
+
+test("secret-like sources are never indexed and untrusted external chunks require an explicit trust grant", async () => {
+  const backend = new InProcessHybridIndexBackend();
+  const registry = new ContextSourceRegistry();
+  assert.equal(registry.register(source({ sensitivity: "secret-like" })), null);
+  const secretLike = await new ContextIngestor(backend).ingest(source({ sensitivity: "secret-like" }));
+  assert.deepEqual(secretLike.chunkIds, []);
+
+  await new ContextIngestor(backend).ingest(source({
+    trust: "untrusted-external",
+    sensitivity: "public",
+    sourceUri: "upload://external/advice.md",
+    path: "external/advice.md",
+    content: "export const UntrustedHint = 'outside-only-marker';",
+  }));
+  const query = {
+    tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "main", revision: "rev-1",
+    text: "outside-only-marker", limit: 10,
+  };
+  assert.equal((await backend.lexicalSearch({ ...query, permission: PERMISSION })).length, 0);
+  assert.equal((await backend.lexicalSearch({
+    ...query,
+    permission: { ...PERMISSION, allowedTrust: ["untrusted-external"] },
+  })).length, 1);
+});
+
+test("environment detection uses source URI and removes multiline quoted dotenv values", async () => {
+  const backend = new InProcessHybridIndexBackend();
+  const result = await new ContextIngestor(backend).ingest(source({
+    sourceUri: "project://project-a/.env.local",
+    path: undefined,
+    language: "text",
+    content: 'MULTILINE="first-line\nsecond-secret-line\nlast-line"\nPUBLIC_MODE=demo',
+  }));
+  assert.ok(result.redactionCount >= 2);
+  const chunks = await backend.getChunks(result.chunkIds, {
+    tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "main", revision: "rev-1",
+  });
+  const serialized = JSON.stringify(chunks);
+  assert.doesNotMatch(serialized, /first-line|second-secret-line|last-line|demo/);
+  assert.match(serialized, /REDACTED:ENV_VALUE/);
+});
+
+test("context caches are bounded least-recently-used stores", async () => {
+  const cache = new ContextCache(2);
+  cache.set("a", { value: "a" }, ["one"]);
+  cache.set("b", { value: "b" }, ["two"]);
+  assert.deepEqual(cache.get("a"), { value: "a" });
+  cache.set("c", { value: "c" }, ["three"]);
+  assert.equal(cache.get("b"), null);
+  assert.equal(cache.size, 2);
+
+  const backend = new InProcessHybridIndexBackend();
+  const ingestor = new ContextIngestor(backend, undefined, { maxCacheEntries: 2 });
+  const firstSource = source({ sourceUri: "project://project-a/first.ts", path: "first.ts" });
+  await ingestor.ingest(firstSource);
+  await ingestor.ingest(source({ sourceUri: "project://project-a/second.ts", path: "second.ts" }));
+  await ingestor.ingest(source({ sourceUri: "project://project-a/third.ts", path: "third.ts" }));
+  assert.equal((await ingestor.ingest(firstSource)).cacheHit, false);
+  assert.equal(ingestor.cacheSize, 2);
+});
+
+test("exact-only retrieval is reported truthfully and required compiler inputs are complete and deduplicated", async () => {
+  const backend = new InProcessHybridIndexBackend();
+  const indexed = await new ContextIngestor(backend).ingest(source({
+    sourceUri: "project://project-a/zzq.ts",
+    path: "zzq.ts",
+    content: "const omega = 1;",
+  }));
+  const retrieval = await retrieveContext({
+    tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "main", revision: "rev-1",
+    task: "zzzz-no-lexical-overlap", backend, permission: PERMISSION, exactChunkIds: indexed.chunkIds,
+  });
+  assert.equal(retrieval.mode, "exact-files-only");
+
+  const compiler = new ContextCompiler({ backend });
+  const baseInput = {
+    tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "main", revision: "rev-1",
+    task: "Use the exact file", role: "coder", projectRevision: "rev-1", modelProfileHash: "model",
+    promptVersion: "agent-v2", tokenBudget: 1_000, outputHeadroomTokens: 200, permission: PERMISSION,
+  };
+  const compiled = await compiler.compile({
+    ...baseInput,
+    mandatoryChunkIds: [indexed.chunkIds[0], indexed.chunkIds[0]],
+    exactChunkIds: [indexed.chunkIds[0]],
+  });
+  assert.equal(compiled.mandatoryPolicies.length, 1);
+  assert.equal(compiled.exactProjectFiles.length, 0);
+  await assert.rejects(
+    () => compiler.compile({ ...baseInput, exactChunkIds: ["missing-required-chunk"] }),
+    /required context chunks are unavailable.*missing-required-chunk/i,
+  );
+});
+
+test("chunkers preserve code preambles, ignore fenced markdown headings, and normalize fallback content", () => {
+  const codeChunks = chunkContextSource(source({
+    content: [
+      "/* package license */",
+      '"use client";',
+      "import {",
+      "  useMemo,",
+      '} from "react";',
+      "",
+      "/** Wallet card documentation. */",
+      "export function WalletCard() {",
+      "  return useMemo(() => null, []);",
+      "}",
+    ].join("\n"),
+  }));
+  assert.equal(codeChunks[0].symbol, "WalletCard");
+  assert.match(codeChunks[0].content, /"use client";/);
+  assert.match(codeChunks[0].content, /import \{\n  useMemo,\n\} from "react";/);
+  assert.match(codeChunks[0].content, /Wallet card documentation/);
+
+  const markdownChunks = chunkContextSource(source({
+    sourceType: "markdown", path: "guide.md", language: "markdown",
+    content: "# Real heading\n\n```md\n# Fenced example\n```\n\n## Real child\nDetails",
+  }));
+  assert.equal(markdownChunks.length, 2);
+  assert.deepEqual(markdownChunks[1].headingPath, ["Real heading", "Real child"]);
+  assert.ok(markdownChunks.every((chunk) => chunk.symbol !== "Fenced example"));
+
+  const fallback = chunkContextSource(source({
+    sourceType: "json-schema", path: "schema.txt", language: "text", content: "alpha  \r\nbeta\t \r\n",
+  }));
+  assert.equal(fallback[0].content, "alpha\nbeta");
+});
+
+test("index writes and snapshot loads validate atomically before replacing live state", async () => {
+  const backend = new InProcessHybridIndexBackend();
+  const indexed = await new ContextIngestor(backend).ingest(source());
+  const original = await backend.persistSnapshot();
+  const valid = structuredClone(original.chunks[0]);
+  valid.chunkId = "valid-new-chunk";
+  valid.sourceUri = "project://project-a/valid-new.ts";
+  valid.content = "export const ValidNew = true;";
+  valid.contentHash = "valid-hash";
+  valid.lexicalTerms = ["validnew"];
+  const invalid = structuredClone(valid);
+  invalid.chunkId = "invalid-secret-chunk";
+  invalid.content = "export const token = 'sk-proj-abcdefghijklmnopqrstuvwxyz1234567890';";
+  await assert.rejects(() => backend.upsertChunks([valid, invalid]), /unredacted secret/i);
+  const scope = { tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "main", revision: "rev-1" };
+  assert.equal((await backend.getChunks([valid.chunkId], scope)).length, 0);
+  assert.equal((await backend.getChunks(indexed.chunkIds, scope)).length, 1);
+
+  await assert.rejects(() => backend.loadSnapshot({ ...original, chunks: [valid, invalid] }), /unredacted secret/i);
+  assert.equal((await backend.getChunks(indexed.chunkIds, scope)).length, 1);
+  await assert.rejects(
+    () => backend.loadSnapshot({ ...original, chunks: null }),
+    /snapshot is invalid/i,
+  );
+  assert.equal((await backend.getChunks(indexed.chunkIds, scope)).length, 1);
+});
+
+test("Blob snapshots use non-colliding scope keys, truthful compression metadata, exact scope, and bounded operations", async () => {
+  const puts = [];
+  const client = {
+    async put(pathname, body, options) {
+      puts.push({ pathname, body: new Uint8Array(body), options });
+      return { pathname };
+    },
+    async get() { return null; },
+  };
+  const scope = { tenantId: "tenant-a", workspaceId: "workspace-a", projectId: "project-a", branch: "feature:a", revision: "rev:1" };
+  const identityBackend = new BlobSnapshotHybridIndexBackend({ client, scope, compression: "identity" });
+  await identityBackend.persistSnapshot();
+  assert.match(identityBackend.pathname, /branch-feature~3aa\/revision-rev~3a1\/snapshot\.json$/);
+  assert.equal(puts[0].options.contentType, "application/json");
+  const collision = new BlobSnapshotHybridIndexBackend({
+    client,
+    scope: { ...scope, branch: "feature-a", revision: "rev-1" },
+    compression: "identity",
+  });
+  assert.notEqual(collision.pathname, identityBackend.pathname);
+  await assert.rejects(
+    () => identityBackend.getChunks([], { ...scope, projectId: "project-b" }),
+    /outside its configured scope/i,
+  );
+  await assert.rejects(
+    () => identityBackend.deleteSource("project://project-a/a.ts", undefined, undefined),
+    /scope is required/i,
+  );
+
+  const hanging = new BlobSnapshotHybridIndexBackend({
+    client: { async put() { return {}; }, async get() { return new Promise(() => {}); } },
+    scope,
+    operationTimeoutMs: 10,
+  });
+  await assert.rejects(() => hanging.loadPersistedSnapshot(), /timed out/i);
 });

@@ -1,0 +1,444 @@
+{
+  "artifact": "drops-agent-v3-failure-clustering-report",
+  "candidateThresholds": {
+    "minimumClusterSize": 3,
+    "minimumCohesion": 0.75,
+    "minimumSourceValidatedRepairs": 3
+  },
+  "clusteringVersion": "3.0.0",
+  "configuration": {
+    "minimumClusterSize": 3,
+    "similarityThreshold": 0.5
+  },
+  "derivedFrom": {
+    "acceptedSourceRecordCount": 36,
+    "failureFeatureHash": "fac27016e0d4d8af3786da77428f98bdc608ecd12c24d34c3364a7378a31211d",
+    "rejectedSourceRecordCount": 0,
+    "repairDatasetVersion": "verified-repairs-v3.0.0",
+    "repairRecordHash": "ff96539320816d460e6e0989dc35ca888794ead5bdde301cef472cfd2023133c"
+  },
+  "evidenceScope": "synthetic-source-level-fixture-validation",
+  "limitations": [
+    "No model or provider was invoked.",
+    "No dependency installation, production build, Sandbox preview, or browser flow was executed.",
+    "Verified means the bounded synthetic patch passed source-level fixture checks, hash checks, and secret scanning only.",
+    "Regression candidates are not active benchmark cases and do not change Router, AutoFix, prompts, or production defaults."
+  ],
+  "regressionBenchmarkCandidates": [
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "invalid-import-export"
+      ],
+      "id": "candidate-cluster-33de3be70c03eafe",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-33de3be70c03eafe",
+      "sourceRecordIds": [
+        "repair-v3-invalid-import-export-1",
+        "repair-v3-invalid-import-export-2",
+        "repair-v3-invalid-import-export-3"
+      ],
+      "status": "candidate-only"
+    },
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "duplicate-dependency"
+      ],
+      "id": "candidate-cluster-46a6d588146e103f",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-46a6d588146e103f",
+      "sourceRecordIds": [
+        "repair-v3-duplicate-dependency-1",
+        "repair-v3-duplicate-dependency-2",
+        "repair-v3-duplicate-dependency-3"
+      ],
+      "status": "candidate-only"
+    },
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "lucide-icon-name"
+      ],
+      "id": "candidate-cluster-50ef7325c7a76398",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-50ef7325c7a76398",
+      "sourceRecordIds": [
+        "repair-v3-lucide-icon-name-1",
+        "repair-v3-lucide-icon-name-2",
+        "repair-v3-lucide-icon-name-3"
+      ],
+      "status": "candidate-only"
+    },
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "package-json-error"
+      ],
+      "id": "candidate-cluster-82291c3dbb67128c",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-82291c3dbb67128c",
+      "sourceRecordIds": [
+        "repair-v3-package-json-error-1",
+        "repair-v3-package-json-error-2",
+        "repair-v3-package-json-error-3"
+      ],
+      "status": "candidate-only"
+    },
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "missing-dependency"
+      ],
+      "id": "candidate-cluster-c0828cec000c13ff",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-c0828cec000c13ff",
+      "sourceRecordIds": [
+        "repair-v3-missing-dependency-1",
+        "repair-v3-missing-dependency-2",
+        "repair-v3-missing-dependency-3"
+      ],
+      "status": "candidate-only"
+    },
+    {
+      "evidenceScope": "synthetic-source-level-fixture-validation",
+      "failureClasses": [
+        "integration-response-shape"
+      ],
+      "id": "candidate-cluster-f857cd3324451acf",
+      "registryMutationApplied": false,
+      "requiredNextEvidence": [
+        "promote into an isolated benchmark fixture",
+        "execute deterministic checks against an installable Project V2 app",
+        "collect Sandbox build evidence when applicable",
+        "collect browser evidence when applicable"
+      ],
+      "sourceClusterId": "cluster-f857cd3324451acf",
+      "sourceRecordIds": [
+        "repair-v3-integration-response-shape-1",
+        "repair-v3-integration-response-shape-2",
+        "repair-v3-integration-response-shape-3"
+      ],
+      "status": "candidate-only"
+    }
+  ],
+  "report": {
+    "clusters": [
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-e40ee488093e9872",
+        "confidence": 0.5967,
+        "dominantFailureClasses": [
+          "broken-api-route",
+          "relative-data-extension",
+          "stale-patch-conflict"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-broken-api-route-1",
+          "repair-v3-broken-api-route-2",
+          "repair-v3-broken-api-route-3",
+          "repair-v3-relative-data-extension-1",
+          "repair-v3-relative-data-extension-2",
+          "repair-v3-relative-data-extension-3",
+          "repair-v3-stale-patch-conflict-1",
+          "repair-v3-stale-patch-conflict-2",
+          "repair-v3-stale-patch-conflict-3",
+          "repair-v3-typescript-mismatch-1",
+          "repair-v3-typescript-mismatch-2",
+          "repair-v3-typescript-mismatch-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-broken-api-route-1",
+          "repair-v3-broken-api-route-2",
+          "repair-v3-broken-api-route-3"
+        ],
+        "size": 12,
+        "summary": "12 sanitized traces share broken-api-route, relative-data-extension, stale-patch-conflict failure evidence.",
+        "suspectedRootCauses": [
+          "failure:broken-api-route",
+          "failure:relative-data-extension",
+          "failure:stale-patch-conflict"
+        ],
+        "verifiedRepairCount": 12,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-d9ae26b82d3fad53",
+        "confidence": 0.7274,
+        "dominantFailureClasses": [
+          "bad-asset-path",
+          "nextjs-client-boundary"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-bad-asset-path-1",
+          "repair-v3-bad-asset-path-2",
+          "repair-v3-bad-asset-path-3",
+          "repair-v3-nextjs-client-boundary-1",
+          "repair-v3-nextjs-client-boundary-2",
+          "repair-v3-nextjs-client-boundary-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-bad-asset-path-1",
+          "repair-v3-bad-asset-path-2",
+          "repair-v3-bad-asset-path-3"
+        ],
+        "size": 6,
+        "summary": "6 sanitized traces share bad-asset-path, nextjs-client-boundary failure evidence.",
+        "suspectedRootCauses": [
+          "failure:bad-asset-path",
+          "failure:nextjs-client-boundary"
+        ],
+        "verifiedRepairCount": 6,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-33de3be70c03eafe",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "invalid-import-export"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-invalid-import-export-1",
+          "repair-v3-invalid-import-export-2",
+          "repair-v3-invalid-import-export-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-invalid-import-export-1",
+          "repair-v3-invalid-import-export-2",
+          "repair-v3-invalid-import-export-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share invalid-import-export failure evidence.",
+        "suspectedRootCauses": [
+          "failure:invalid-import-export"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-46a6d588146e103f",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "duplicate-dependency"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-duplicate-dependency-1",
+          "repair-v3-duplicate-dependency-2",
+          "repair-v3-duplicate-dependency-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-duplicate-dependency-1",
+          "repair-v3-duplicate-dependency-2",
+          "repair-v3-duplicate-dependency-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share duplicate-dependency failure evidence.",
+        "suspectedRootCauses": [
+          "failure:duplicate-dependency"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-50ef7325c7a76398",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "lucide-icon-name"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-lucide-icon-name-1",
+          "repair-v3-lucide-icon-name-2",
+          "repair-v3-lucide-icon-name-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-lucide-icon-name-1",
+          "repair-v3-lucide-icon-name-2",
+          "repair-v3-lucide-icon-name-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share lucide-icon-name failure evidence.",
+        "suspectedRootCauses": [
+          "failure:lucide-icon-name"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-82291c3dbb67128c",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "package-json-error"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-package-json-error-1",
+          "repair-v3-package-json-error-2",
+          "repair-v3-package-json-error-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-package-json-error-1",
+          "repair-v3-package-json-error-2",
+          "repair-v3-package-json-error-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share package-json-error failure evidence.",
+        "suspectedRootCauses": [
+          "failure:package-json-error"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-c0828cec000c13ff",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "missing-dependency"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-missing-dependency-1",
+          "repair-v3-missing-dependency-2",
+          "repair-v3-missing-dependency-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-missing-dependency-1",
+          "repair-v3-missing-dependency-2",
+          "repair-v3-missing-dependency-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share missing-dependency failure evidence.",
+        "suspectedRootCauses": [
+          "failure:missing-dependency"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      },
+      {
+        "candidateActions": [
+          "benchmark",
+          "prompt-experiment"
+        ],
+        "clusterId": "cluster-f857cd3324451acf",
+        "confidence": 1,
+        "dominantFailureClasses": [
+          "integration-response-shape"
+        ],
+        "dominantRoles": [
+          "synthetic-fixture-validator"
+        ],
+        "memberTraceIds": [
+          "repair-v3-integration-response-shape-1",
+          "repair-v3-integration-response-shape-2",
+          "repair-v3-integration-response-shape-3"
+        ],
+        "outlier": false,
+        "representativeEvidenceIds": [
+          "repair-v3-integration-response-shape-1",
+          "repair-v3-integration-response-shape-2",
+          "repair-v3-integration-response-shape-3"
+        ],
+        "size": 3,
+        "summary": "3 sanitized traces share integration-response-shape failure evidence.",
+        "suspectedRootCauses": [
+          "failure:integration-response-shape"
+        ],
+        "verifiedRepairCount": 3,
+        "version": "3.0.0"
+      }
+    ],
+    "configHash": "ef891bb07dce7317f402f852f25d205571c46d3499859248b8a0a34e870c51b9",
+    "inputTraceCount": 36,
+    "quality": {
+      "averageCohesion": 0.9155,
+      "clusterCount": 8,
+      "outlierCount": 0,
+      "outlierRatio": 0
+    },
+    "tenantScopeHash": "c02116c0441eef4eec698bbb923cab9f02d8974f51ea27001deef531cc25e166",
+    "version": "3.0.0"
+  },
+  "schemaVersion": 1
+}

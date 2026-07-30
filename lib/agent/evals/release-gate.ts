@@ -21,6 +21,25 @@ export function evaluateAgentReleaseGate(
 ): { passed: boolean; blockers: string[] } {
   const blockers: string[] = [];
   if (!results.length) blockers.push("No benchmark results were produced.");
+  const expectedCaseIds = new Set<string>();
+  for (const fixture of cases) {
+    if (expectedCaseIds.has(fixture.id)) blockers.push(`Duplicate expected benchmark case ${fixture.id}.`);
+    expectedCaseIds.add(fixture.id);
+  }
+  const configurationIds = new Set(results.map((entry) => entry.configurationId));
+  const observedJobs = new Set<string>();
+  for (const result of results) {
+    const jobId = `${result.configurationId}:${result.caseId}`;
+    if (observedJobs.has(jobId)) blockers.push(`Duplicate benchmark result ${jobId}.`);
+    observedJobs.add(jobId);
+    if (!expectedCaseIds.has(result.caseId)) blockers.push(`Unknown benchmark result ${jobId}.`);
+  }
+  for (const configurationId of configurationIds) {
+    for (const caseId of expectedCaseIds) {
+      const jobId = `${configurationId}:${caseId}`;
+      if (!observedJobs.has(jobId)) blockers.push(`Missing benchmark result ${jobId}.`);
+    }
+  }
   const successRate = results.filter((entry) => entry.passed).length / Math.max(1, results.length);
   if (successRate < thresholds.minimumSuccessRate) {
     blockers.push(`Success rate ${(successRate * 100).toFixed(1)}% is below ${(thresholds.minimumSuccessRate * 100).toFixed(1)}%.`);

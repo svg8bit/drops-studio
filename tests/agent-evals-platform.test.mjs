@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import test from "node:test";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (!specifier.startsWith("@/")) return nextResolve(specifier, context);
+    const path = specifier.slice(2);
+    return { shortCircuit: true, url: new URL(path.endsWith(".ts") ? path : `${path}.ts`, new URL("../", import.meta.url)).href };
+  },
+});
 
 const evals = await import("../lib/agent/evals/index.ts");
 

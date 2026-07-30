@@ -45,27 +45,62 @@ export function detectPromptInjection(content: string): PromptInjectionFlag[] {
 }
 
 export function redactEnvironmentValues(content: string): string {
-  return content.replace(
-    /^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)(?!\[REDACTED:)(.*)$/gm,
-    (_match, prefix: string, value: string) => value.trim() ? `${prefix}[REDACTED:ENV_VALUE]` : prefix,
-  );
+  return redactEnvironmentValuesWithCount(content).content;
+}
+
+function quoteClosed(value: string, quote: "\"" | "'", start = 0): boolean {
+  for (let index = start; index < value.length; index += 1) {
+    if (value[index] !== quote) continue;
+    let escapes = 0;
+    for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) escapes += 1;
+    if (escapes % 2 === 0) return true;
+  }
+  return false;
+}
+
+function redactEnvironmentValuesWithCount(content: string): { content: string; count: number } {
+  const lines = content.split("\n");
+  const output: string[] = [];
+  let count = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)(.*)$/u);
+    if (!match || !match[2].trim()) {
+      output.push(lines[index]);
+      continue;
+    }
+    if (/^\[REDACTED:[A-Z0-9_]+\]$/u.test(match[2].trim())) {
+      output.push(lines[index]);
+      continue;
+    }
+    output.push(`${match[1]}[REDACTED:ENV_VALUE]`);
+    count += 1;
+    const trimmed = match[2].trimStart();
+    const quote = trimmed[0] === "\"" || trimmed[0] === "'" ? trimmed[0] : undefined;
+    if (!quote || quoteClosed(trimmed, quote, 1)) continue;
+    while (index + 1 < lines.length) {
+      index += 1;
+      const continuation = lines[index];
+      output.push("");
+      if (quoteClosed(continuation, quote)) break;
+    }
+  }
+  return { content: output.join("\n"), count };
 }
 
 export function redactContextContent(input: string, options: { environmentFile?: boolean } = {}): RedactionResult {
   let content = input.replace(/\r\n?/g, "\n");
   const findings: RedactionFinding[] = [];
+  if (options.environmentFile) {
+    const environment = redactEnvironmentValuesWithCount(content);
+    content = environment.content;
+    if (environment.count) findings.push({ kind: "ENV_VALUE", placeholder: "[REDACTED:ENV_VALUE]", count: environment.count });
+  }
   for (const pattern of patterns) {
     pattern.expression.lastIndex = 0;
     const matches = content.match(pattern.expression);
     if (!matches?.length) continue;
     content = content.replace(pattern.expression, pattern.placeholder);
     findings.push({ kind: pattern.kind, placeholder: pattern.placeholder, count: matches.length });
-  }
-  if (options.environmentFile) {
-    const environmentValues = [...content.matchAll(/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?!\[REDACTED:)(.+)$/gm)]
-      .filter((match) => match[1].trim()).length;
-    content = redactEnvironmentValues(content);
-    if (environmentValues) findings.push({ kind: "ENV_VALUE", placeholder: "[REDACTED:ENV_VALUE]", count: environmentValues });
   }
   return { content, findings, injectionFlags: detectPromptInjection(content) };
 }
