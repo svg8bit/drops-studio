@@ -99,14 +99,16 @@ export function ProjectV2AgentIntelligence({ trace }: ProjectV2AgentIntelligence
 
       <section className={`${styles.card} ${styles.wide}`}>
         <header><CheckCircle2 aria-hidden="true" /><div><small>Release authority</small><strong>Checks and findings</strong></div></header>
-        <div className={styles.checkGrid}>
-          {trace.checks.map((check) => (
-            <article key={check.checkId} data-status={check.status}>
-              {check.status === "passed" ? <CheckCircle2 aria-hidden="true" /> : <TriangleAlert aria-hidden="true" />}
-              <span><strong>{check.name}</strong><small>{check.status} · {duration(check.durationMs)}</small></span>
-            </article>
-          ))}
-        </div>
+        {trace.checks.length ? (
+          <div className={styles.checkGrid}>
+            {trace.checks.map((check) => (
+              <article key={check.checkId} data-status={check.status}>
+                {check.status === "passed" ? <CheckCircle2 aria-hidden="true" /> : <TriangleAlert aria-hidden="true" />}
+                <span><strong>{check.name}</strong><small>{check.status} · {duration(check.durationMs)}</small></span>
+              </article>
+            ))}
+          </div>
+        ) : <p className={styles.missing}>No deterministic check receipts were recorded; this run cannot be presented as release-ready.</p>}
         {trace.findings.length ? <ul className={styles.findings}>{trace.findings.map((finding) => (
           <li key={finding.findingId}><Badge variant={finding.blocksVerification ? "destructive" : "outline"}>{finding.severity}</Badge><span><strong>{finding.title}</strong><small>{finding.category}</small></span></li>
         ))}</ul> : <p className={styles.missing}>No structured QA, Security, Verifier, or release-gate findings.</p>}

@@ -160,24 +160,7 @@ export interface AgentRunTrace {
   };
 }
 
-export interface BenchmarkCase {
-  id: string;
-  category:
-    | "build"
-    | "edit"
-    | "repair"
-    | "retrieval"
-    | "security"
-    | "integration"
-    | "release";
-  prompt: string;
-  expectedRoute: "planner" | "coder" | "quick-edit" | "autofix";
-  requiredContext: string[];
-  seededFailure: AgentFailureClass;
-  requiresBrowser: boolean;
-  requiresApprovalBoundary: boolean;
-  deterministicBlocker?: string;
-}
+export type BenchmarkCase = import("./benchmarks/types.ts").BenchmarkCaseV3;
 
 export interface BenchmarkConfiguration {
   id: string;

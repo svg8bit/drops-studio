@@ -54,9 +54,22 @@ export async function runAgentBenchmark(input: {
   );
   const results = await boundedMap(jobs, input.concurrency ?? 3, async ({ fixture, configuration }) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("Benchmark case timed out.")), input.timeoutMs ?? 180_000);
+    const timeoutMs = input.timeoutMs ?? 180_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Benchmark case ${fixture.id} timed out after ${timeoutMs}ms.`);
+        controller.abort(error);
+        reject(error);
+      }, timeoutMs);
+    });
     try {
-      const result = await input.execute(fixture, configuration, controller.signal);
+      // AbortSignal is cooperative; Promise.race enforces the wall-clock bound
+      // even when an executor ignores cancellation or never settles.
+      const result = await Promise.race([
+        input.execute(fixture, configuration, controller.signal),
+        timeout,
+      ]);
       if (result.caseId !== fixture.id || result.configurationId !== configuration.id) {
         throw new Error("Benchmark executor returned mismatched fixture metadata.");
       }
@@ -65,7 +78,7 @@ export async function runAgentBenchmark(input: {
       }
       return structuredClone(result);
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   });
   const releaseGate = evaluateAgentReleaseGate(input.cases, results, input.thresholds);

@@ -150,6 +150,7 @@ test("Verifier may downgrade deterministic success and security evidence is auth
     verifierModel: "anthropic/verifier",
     verifierPromptVersion: "2.0.0",
     advisoryVerdict: "BLOCKED",
+    advisoryRationale: "The independent reviewer found an unresolved primary-flow blocker.",
   });
   assert.equal(downgrade.verdict, "BLOCKED");
 

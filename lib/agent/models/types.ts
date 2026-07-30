@@ -128,7 +128,8 @@ export interface RoleAttemptTrace {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
-  status: "succeeded" | "failed";
+  status: "succeeded" | "failed" | "skipped";
+  skipReason: "circuit-open" | "unauthorized" | null;
   errorClass: "transient" | "permanent" | null;
   usage: ModelUsage | null;
   estimatedCostUsd: number | null;

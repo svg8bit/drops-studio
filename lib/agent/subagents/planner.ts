@@ -1,5 +1,5 @@
-import { createBoundedSubagent, type SubagentContract } from "./contracts.ts";
-import type { PlannerResult, RoleContext, RoleExecutionCallback } from "../orchestrator/types.ts";
+import { createBoundedSubagent, type BoundedSubagentExecutor, type SubagentContract } from "./contracts.ts";
+import type { PlannerResult, RoleExecutionCallback } from "../orchestrator/types.ts";
 
 export const PLANNER_CONTRACT: SubagentContract = {
   role: "planner",
@@ -10,7 +10,7 @@ export const PLANNER_CONTRACT: SubagentContract = {
 };
 
 export function createPlannerSubagent(
-  execute: (context: RoleContext) => Promise<PlannerResult>,
+  execute: BoundedSubagentExecutor<PlannerResult>,
 ): RoleExecutionCallback {
   return createBoundedSubagent({ contract: PLANNER_CONTRACT, execute });
 }

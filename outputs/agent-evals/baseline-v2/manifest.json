@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "drops-agent-intelligence-v2-f47f14e",
+  "capturedAt": "2026-07-30T18:00:00.000Z",
+  "git": {
+    "branch": "codex/drops-agent-intelligence-v2",
+    "commit": "f47f14ea423c1fc116d43737b4bb4a05b424ce27",
+    "baseCommit": "129af40"
+  },
+  "versions": {
+    "runtimeContract": "2.0.0",
+    "routingPolicy": "2.0.0",
+    "benchmarkRegistry": "agent-intelligence-v2.1",
+    "projectSchema": 2
+  },
+  "prompt": {
+    "source": "docs/agent/DROPS_STUDIO_AGENT_SYSTEM_V2.md",
+    "lines": 146,
+    "words": 1017,
+    "estimatedTokens": 2062,
+    "bytes": 8248,
+    "sha256": "dc9f76fb7be440664dda5fa799da5b3883cf3f19638a58f4f76c2e48d5992ab0"
+  },
+  "benchmarks": {
+    "total": 24,
+    "byCategory": {
+      "build": 4,
+      "edit": 3,
+      "repair": 3,
+      "retrieval": 3,
+      "security": 3,
+      "integration": 4,
+      "release": 4
+    },
+    "executionMode": "offline-contract-fixture"
+  },
+  "validation": {
+    "unit": { "passed": 562, "failed": 0, "skipped": 2 },
+    "focusedBuilderAndRuntime": { "passed": 15, "failed": 0, "skipped": 0 },
+    "typecheck": "passed",
+    "lint": "passed",
+    "uiGuardrails": "passed",
+    "vercelPreviewBuild": "passed"
+  },
+  "preview": {
+    "deploymentId": "dpl_GMwTiRkeaengmxJxW6yA2sEuwNss",
+    "readyState": "READY",
+    "url": "https://drops-studio-dckccehhd-sevas-projects-78158da5.vercel.app"
+  },
+  "knownBaselineLimits": [
+    "The bounded parallel orchestrator is implemented and unit-proven but is not yet invoked by the production intelligent-builder runtime.",
+    "Gateway routing records one request-authorized resolved model; it does not yet compare a live multi-model matrix.",
+    "Offline evaluation results are disclosed contract fixtures and are not live-model quality evidence.",
+    "No V3 streaming Stabilizer, Design Agent, 120-case corpus, verified-repair corpus, or failure clustering exists in this baseline."
+  ]
+}
