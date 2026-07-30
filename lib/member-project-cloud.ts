@@ -203,12 +203,18 @@ function findForbiddenField(value: unknown, path = "project"): string | null {
   return null;
 }
 
-function validatedSpec(value: unknown, label: string): GeneratedProjectSpec {
+function validatedSpec(
+  value: unknown,
+  label: string,
+  verifyArtifact: boolean,
+): GeneratedProjectSpec {
   const normalized = validateProjectSpec(value);
-  const html = compileProject(normalized);
-  assertPublishedArtifactSafe(normalized, html);
-  if (!html.includes("<!doctype html>")) {
-    throw new Error(`${label} did not compile into a runnable project.`);
+  if (verifyArtifact) {
+    const html = compileProject(normalized);
+    assertPublishedArtifactSafe(normalized, html);
+    if (!html.includes("<!doctype html>")) {
+      throw new Error(`${label} did not compile into a runnable project.`);
+    }
   }
   return normalized;
 }
@@ -216,6 +222,7 @@ function validatedSpec(value: unknown, label: string): GeneratedProjectSpec {
 function validatedWorkspace(
   value: unknown,
   spec: GeneratedProjectSpec,
+  verifyArtifact: boolean,
 ): ProjectWorkspace {
   const input = plainObject(value, "Member project workspace");
   onlyFields(input, workspaceFields, "Member project workspace");
@@ -271,12 +278,18 @@ function validatedWorkspace(
       `Member project workspace is invalid: ${validation.issues[0] ?? "workspace validation failed."}`,
     );
   }
-  const html = compileWorkspaceRuntime(spec, workspace);
-  assertPublishedArtifactSafe(spec, html);
+  if (verifyArtifact) {
+    const html = compileWorkspaceRuntime(spec, workspace);
+    assertPublishedArtifactSafe(spec, html);
+  }
   return workspace;
 }
 
-function checkpoint(value: unknown, index: number): ProjectCheckpoint {
+function checkpoint(
+  value: unknown,
+  index: number,
+  verifyArtifact: boolean,
+): ProjectCheckpoint {
   const input = plainObject(value, `Checkpoint ${index + 1}`);
   const unknownFields = Object.keys(input).filter(
     (field) => !checkpointFields.has(field),
@@ -311,7 +324,11 @@ function checkpoint(value: unknown, index: number): ProjectCheckpoint {
     label: text(input.label, `Checkpoint ${index + 1} label`, 160),
     createdAt: timestamp(input.createdAt, `Checkpoint ${index + 1} createdAt`),
     source,
-    spec: validatedSpec(input.spec, `Checkpoint ${index + 1} spec`),
+    spec: validatedSpec(
+      input.spec,
+      `Checkpoint ${index + 1} spec`,
+      verifyArtifact,
+    ),
     ...(branchInput
       ? {
           branch: {
@@ -328,7 +345,11 @@ function checkpoint(value: unknown, index: number): ProjectCheckpoint {
   };
 }
 
-function proposal(value: unknown, messageIndex: number): NonNullable<ProjectChatMessage["proposal"]> {
+function proposal(
+  value: unknown,
+  messageIndex: number,
+  verifyArtifact: boolean,
+): NonNullable<ProjectChatMessage["proposal"]> {
   const input = plainObject(value, `Message ${messageIndex + 1} proposal`);
   if (!Array.isArray(input.summary) || input.summary.length > 8) {
     throw new Error(`Message ${messageIndex + 1} proposal summary is invalid.`);
@@ -338,11 +359,19 @@ function proposal(value: unknown, messageIndex: number): NonNullable<ProjectChat
     summary: input.summary.map((item, summaryIndex) =>
       text(item, `Message ${messageIndex + 1} proposal summary ${summaryIndex + 1}`, 280),
     ),
-    spec: validatedSpec(input.spec, `Message ${messageIndex + 1} proposal spec`),
+    spec: validatedSpec(
+      input.spec,
+      `Message ${messageIndex + 1} proposal spec`,
+      verifyArtifact,
+    ),
   };
 }
 
-function message(value: unknown, index: number): ProjectChatMessage {
+function message(
+  value: unknown,
+  index: number,
+  verifyArtifact: boolean,
+): ProjectChatMessage {
   const input = plainObject(value, `Message ${index + 1}`);
   if (input.role !== "user" && input.role !== "assistant") {
     throw new Error(`Message ${index + 1} has an unsupported role.`);
@@ -354,11 +383,14 @@ function message(value: unknown, index: number): ProjectChatMessage {
     createdAt: timestamp(input.createdAt, `Message ${index + 1} createdAt`),
     ...(input.proposal === undefined
       ? {}
-      : { proposal: proposal(input.proposal, index) }),
+      : { proposal: proposal(input.proposal, index, verifyArtifact) }),
   };
 }
 
-function sanitizeMemberProjectDraftValue(value: unknown): MemberProjectDraft {
+function sanitizeMemberProjectDraftValue(
+  value: unknown,
+  verifyArtifacts: boolean,
+): MemberProjectDraft {
   assertProjectPayloadSafe(value, "member project sync payload");
   const input = plainObject(value, "Member project");
   const nonWorkspaceInput = { ...input };
@@ -396,16 +428,19 @@ function sanitizeMemberProjectDraftValue(value: unknown): MemberProjectDraft {
   }
   const publishedUrl = optionalUrl(input.publishedUrl, "Published URL");
   const id = identifier(input.id, "Project id");
-  const spec = validatedSpec(input.spec, "Project spec");
+  const spec = validatedSpec(input.spec, "Project spec", verifyArtifacts);
   const workspace = input.workspace === undefined
     ? undefined
-    : validatedWorkspace(input.workspace, spec);
+    : validatedWorkspace(input.workspace, spec, verifyArtifacts);
   return {
     id,
     spec,
-    checkpoints: checkpointInput.map(checkpoint),
-    futureCheckpoints: futureCheckpointInput.map(checkpoint),
-    conversation: conversationInput.map(message),
+    checkpoints: checkpointInput.map((item, index) =>
+      checkpoint(item, index, verifyArtifacts)),
+    futureCheckpoints: futureCheckpointInput.map((item, index) =>
+      checkpoint(item, index, verifyArtifacts)),
+    conversation: conversationInput.map((item, index) =>
+      message(item, index, verifyArtifacts)),
     ...(workspace ? { workspace } : {}),
     ...(publishedUrl ? { publishedUrl } : {}),
     ...(publishedSlug ? { publishedSlug } : {}),
@@ -417,13 +452,31 @@ function sanitizeMemberProjectDraftValue(value: unknown): MemberProjectDraft {
 
 export function sanitizeMemberProjectDraft(value: unknown): MemberProjectDraft {
   try {
-    return sanitizeMemberProjectDraftValue(value);
+    return sanitizeMemberProjectDraftValue(value, true);
   } catch (error) {
     if (error instanceof MemberProjectValidationError) throw error;
     throw new MemberProjectValidationError(
       error instanceof Error && error.message
         ? error.message
         : "Member project payload is invalid or unsafe.",
+    );
+  }
+}
+
+/**
+ * Re-validates the bounded persisted shape without recompiling every spec and
+ * workspace on each read or optimistic-storage retry. Only data that already
+ * passed sanitizeMemberProjectDraft at ingress may enter durable storage.
+ */
+export function sanitizeStoredMemberProjectDraft(value: unknown): MemberProjectDraft {
+  try {
+    return sanitizeMemberProjectDraftValue(value, false);
+  } catch (error) {
+    if (error instanceof MemberProjectValidationError) throw error;
+    throw new MemberProjectValidationError(
+      error instanceof Error && error.message
+        ? error.message
+        : "Stored member project is invalid or unsafe.",
     );
   }
 }
@@ -443,7 +496,7 @@ export function sanitizeMemberProjectRecord(value: unknown): MemberProjectRecord
   ) {
     throw new Error("Stored member project metadata is invalid.");
   }
-  const draft = sanitizeMemberProjectDraft({
+  const draft = sanitizeStoredMemberProjectDraft({
     id: input.id,
     spec: input.spec,
     checkpoints: input.checkpoints,

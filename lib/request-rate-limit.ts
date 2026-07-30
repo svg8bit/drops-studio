@@ -44,6 +44,7 @@ export interface RequestLimitState {
 
 type RequestLimitOptions = {
   identity: string | null;
+  legacyIdentity?: string | null;
   namespace: string;
   max: number;
   windowMs: number;
@@ -82,8 +83,14 @@ function localLimitKey(options: {
 function consumeLocalRequestLimit(options: RequestLimitOptions & { identity: string }): RequestLimitState {
   const now = Date.now();
   const bucket = Math.floor(now / options.windowMs);
-  const key = localLimitKey(options, now);
   const limits = cleanupLocalLimits(now);
+  const primaryKey = localLimitKey(options, now);
+  const legacyKey = options.legacyIdentity && options.legacyIdentity !== options.identity
+    ? localLimitKey({ ...options, identity: options.legacyIdentity }, now)
+    : null;
+  const key = legacyKey && !limits.has(primaryKey) && limits.has(legacyKey)
+    ? legacyKey
+    : primaryKey;
 
   const current = limits.get(key);
   const count = (current?.count ?? 0) + 1;
@@ -93,7 +100,12 @@ function consumeLocalRequestLimit(options: RequestLimitOptions & { identity: str
 
 function readLocalRequestLimit(options: RequestLimitOptions & { identity: string }): RequestLimitState {
   const now = Date.now();
-  const count = cleanupLocalLimits(now).get(localLimitKey(options, now))?.count ?? 0;
+  const limits = cleanupLocalLimits(now);
+  const primaryCount = limits.get(localLimitKey(options, now))?.count ?? 0;
+  const legacyCount = options.legacyIdentity && options.legacyIdentity !== options.identity
+    ? limits.get(localLimitKey({ ...options, identity: options.legacyIdentity }, now))?.count ?? 0
+    : 0;
+  const count = Math.max(primaryCount, legacyCount);
   return countedState(count, options.max, count >= options.max);
 }
 
@@ -119,6 +131,27 @@ function validStoredState(value: unknown): { count: number; windowEndsAt: number
 async function blobPathname(options: RequestLimitOptions & { identity: string }): Promise<string> {
   const key = await shortHash(`${options.namespace}:${options.identity}`);
   return `drops-studio/rate-limit/${options.namespace}/${key}.json`;
+}
+
+async function activeStoredBlob(
+  storage: BlobStorage,
+  options: RequestLimitOptions & { identity: string },
+): Promise<{ pathname: string; current: Awaited<ReturnType<typeof storedBlobCount>> }> {
+  const primaryPath = await blobPathname(options);
+  const primary = await storedBlobCount(storage, primaryPath);
+  if (!options.legacyIdentity || options.legacyIdentity === options.identity) {
+    return { pathname: primaryPath, current: primary };
+  }
+  const legacyPath = await blobPathname({ ...options, identity: options.legacyIdentity });
+  const legacy = await storedBlobCount(storage, legacyPath);
+  const now = Date.now();
+  const primaryCount = primary && primary.windowEndsAt > now ? primary.count : 0;
+  const legacyCount = legacy && legacy.windowEndsAt > now ? legacy.count : 0;
+  // Existing pre-pepper counters naturally age out at the next window. Until
+  // then, continue their CAS path so rollout cannot reset a paid quota.
+  return legacyCount > primaryCount || (!primary && legacyCount > 0)
+    ? { pathname: legacyPath, current: legacy }
+    : { pathname: primaryPath, current: primary };
 }
 
 async function storedBlobCount(
@@ -149,11 +182,16 @@ export async function consumeRequestLimitState(
   }
   try {
     const storage = await blobStorage(storageOverride);
-    const pathname = await blobPathname({ ...options, identity: options.identity });
     for (let attempt = 0; attempt < 6; attempt += 1) {
+      let pathname: string;
       let current: Awaited<ReturnType<typeof storedBlobCount>>;
       try {
-        current = await storedBlobCount(storage, pathname);
+        const active = await activeStoredBlob(storage, {
+          ...options,
+          identity: options.identity,
+        });
+        pathname = active.pathname;
+        current = active.current;
       } catch {
         continue;
       }
@@ -161,7 +199,7 @@ export async function consumeRequestLimitState(
       const windowEndsAt = (Math.floor(now / options.windowMs) + 1) * options.windowMs;
       if (!current) {
         try {
-          await storage.put(pathname, JSON.stringify({ count: 1, windowEndsAt }), {
+          await storage.put(pathname!, JSON.stringify({ count: 1, windowEndsAt }), {
             access: "private",
             addRandomSuffix: false,
             allowOverwrite: false,
@@ -176,7 +214,7 @@ export async function consumeRequestLimitState(
       const expired = current.windowEndsAt <= now;
       const count = expired ? 1 : current.count + 1;
       try {
-        await storage.put(pathname, JSON.stringify({ count, windowEndsAt: expired ? windowEndsAt : current.windowEndsAt }), {
+        await storage.put(pathname!, JSON.stringify({ count, windowEndsAt: expired ? windowEndsAt : current.windowEndsAt }), {
           access: "private",
           addRandomSuffix: false,
           allowOverwrite: true,
@@ -206,8 +244,10 @@ export async function readRequestLimitState(
   if (!storageOverride && !durableBackendConfigured()) return unavailableState();
   try {
     const storage = await blobStorage(storageOverride);
-    const pathname = await blobPathname({ ...options, identity: options.identity });
-    const current = await storedBlobCount(storage, pathname);
+    const { current } = await activeStoredBlob(storage, {
+      ...options,
+      identity: options.identity,
+    });
     const count = current && current.windowEndsAt > Date.now() ? current.count : 0;
     return countedState(count, options.max, count >= options.max);
   } catch {

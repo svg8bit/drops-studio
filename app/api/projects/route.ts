@@ -6,13 +6,14 @@ import {
   MEMBER_PROJECT_LIMIT,
   memberProjectStorageConfigured,
   MemberProjectStorageUnavailableError,
+  migrateMemberProjectIdentity,
   upsertMemberProject,
 } from "../../../db/member-projects.ts";
 import {
   billingStorageConfigured,
-  readBillingAccount,
 } from "../../../db/billing.ts";
 import {
+  readStudioBillingAccount,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
   type StudioAccount,
@@ -59,7 +60,7 @@ function json(payload: Record<string, unknown>, status: number) {
   });
 }
 
-function account(request: NextRequest): StudioAccount {
+async function account(request: NextRequest): Promise<StudioAccount> {
   const resolved = resolveStudioAccount(
     request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
   );
@@ -69,6 +70,7 @@ function account(request: NextRequest): StudioAccount {
       error: "Connect a signed Studio account before syncing projects.",
     });
   }
+  await migrateMemberProjectIdentity(resolved.identity, resolved.legacyIdentity);
   return resolved;
 }
 
@@ -192,6 +194,7 @@ async function enforceLimit(
   const localProof = process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE === "1" && !process.env.VERCEL;
   const state = await consumeRequestLimit({
     identity: member.identity,
+    legacyIdentity: member.legacyIdentity,
     namespace: `member-project-${mode}`,
     max: localProof ? 5_000 : 600,
     windowMs: 60 * 60 * 1_000,
@@ -220,7 +223,7 @@ async function privateProjectLimit(member: StudioAccount): Promise<number> {
   const expectedPriceId = stripeProPriceId();
   if (!expectedPriceId || !billingStorageConfigured()) return MEMBER_PROJECT_LIMIT;
   try {
-    const billing = await readBillingAccount(member.identity);
+    const billing = await readStudioBillingAccount(member);
     return billingEntitlements(
       billingTierForAccount(billing, expectedPriceId),
     ).privateProjects;
@@ -253,7 +256,7 @@ function responseError(error: unknown): NextResponse {
 
 export async function GET(request: NextRequest) {
   try {
-    const member = account(request);
+    const member = await account(request);
     requireStorage();
     await enforceLimit(member, "read");
     const [projects, limit] = await Promise.all([
@@ -272,7 +275,7 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const member = account(request);
+    const member = await account(request);
     requireSameOrigin(request);
     requireStorage();
     await enforceLimit(member, "write");
@@ -315,7 +318,7 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const member = account(request);
+    const member = await account(request);
     requireSameOrigin(request);
     requireStorage();
     await enforceLimit(member, "write");

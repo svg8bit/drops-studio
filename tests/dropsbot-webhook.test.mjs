@@ -262,6 +262,103 @@ test("callback creation requires a signed project owner, same origin, and explic
   });
 });
 
+test("callback creation accepts the browser-visible forwarded origin", async () => {
+  await withLocalDropsBot(async () => {
+    const { POST } = await import("../app/api/dropsbot/webhooks/route.ts");
+    const { NextRequest } = await import("next/server.js");
+    const { account, cookie } = signedAccount(firstSubject);
+    seedProject(account.identity);
+
+    const response = await POST(new NextRequest(
+      "http://internal:3000/api/dropsbot/webhooks",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `${STUDIO_ACCOUNT_COOKIE}=${cookie}`,
+          host: "drops.example",
+          origin: "https://drops.example",
+          "x-forwarded-proto": "https",
+        },
+        body: JSON.stringify({ projectId, consent: true }),
+      },
+    ));
+
+    assert.equal(response.status, 201);
+  });
+});
+
+test("callback creation reports fixed storage capacity separately from transient storage failures", async () => {
+  await withLocalDropsBot(async () => {
+    const { account, cookie } = signedAccount(firstSubject);
+    seedProject(account.identity);
+    globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = {
+      schemaVersion: 1,
+      connections: Array.from({ length: 500 }, (_, index) => ({
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        ownerIdentity: index.toString(16).padStart(64, "0"),
+        projectId: `capacity-${index}`,
+        capabilityHash: "a".repeat(64),
+        createdAt: "2026-07-30T00:00:00.000Z",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        callbackReceivedAt: null,
+        lastEventReceivedAt: null,
+        lastEventContentHash: null,
+        events: [],
+      })),
+    };
+
+    const { response, payload } = await createConnection(cookie);
+    assert.equal(response.status, 507);
+    assert.equal(payload.code, "DROPSBOT_CALLBACK_CAPACITY_REACHED");
+    assert.equal(response.headers.get("retry-after"), "3600");
+  });
+});
+
+test("legacy callback ownership is found through the signed account and lazily migrated", async () => {
+  await withLocalDropsBot(async () => {
+    const owner = signedAccount(firstSubject);
+    seedProject(owner.account.legacyIdentity);
+    const {
+      createDropsBotWebhookConnection,
+    } = await import("../db/dropsbot-webhooks.ts");
+    const {
+      createDropsBotWebhookCapability,
+    } = await import("../lib/dropsbot-webhook.ts");
+    const capability = createDropsBotWebhookCapability();
+    const created = await createDropsBotWebhookConnection({
+      id: "11111111-2222-4333-8444-555555555555",
+      ownerIdentity: owner.account.legacyIdentity,
+      projectId,
+      capabilityHash: capability.hash,
+      createdAt: "2026-07-30T00:00:00.000Z",
+      consentedAt: "2026-07-30T00:00:00.000Z",
+    });
+    assert.equal(created.status, "created");
+
+    const { GET } = await import("../app/api/dropsbot/events/route.ts");
+    const { NextRequest } = await import("next/server.js");
+    const listed = await GET(new NextRequest(
+      `https://drops.example/api/dropsbot/events?projectId=${projectId}`,
+      { headers: { cookie: `${STUDIO_ACCOUNT_COOKIE}=${owner.cookie}` } },
+    ));
+    assert.equal(listed.status, 200);
+    assert.equal(
+      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__.connections[0].ownerIdentity,
+      owner.account.identity,
+    );
+
+    const rotated = await mutateConnection(owner.cookie, "PUT");
+    assert.equal(rotated.response.status, 200);
+    const revoked = await mutateConnection(owner.cookie, "DELETE");
+    assert.equal(revoked.response.status, 200);
+    assert.equal(
+      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__.connections.length,
+      0,
+    );
+  });
+});
+
 test("the signed owner explicitly rotates or revokes a callback and every old capability stops working", async () => {
   await withLocalDropsBot(async () => {
     const owner = signedAccount(firstSubject);
@@ -635,6 +732,149 @@ test("D1 duplicate callbacks report the latest stored connection evidence", asyn
       }
     });
   }
+});
+
+test("D1 migrates legacy global event ids to connection-scoped uniqueness without dropping rows or indexes", async () => {
+  const { acceptDropsBotWebhookEvent } = await import("../db/dropsbot-webhooks.ts");
+  const operations = [];
+  const migrationBatches = [];
+  const legacyEventSchema = `CREATE TABLE dropsbot_webhook_events (
+    id TEXT NOT NULL UNIQUE,
+    connection_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (connection_id, content_hash)
+  )`;
+  const db = {
+    prepare(sql) {
+      return {
+        sql,
+        bind() {
+          return this;
+        },
+        async run() {
+          operations.push(sql);
+          return { meta: { changes: 0 } };
+        },
+        async first() {
+          operations.push(sql);
+          if (/FROM sqlite_master/i.test(sql)) return { sql: legacyEventSchema };
+          return null;
+        },
+        async all() {
+          return { results: [] };
+        },
+      };
+    },
+    async batch(statements) {
+      const sql = statements.map((statement) => statement.sql);
+      migrationBatches.push(sql);
+      operations.push(...sql);
+      return statements.map(() => ({ meta: { changes: 0 } }));
+    },
+  };
+  const previousEnvironment = globalThis.__DROPS_STUDIO_ENV__;
+  const previousLocalStore = process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE;
+  const previousVercel = process.env.VERCEL;
+  globalThis.__DROPS_STUDIO_ENV__ = { DB: db };
+  delete process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE;
+  delete process.env.VERCEL;
+  try {
+    const result = await acceptDropsBotWebhookEvent({
+      connectionId: "11111111-2222-4333-8444-555555555555",
+      capabilityHash: "a".repeat(64),
+      event: {
+        id: "evt_migration_probe",
+        contentHash: "b".repeat(64),
+        receivedAt: "2026-07-30T00:00:00.000Z",
+        payload: { event: "migration.probe" },
+      },
+    });
+    assert.equal(result.status, "not-found");
+
+    const currentSchema = operations.find((sql) =>
+      /CREATE TABLE IF NOT EXISTS dropsbot_webhook_events/i.test(sql));
+    assert.match(currentSchema, /UNIQUE\s*\(\s*connection_id\s*,\s*id\s*\)/i);
+    assert.doesNotMatch(currentSchema, /id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i);
+
+    const migration = migrationBatches.find((batch) =>
+      batch.some((sql) => /ALTER TABLE .* RENAME TO dropsbot_webhook_events/i.test(sql)));
+    assert.ok(migration);
+    assert.ok(migration.some((sql) =>
+      /INSERT INTO [\s\S]*?\(id, connection_id, content_hash, received_at, payload_json\)[\s\S]*SELECT id, connection_id, content_hash, received_at, payload_json\s+FROM dropsbot_webhook_events/i.test(sql)));
+    assert.ok(migration.some((sql) => /DROP TABLE dropsbot_webhook_events/i.test(sql)));
+    const renamedAt = operations.findIndex((sql) =>
+      /ALTER TABLE .* RENAME TO dropsbot_webhook_events/i.test(sql));
+    const indexAt = operations.findIndex((sql) =>
+      /CREATE INDEX IF NOT EXISTS dropsbot_webhook_event_time_idx/i.test(sql));
+    assert.ok(renamedAt >= 0 && indexAt > renamedAt);
+  } finally {
+    globalThis.__DROPS_STUDIO_ENV__ = previousEnvironment;
+    if (previousLocalStore === undefined) delete process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE;
+    else process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE = previousLocalStore;
+    if (previousVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = previousVercel;
+  }
+});
+
+test("the Vercel Blob fallback retries a concurrent first-writer conflict", async () => {
+  const { createDropsBotWebhookConnection } = await import("../db/dropsbot-webhooks.ts");
+  let stored = null;
+  let etag = 0;
+  let puts = 0;
+  const competingConnection = {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    ownerIdentity: "b".repeat(64),
+    projectId: "competing-project",
+    capabilityHash: "c".repeat(64),
+    createdAt: "2026-07-30T00:00:00.000Z",
+    consentedAt: "2026-07-30T00:00:00.000Z",
+    callbackReceivedAt: null,
+    lastEventReceivedAt: null,
+    lastEventContentHash: null,
+    events: [],
+  };
+  const storage = {
+    async get() {
+      if (!stored) return null;
+      return {
+        statusCode: 200,
+        blob: { etag: `etag-${etag}` },
+        stream: new Response(stored).body,
+      };
+    },
+    async put(pathname, body, options) {
+      puts += 1;
+      if (puts === 1) {
+        assert.equal(options.allowOverwrite, false);
+        stored = JSON.stringify({ schemaVersion: 1, connections: [competingConnection] });
+        etag = 1;
+        throw new Error("Vercel Blob: blob already exists");
+      }
+      assert.equal(options.allowOverwrite, true);
+      assert.equal(options.ifMatch, "etag-1");
+      stored = String(body);
+      etag += 1;
+      return { pathname };
+    },
+  };
+
+  const created = await createDropsBotWebhookConnection({
+    id: "11111111-2222-4333-8444-555555555555",
+    ownerIdentity: "a".repeat(64),
+    projectId,
+    capabilityHash: "d".repeat(64),
+    createdAt: "2026-07-30T00:01:00.000Z",
+    consentedAt: "2026-07-30T00:01:00.000Z",
+  }, storage);
+
+  assert.equal(created.status, "created");
+  assert.equal(puts, 2);
+  assert.deepEqual(
+    JSON.parse(stored).connections.map((connection) => connection.projectId).sort(),
+    ["competing-project", projectId].sort(),
+  );
 });
 
 test("the Vercel Blob fallback keeps one private CAS-protected webhook state", async () => {

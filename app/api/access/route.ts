@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
     const quota = readiness.available
       ? await readRequestLimitState({
           identity: account.identity,
+          legacyIdentity: account.legacyIdentity,
           namespace: "member-ai-plan",
           max: memberLimit,
           windowMs: 24 * 60 * 60 * 1_000,

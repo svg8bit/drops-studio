@@ -30,7 +30,7 @@ export async function GET(request: NextRequest, context: Context) {
     if (!teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team workspace storage is not configured or unavailable." }, 503);
     }
-    const account = teamAccount(request);
+    const account = await teamAccount(request);
     const { workspaceId } = await context.params;
     const ownerIdentity = request.nextUrl.searchParams.get("owner") ?? account.identity;
     const workspace = await readTeamWorkspace(
@@ -59,12 +59,12 @@ export async function PATCH(request: NextRequest, context: Context) {
     if (!teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team workspace storage is not configured or unavailable." }, 503);
     }
-    const account = teamAccount(request);
+    const account = await teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request);
     const ownerIdentity = String(body.ownerIdentity ?? "");
     await proTeamEntitlements(ownerIdentity);
-    await enforceTeamRateLimit(account.identity, "team-workspace-update");
+    await enforceTeamRateLimit(account.identity, "team-workspace-update", account.legacyIdentity);
     const { workspaceId } = await context.params;
     const result = await updateTeamWorkspace({
       actorIdentity: account.identity,

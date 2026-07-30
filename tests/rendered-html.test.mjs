@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
+const wildcardParentPostMessage =
+  /window\.parent\.postMessage\(.*?,\s*["']\*["']\s*\)/s;
+
 test("Next production build emits the complete Drops Studio builder HTML", async () => {
   const html = await readFile(
     new URL("../.next/server/app/index.html", import.meta.url),
@@ -54,7 +57,7 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(compiler, /trustedParentMessage/);
   assert.match(compiler, /postParent/);
   assert.match(compiler, /ancestorOrigins/);
-  assert.doesNotMatch(compiler, /window\.parent\.postMessage\([^\n]+,"\*"\)/);
+  assert.doesNotMatch(compiler, wildcardParentPostMessage);
   assert.match(compiler, /originalText/);
   assert.match(compiler, /editableOwnerKey/);
   assert.match(component, /sessionStorage/);
@@ -92,4 +95,11 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(packageJson, /"name": "drops-studio"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
+});
+
+test("wildcard parent postMessage guard detects multiline calls", () => {
+  assert.match(`window.parent.postMessage(
+    { type: "unsafe" },
+    "*"
+  )`, wildcardParentPostMessage);
 });

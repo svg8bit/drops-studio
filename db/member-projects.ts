@@ -188,6 +188,86 @@ async function writeBlobEnvelope(
   }
 }
 
+function mergedIdentityEnvelope(
+  primary: MemberProjectEnvelope,
+  legacy: MemberProjectEnvelope,
+): MemberProjectEnvelope {
+  const projects = new Map<string, MemberProjectRecord>();
+  for (const project of [...legacy.projects, ...primary.projects]) {
+    const current = projects.get(project.id);
+    if (
+      !current
+      || project.revision > current.revision
+      || (project.revision === current.revision
+        && Date.parse(project.updatedAt) > Date.parse(current.updatedAt))
+    ) {
+      projects.set(project.id, structuredClone(project));
+    }
+  }
+  if (projects.size > MEMBER_PROJECT_STORAGE_LIMIT) {
+    throw new MemberProjectStorageUnavailableError(
+      "Member project identity migration exceeds the safe project capacity.",
+    );
+  }
+  const envelope: MemberProjectEnvelope = {
+    schemaVersion: 1,
+    revision: Math.max(primary.revision, legacy.revision) + 1,
+    updatedAt: new Date().toISOString(),
+    projects: [...projects.values()].sort((left, right) =>
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+  };
+  if (!serializedEnvelope(envelope)) {
+    throw new MemberProjectStorageUnavailableError(
+      "Member project identity migration exceeds the safe storage capacity.",
+    );
+  }
+  return envelope;
+}
+
+/** Moves pre-pepper projects to the HMAC owner and empties the old key. */
+export async function migrateMemberProjectIdentity(
+  identity: string,
+  legacyIdentity: string,
+  storageOverride?: BlobStorage,
+): Promise<void> {
+  validIdentity(identity);
+  validIdentity(legacyIdentity);
+  if (identity === legacyIdentity) return;
+  if (!storageOverride && localStoreEnabled()) {
+    const store = localStore();
+    const legacy = store.get(legacyIdentity);
+    if (!legacy) return;
+    store.set(
+      identity,
+      mergedIdentityEnvelope(store.get(identity) ?? emptyEnvelope(), legacy),
+    );
+    store.delete(legacyIdentity);
+    return;
+  }
+  if (!storageOverride && !durableBlobConfigured()) {
+    throw new MemberProjectStorageUnavailableError();
+  }
+  const storage = await blobClient(storageOverride);
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const [primary, legacy] = await Promise.all([
+      readBlobEnvelope(identity, storage),
+      readBlobEnvelope(legacyIdentity, storage),
+    ]);
+    if (legacy.envelope.projects.length === 0) return;
+    const merged = mergedIdentityEnvelope(primary.envelope, legacy.envelope);
+    if (await writeBlobEnvelope(identity, primary, merged, storage) !== "saved") continue;
+    const tombstone: MemberProjectEnvelope = {
+      ...emptyEnvelope(),
+      revision: legacy.envelope.revision + 1,
+      updatedAt: merged.updatedAt,
+    };
+    if (await writeBlobEnvelope(legacyIdentity, legacy, tombstone, storage) === "saved") return;
+  }
+  throw new MemberProjectStorageUnavailableError(
+    "Member project identity migration stayed busy after safe retries.",
+  );
+}
+
 function nextEnvelope(
   current: MemberProjectEnvelope,
   projects: MemberProjectRecord[],

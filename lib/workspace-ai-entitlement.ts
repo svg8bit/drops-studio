@@ -7,6 +7,7 @@ import {
   MEMBER_DAILY_LIMIT,
   MEMBER_USAGE_COOKIE,
   platformAiReadiness,
+  readStudioBillingAccount,
   resolveAccountCookieSecret,
   resolveGuestAccess,
   resolveStudioAccount,
@@ -21,7 +22,6 @@ import {
 } from "./billing.ts";
 import {
   billingStorageConfigured,
-  readBillingAccount,
 } from "../db/billing.ts";
 import {
   consumeRequestLimitState,
@@ -54,6 +54,7 @@ export interface WorkspaceAiQuotaDependencies {
   createGuestIdentity?: () => string;
   consumeQuota?: (input: {
     identity: string | null;
+    legacyIdentity?: string | null;
     namespace: string;
     max: number;
     windowMs: number;
@@ -148,10 +149,11 @@ async function reserveMemberQuota(
   const expectedPrice = stripeProPriceId(env);
   const storageConfigured =
     dependencies.billingStorageConfigured ?? billingStorageConfigured;
-  const readBilling = dependencies.readBillingAccount ?? readBillingAccount;
   if (expectedPrice && storageConfigured()) {
     try {
-      const billing = await readBilling(account.identity);
+      const billing = dependencies.readBillingAccount
+        ? await dependencies.readBillingAccount(account.identity)
+        : await readStudioBillingAccount(account);
       const now = (dependencies.now ?? (() => new Date()))();
       tier = billingTierForAccount(billing, expectedPrice, now);
       limit = memberPlatformBuildLimit(billing, expectedPrice, now);
@@ -163,6 +165,7 @@ async function reserveMemberQuota(
   const consumeQuota = dependencies.consumeQuota ?? consumeRequestLimitState;
   const state = await consumeQuota({
     identity: account.identity,
+    legacyIdentity: account.legacyIdentity,
     namespace: purpose === "generation"
       ? "member-ai-plan"
       : "member-sandbox-execution",

@@ -21,12 +21,23 @@ const CONNECTION_SCHEMA = `CREATE TABLE IF NOT EXISTS dropsbot_webhook_connectio
   UNIQUE (owner_identity, project_id)
 )`;
 const EVENT_SCHEMA = `CREATE TABLE IF NOT EXISTS dropsbot_webhook_events (
-  id TEXT NOT NULL UNIQUE,
+  id TEXT NOT NULL,
   connection_id TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   received_at TEXT NOT NULL,
   payload_json TEXT NOT NULL,
-  PRIMARY KEY (connection_id, content_hash)
+  PRIMARY KEY (connection_id, content_hash),
+  UNIQUE (connection_id, id)
+)`;
+const EVENT_MIGRATION_TABLE = "dropsbot_webhook_events_connection_scoped";
+const EVENT_MIGRATION_SCHEMA = `CREATE TABLE ${EVENT_MIGRATION_TABLE} (
+  id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY (connection_id, content_hash),
+  UNIQUE (connection_id, id)
 )`;
 const OWNER_INDEX = "CREATE INDEX IF NOT EXISTS dropsbot_webhook_owner_project_idx ON dropsbot_webhook_connections (owner_identity, project_id)";
 const EVENT_INDEX = "CREATE INDEX IF NOT EXISTS dropsbot_webhook_event_time_idx ON dropsbot_webhook_events (connection_id, received_at DESC)";
@@ -93,7 +104,7 @@ export interface DropsBotWebhookProject {
 
 export type DropsBotWebhookCreateResult =
   | { status: "created"; project: DropsBotWebhookProject }
-  | { status: "exists" };
+  | { status: "exists"; ownerMigrated?: true };
 
 export type DropsBotWebhookRotateResult =
   | { status: "rotated"; project: DropsBotWebhookProject }
@@ -162,6 +173,16 @@ function validIdentity(value: string): void {
   if (!/^[a-f0-9]{64}$/.test(value)) {
     throw new Error("Drops Bot webhook storage requires a signed account identity.");
   }
+}
+
+function legacyIdentityCandidate(
+  ownerIdentity: string,
+  legacyOwnerIdentity?: string,
+): string | null {
+  validIdentity(ownerIdentity);
+  if (!legacyOwnerIdentity || legacyOwnerIdentity === ownerIdentity) return null;
+  validIdentity(legacyOwnerIdentity);
+  return legacyOwnerIdentity;
 }
 
 function validProjectId(value: string): void {
@@ -400,12 +421,99 @@ function publicProject(connection: InternalConnection): DropsBotWebhookProject {
   };
 }
 
+function claimOwnedConnectionInState(
+  state: DropsBotBlobState,
+  ownerIdentity: string,
+  projectId: string,
+  legacyOwnerIdentity?: string,
+): { connection: InternalConnection; migrated: boolean } | null {
+  const primary = state.connections.find((item) =>
+    item.ownerIdentity === ownerIdentity && item.projectId === projectId);
+  if (primary) return { connection: primary, migrated: false };
+  const legacy = legacyOwnerIdentity
+    ? state.connections.find((item) =>
+        item.ownerIdentity === legacyOwnerIdentity && item.projectId === projectId)
+    : undefined;
+  if (!legacy) return null;
+  legacy.ownerIdentity = ownerIdentity;
+  return { connection: legacy, migrated: true };
+}
+
+const D1_CONNECTION_COLUMNS = `id, owner_identity, project_id, capability_hash,
+  created_at, consented_at, callback_received_at, last_event_received_at,
+  last_event_content_hash`;
+
+async function claimOwnedD1Connection(
+  db: D1Database,
+  ownerIdentity: string,
+  projectId: string,
+  legacyOwnerIdentity?: string,
+): Promise<Record<string, unknown> | null> {
+  const primary = await db.prepare(
+    `SELECT ${D1_CONNECTION_COLUMNS} FROM dropsbot_webhook_connections
+    WHERE owner_identity = ? AND project_id = ? LIMIT 1`,
+  ).bind(ownerIdentity, projectId).first<Record<string, unknown>>();
+  if (primary || !legacyOwnerIdentity) return primary ?? null;
+  const legacy = await db.prepare(
+    `SELECT ${D1_CONNECTION_COLUMNS} FROM dropsbot_webhook_connections
+    WHERE owner_identity = ? AND project_id = ? LIMIT 1`,
+  ).bind(legacyOwnerIdentity, projectId).first<Record<string, unknown>>();
+  if (!legacy) return null;
+  const connectionId = String(legacy.id);
+  const migrated = await db.prepare(
+    `UPDATE dropsbot_webhook_connections SET owner_identity = ?
+    WHERE id = ? AND owner_identity = ? AND project_id = ?
+    AND NOT EXISTS (
+      SELECT 1 FROM dropsbot_webhook_connections
+      WHERE owner_identity = ? AND project_id = ? AND id <> ?
+    )`,
+  ).bind(
+    ownerIdentity,
+    connectionId,
+    legacyOwnerIdentity,
+    projectId,
+    ownerIdentity,
+    projectId,
+    connectionId,
+  ).run();
+  if (Number(migrated.meta?.changes ?? 0) === 1) {
+    return { ...legacy, owner_identity: ownerIdentity };
+  }
+  return await db.prepare(
+    `SELECT ${D1_CONNECTION_COLUMNS} FROM dropsbot_webhook_connections
+    WHERE owner_identity = ? AND project_id = ? LIMIT 1`,
+  ).bind(ownerIdentity, projectId).first<Record<string, unknown>>() ?? legacy;
+}
+
 async function ensureDropsBotTables(): Promise<D1Database | null> {
   const db = database();
   if (!db) return null;
   await db.prepare(CONNECTION_SCHEMA).run();
   await db.prepare(EVENT_SCHEMA).run();
   await db.prepare(OWNER_INDEX).run();
+  const storedEventSchema = await db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dropsbot_webhook_events' LIMIT 1",
+  ).first<{ sql: string | null }>();
+  const eventSql = String(storedEventSchema?.sql ?? "");
+  if (
+    /\bid\s+TEXT\s+NOT\s+NULL\s+UNIQUE\b/i.test(eventSql)
+    && !/UNIQUE\s*\(\s*connection_id\s*,\s*id\s*\)/i.test(eventSql)
+  ) {
+    await db.batch([
+      db.prepare(`DROP TABLE IF EXISTS ${EVENT_MIGRATION_TABLE}`),
+      db.prepare(EVENT_MIGRATION_SCHEMA),
+      db.prepare(
+        `INSERT INTO ${EVENT_MIGRATION_TABLE}
+        (id, connection_id, content_hash, received_at, payload_json)
+        SELECT id, connection_id, content_hash, received_at, payload_json
+        FROM dropsbot_webhook_events`,
+      ),
+      db.prepare("DROP TABLE dropsbot_webhook_events"),
+      db.prepare(
+        `ALTER TABLE ${EVENT_MIGRATION_TABLE} RENAME TO dropsbot_webhook_events`,
+      ),
+    ]);
+  }
   await db.prepare(EVENT_INDEX).run();
   return db;
 }
@@ -456,7 +564,15 @@ async function mutateBlobState<T>(
       await writeBlobState(storage, snapshot, next);
       return result;
     } catch (error) {
-      if (!(error instanceof BlobPreconditionFailedError) || attempt === 7) throw error;
+      let retryable = error instanceof BlobPreconditionFailedError;
+      if (!retryable && snapshot.etag === null) {
+        try {
+          retryable = (await readBlobState(storage)).etag !== null;
+        } catch {
+          retryable = false;
+        }
+      }
+      if (!retryable || attempt === 7) throw error;
     }
   }
   throw new DropsBotWebhookStorageUnavailableError("Drops Bot webhook storage stayed busy after safe retries.");
@@ -489,13 +605,19 @@ function newConnection(input: {
 function createInState(
   state: DropsBotBlobState,
   connection: InternalConnection,
+  legacyOwnerIdentity?: string,
 ): DropsBotWebhookCreateResult {
-  if (
-    state.connections.some((item) => item.id === connection.id)
-    || state.connections.some((item) =>
-      item.ownerIdentity === connection.ownerIdentity && item.projectId === connection.projectId)
-  ) {
-    return { status: "exists" };
+  if (state.connections.some((item) => item.id === connection.id)) return { status: "exists" };
+  const owned = claimOwnedConnectionInState(
+    state,
+    connection.ownerIdentity,
+    connection.projectId,
+    legacyOwnerIdentity,
+  );
+  if (owned) {
+    return owned.migrated
+      ? { status: "exists", ownerMigrated: true }
+      : { status: "exists" };
   }
   if (state.connections.length >= MAX_CONNECTIONS) throw new DropsBotWebhookCapacityError();
   state.connections.push(connection);
@@ -509,11 +631,17 @@ function rotateInState(
     projectId: string;
     capabilityHash: string;
     consentedAt: string;
+    legacyOwnerIdentity?: string;
   },
 ): DropsBotWebhookRotateResult {
-  const connection = state.connections.find((item) =>
-    item.ownerIdentity === input.ownerIdentity && item.projectId === input.projectId);
-  if (!connection) return { status: "not-found" };
+  const owned = claimOwnedConnectionInState(
+    state,
+    input.ownerIdentity,
+    input.projectId,
+    input.legacyOwnerIdentity,
+  );
+  if (!owned) return { status: "not-found" };
+  const { connection } = owned;
   connection.capabilityHash = input.capabilityHash;
   connection.consentedAt = input.consentedAt;
   connection.callbackReceivedAt = null;
@@ -526,9 +654,17 @@ function revokeInState(
   state: DropsBotBlobState,
   ownerIdentity: string,
   projectId: string,
+  legacyOwnerIdentity?: string,
 ): DropsBotWebhookRevokeResult {
-  const connectionIndex = state.connections.findIndex((item) =>
-    item.ownerIdentity === ownerIdentity && item.projectId === projectId);
+  const owned = claimOwnedConnectionInState(
+    state,
+    ownerIdentity,
+    projectId,
+    legacyOwnerIdentity,
+  );
+  const connectionIndex = owned
+    ? state.connections.indexOf(owned.connection)
+    : -1;
   if (connectionIndex < 0) return { status: "not-found" };
   state.connections.splice(connectionIndex, 1);
   return { status: "revoked" };
@@ -604,18 +740,25 @@ export async function createDropsBotWebhookConnection(
     capabilityHash: string;
     createdAt: string;
     consentedAt: string;
+    legacyOwnerIdentity?: string;
   },
   storageOverride?: BlobStorage,
 ): Promise<DropsBotWebhookCreateResult> {
-  const connection = newConnection(input);
+  const { legacyOwnerIdentity: legacyInput, ...connectionInput } = input;
+  const legacyOwnerIdentity = legacyIdentityCandidate(
+    connectionInput.ownerIdentity,
+    legacyInput,
+  ) ?? undefined;
+  const connection = newConnection(connectionInput);
   if (storageOverride) {
-    return mutateBlobState(storageOverride, (state) => createInState(state, connection));
+    return mutateBlobState(storageOverride, (state) =>
+      createInState(state, connection, legacyOwnerIdentity));
   }
   const local = localState();
   if (local) {
     const next = structuredClone(local);
-    const result = createInState(next, connection);
-    if (result.status === "created") {
+    const result = createInState(next, connection, legacyOwnerIdentity);
+    if (result.status === "created" || result.ownerMigrated) {
       serializedState(next);
       globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
     }
@@ -623,9 +766,12 @@ export async function createDropsBotWebhookConnection(
   }
   const db = await ensureDropsBotTables();
   if (db) {
-    const existing = await db.prepare(
-      "SELECT id FROM dropsbot_webhook_connections WHERE owner_identity = ? AND project_id = ? LIMIT 1",
-    ).bind(connection.ownerIdentity, connection.projectId).first();
+    const existing = await claimOwnedD1Connection(
+      db,
+      connection.ownerIdentity,
+      connection.projectId,
+      legacyOwnerIdentity,
+    );
     if (existing) return { status: "exists" };
     const inserted = await db.prepare(
       `INSERT OR IGNORE INTO dropsbot_webhook_connections
@@ -644,7 +790,8 @@ export async function createDropsBotWebhookConnection(
   }
   if (blobAvailable()) {
     const storage = await blobClient();
-    return mutateBlobState(storage, (state) => createInState(state, connection));
+    return mutateBlobState(storage, (state) =>
+      createInState(state, connection, legacyOwnerIdentity));
   }
   throw new DropsBotWebhookStorageUnavailableError();
 }
@@ -655,10 +802,15 @@ export async function rotateDropsBotWebhookConnection(
     projectId: string;
     capabilityHash: string;
     consentedAt: string;
+    legacyOwnerIdentity?: string;
   },
   storageOverride?: BlobStorage,
 ): Promise<DropsBotWebhookRotateResult> {
   validIdentity(input.ownerIdentity);
+  const legacyOwnerIdentity = legacyIdentityCandidate(
+    input.ownerIdentity,
+    input.legacyOwnerIdentity,
+  ) ?? undefined;
   validProjectId(input.projectId);
   if (!validDropsBotWebhookHash(input.capabilityHash)) {
     throw new Error("Drops Bot webhook capability hash is invalid.");
@@ -667,12 +819,13 @@ export async function rotateDropsBotWebhookConnection(
     throw new Error("Drops Bot webhook consent timestamp is invalid.");
   }
   if (storageOverride) {
-    return mutateBlobState(storageOverride, (state) => rotateInState(state, input));
+    return mutateBlobState(storageOverride, (state) =>
+      rotateInState(state, { ...input, legacyOwnerIdentity }));
   }
   const local = localState();
   if (local) {
     const next = structuredClone(local);
-    const result = rotateInState(next, input);
+    const result = rotateInState(next, { ...input, legacyOwnerIdentity });
     if (result.status === "rotated") {
       serializedState(next);
       globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
@@ -681,21 +834,31 @@ export async function rotateDropsBotWebhookConnection(
   }
   const db = await ensureDropsBotTables();
   if (db) {
+    const owned = await claimOwnedD1Connection(
+      db,
+      input.ownerIdentity,
+      input.projectId,
+      legacyOwnerIdentity,
+    );
+    if (!owned) return { status: "not-found" };
     const updated = await db.prepare(
       `UPDATE dropsbot_webhook_connections
       SET capability_hash = ?, consented_at = ?, callback_received_at = NULL,
       last_event_received_at = NULL, last_event_content_hash = NULL
-      WHERE owner_identity = ? AND project_id = ?`,
+      WHERE id = ? AND owner_identity = ? AND project_id = ?`,
     ).bind(
       input.capabilityHash,
       input.consentedAt,
-      input.ownerIdentity,
+      String(owned.id),
+      String(owned.owner_identity),
       input.projectId,
     ).run();
     if (Number(updated.meta?.changes ?? 0) < 1) return { status: "not-found" };
     const project = await listDropsBotWebhookProject(
       input.ownerIdentity,
       input.projectId,
+      undefined,
+      legacyOwnerIdentity,
     );
     if (!project) throw new DropsBotWebhookStorageUnavailableError();
     return { status: "rotated", project };
@@ -703,7 +866,7 @@ export async function rotateDropsBotWebhookConnection(
   if (blobAvailable()) {
     return mutateBlobState(
       await blobClient(),
-      (state) => rotateInState(state, input),
+      (state) => rotateInState(state, { ...input, legacyOwnerIdentity }),
     );
   }
   throw new DropsBotWebhookStorageUnavailableError();
@@ -713,19 +876,23 @@ export async function revokeDropsBotWebhookConnection(
   ownerIdentity: string,
   projectId: string,
   storageOverride?: BlobStorage,
+  legacyOwnerIdentityInput?: string,
 ): Promise<DropsBotWebhookRevokeResult> {
-  validIdentity(ownerIdentity);
+  const legacyOwnerIdentity = legacyIdentityCandidate(
+    ownerIdentity,
+    legacyOwnerIdentityInput,
+  ) ?? undefined;
   validProjectId(projectId);
   if (storageOverride) {
     return mutateBlobState(
       storageOverride,
-      (state) => revokeInState(state, ownerIdentity, projectId),
+      (state) => revokeInState(state, ownerIdentity, projectId, legacyOwnerIdentity),
     );
   }
   const local = localState();
   if (local) {
     const next = structuredClone(local);
-    const result = revokeInState(next, ownerIdentity, projectId);
+    const result = revokeInState(next, ownerIdentity, projectId, legacyOwnerIdentity);
     if (result.status === "revoked") {
       serializedState(next);
       globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
@@ -734,9 +901,12 @@ export async function revokeDropsBotWebhookConnection(
   }
   const db = await ensureDropsBotTables();
   if (db) {
-    const current = await db.prepare(
-      "SELECT id FROM dropsbot_webhook_connections WHERE owner_identity = ? AND project_id = ? LIMIT 1",
-    ).bind(ownerIdentity, projectId).first<{ id: string }>();
+    const current = await claimOwnedD1Connection(
+      db,
+      ownerIdentity,
+      projectId,
+      legacyOwnerIdentity,
+    );
     if (!current) return { status: "not-found" };
     const connectionId = String(current.id);
     await db.batch([
@@ -745,14 +915,14 @@ export async function revokeDropsBotWebhookConnection(
       ).bind(connectionId),
       db.prepare(
         "DELETE FROM dropsbot_webhook_connections WHERE id = ? AND owner_identity = ? AND project_id = ?",
-      ).bind(connectionId, ownerIdentity, projectId),
+      ).bind(connectionId, String(current.owner_identity), projectId),
     ]);
     return { status: "revoked" };
   }
   if (blobAvailable()) {
     return mutateBlobState(
       await blobClient(),
-      (state) => revokeInState(state, ownerIdentity, projectId),
+      (state) => revokeInState(state, ownerIdentity, projectId, legacyOwnerIdentity),
     );
   }
   throw new DropsBotWebhookStorageUnavailableError();
@@ -885,28 +1055,55 @@ export async function listDropsBotWebhookProject(
   ownerIdentity: string,
   projectId: string,
   storageOverride?: BlobStorage,
+  legacyOwnerIdentityInput?: string,
 ): Promise<DropsBotWebhookProject | null> {
-  validIdentity(ownerIdentity);
+  const legacyOwnerIdentity = legacyIdentityCandidate(
+    ownerIdentity,
+    legacyOwnerIdentityInput,
+  ) ?? undefined;
   validProjectId(projectId);
   if (storageOverride) {
     const snapshot = await readBlobState(storageOverride);
-    const connection = snapshot.state.connections.find((item) =>
+    const primary = snapshot.state.connections.find((item) =>
       item.ownerIdentity === ownerIdentity && item.projectId === projectId);
-    return connection ? publicProject(connection) : null;
+    if (primary) return publicProject(primary);
+    if (!legacyOwnerIdentity) return null;
+    return mutateBlobState(storageOverride, (state) => {
+      const owned = claimOwnedConnectionInState(
+        state,
+        ownerIdentity,
+        projectId,
+        legacyOwnerIdentity,
+      );
+      return owned ? publicProject(owned.connection) : null;
+    });
   }
   const local = localState();
   if (local) {
-    const connection = local.connections.find((item) =>
+    const primary = local.connections.find((item) =>
       item.ownerIdentity === ownerIdentity && item.projectId === projectId);
-    return connection ? publicProject(connection) : null;
+    if (primary) return publicProject(primary);
+    if (!legacyOwnerIdentity) return null;
+    const next = structuredClone(local);
+    const owned = claimOwnedConnectionInState(
+      next,
+      ownerIdentity,
+      projectId,
+      legacyOwnerIdentity,
+    );
+    if (!owned) return null;
+    serializedState(next);
+    globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
+    return publicProject(owned.connection);
   }
   const db = await ensureDropsBotTables();
   if (db) {
-    const row = await db.prepare(
-      `SELECT id, owner_identity, project_id, capability_hash, created_at, consented_at,
-      callback_received_at, last_event_received_at, last_event_content_hash
-      FROM dropsbot_webhook_connections WHERE owner_identity = ? AND project_id = ? LIMIT 1`,
-    ).bind(ownerIdentity, projectId).first<Record<string, unknown>>();
+    const row = await claimOwnedD1Connection(
+      db,
+      ownerIdentity,
+      projectId,
+      legacyOwnerIdentity,
+    );
     if (!row) return null;
     const result = await db.prepare(
       `SELECT id, content_hash, received_at, payload_json FROM dropsbot_webhook_events
@@ -916,10 +1113,21 @@ export async function listDropsBotWebhookProject(
     return publicProject(connection);
   }
   if (blobAvailable()) {
-    const snapshot = await readBlobState(await blobClient());
-    const connection = snapshot.state.connections.find((item) =>
+    const storage = await blobClient();
+    const snapshot = await readBlobState(storage);
+    const primary = snapshot.state.connections.find((item) =>
       item.ownerIdentity === ownerIdentity && item.projectId === projectId);
-    return connection ? publicProject(connection) : null;
+    if (primary) return publicProject(primary);
+    if (!legacyOwnerIdentity) return null;
+    return mutateBlobState(storage, (state) => {
+      const owned = claimOwnedConnectionInState(
+        state,
+        ownerIdentity,
+        projectId,
+        legacyOwnerIdentity,
+      );
+      return owned ? publicProject(owned.connection) : null;
+    });
   }
   throw new DropsBotWebhookStorageUnavailableError();
 }

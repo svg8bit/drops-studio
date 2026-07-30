@@ -87,7 +87,7 @@ export function bindPublishedRuntimeHtml(
   ));
   rebound = rebound.replace(
     STUDIO_TELEGRAM_URL_ASSIGNMENT,
-    `var studioTelegramUrl=${telegramUrl};`,
+    () => `var studioTelegramUrl=${telegramUrl};`,
   );
   return rebound;
 }

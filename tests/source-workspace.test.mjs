@@ -100,6 +100,22 @@ test("edited runtime binding preserves edits while replacing every Studio servic
   });
 });
 
+test("edited runtime binding treats Telegram URL replacement markers literally", () => {
+  const { spec, html } = project();
+  const publicSpec = {
+    ...spec,
+    slug: "public-radio-replacement-proof",
+    dataEndpoint: "https://drops$&.example/api/public-data",
+  };
+  const rebound = bindPublishedRuntimeHtml(html, publicSpec);
+
+  assert.match(
+    rebound,
+    /var studioTelegramUrl="https:\/\/drops\$&\.example\/\?connections=1&provider=dropsbot&flow=telegram-channel&project=public-radio-replacement-proof";/,
+  );
+  assert.doesNotMatch(rebound, /var studioTelegramUrl=https:\/\/dropsvar studioTelegramUrl=/);
+});
+
 test("edited runtime binding fails closed when a compiler-owned bridge value is missing", () => {
   const { spec, html } = project();
   const publicSpec = { ...spec, slug: "public-radio-safe" };

@@ -8,6 +8,7 @@ import {
 import {
   listMemberProjects,
   MemberProjectStorageUnavailableError,
+  migrateMemberProjectIdentity,
 } from "../../../../db/member-projects.ts";
 import {
   resolveStudioAccount,
@@ -59,11 +60,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!dropsBotWebhookStorageConfigured()) {
       throw new DropsBotWebhookStorageUnavailableError();
     }
+    await migrateMemberProjectIdentity(member.identity, member.legacyIdentity);
     const projects = await listMemberProjects(member.identity);
     if (!projects.some((project) => project.id === requestedProjectId)) {
       return json({ error: "Signed project not found." }, 404);
     }
-    const project = await listDropsBotWebhookProject(member.identity, requestedProjectId);
+    const project = await listDropsBotWebhookProject(
+      member.identity,
+      requestedProjectId,
+      undefined,
+      member.legacyIdentity,
+    );
     if (!project) {
       return json({ error: "Drops Bot callback not found for this project." }, 404);
     }

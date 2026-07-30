@@ -13,6 +13,7 @@ import {
   BillingStorageUnavailableError,
 } from "@/db/billing";
 import {
+  readStudioBillingAccount,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "@/lib/access-tier";
@@ -49,6 +50,7 @@ export async function POST(request: NextRequest) {
   if (!sameOrigin(request)) return json("Cross-origin billing request rejected.", 403);
   const limit = await consumeRequestLimit({
     identity: account.identity,
+    legacyIdentity: account.legacyIdentity,
     namespace: "billing-portal",
     max: 20,
     windowMs: 60 * 60 * 1_000,
@@ -56,6 +58,7 @@ export async function POST(request: NextRequest) {
   if (limit === "limited") return json("Too many portal requests. Try again later.", 429);
   if (limit === "unavailable") return json("Billing request protection is unavailable.", 503);
   try {
+    await readStudioBillingAccount(account);
     const receipt = await createCustomerPortal(
       { accountIdentity: account.identity, origin: request.nextUrl.origin },
       {

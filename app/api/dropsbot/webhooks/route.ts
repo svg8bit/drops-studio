@@ -12,6 +12,7 @@ import {
 import {
   listMemberProjects,
   MemberProjectStorageUnavailableError,
+  migrateMemberProjectIdentity,
 } from "../../../../db/member-projects.ts";
 import {
   resolveStudioAccount,
@@ -77,7 +78,20 @@ function requireSameOrigin(request: NextRequest): void {
     });
   }
   try {
-    if (new URL(origin).origin !== request.nextUrl.origin) throw new Error();
+    const originUrl = new URL(origin);
+    const host = request.headers.get("host")?.split(",")[0]?.trim();
+    const protocol = request.headers
+      .get("x-forwarded-proto")
+      ?.split(",")[0]
+      ?.trim()
+      .replace(/:$/, "") || request.nextUrl.protocol.replace(/:$/, "");
+    const browserVisibleOrigin = host ? `${protocol}://${host}` : null;
+    if (
+      originUrl.origin !== request.nextUrl.origin
+      && originUrl.origin !== browserVisibleOrigin
+    ) {
+      throw new Error();
+    }
   } catch {
     throw new DropsBotWebhookResponseError(403, {
       error: "Cross-origin Drops Bot callback mutation rejected.",
@@ -141,6 +155,7 @@ async function requireOwnedProject(
   input: Record<string, unknown>,
 ): Promise<string> {
   const ownedProjectId = projectId(input.projectId);
+  await migrateMemberProjectIdentity(member.identity, member.legacyIdentity);
   const projects = await listMemberProjects(member.identity);
   if (!projects.some((project) => project.id === ownedProjectId)) {
     throw new DropsBotWebhookResponseError(404, {
@@ -177,9 +192,17 @@ function responseError(error: unknown): NextResponse {
   if (error instanceof DropsBotWebhookValidationError) {
     return json({ code: error.code, error: error.message }, error.status);
   }
+  if (error instanceof DropsBotWebhookCapacityError) {
+    return NextResponse.json({
+      code: "DROPSBOT_CALLBACK_CAPACITY_REACHED",
+      error: error.message,
+    }, {
+      status: 507,
+      headers: { ...NO_STORE_HEADERS, "retry-after": "3600" },
+    });
+  }
   if (
-    error instanceof DropsBotWebhookCapacityError
-    || error instanceof DropsBotWebhookStorageUnavailableError
+    error instanceof DropsBotWebhookStorageUnavailableError
     || error instanceof MemberProjectStorageUnavailableError
   ) {
     return json({
@@ -213,6 +236,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       capabilityHash: capability.hash,
       createdAt,
       consentedAt: createdAt,
+      legacyOwnerIdentity: member.legacyIdentity,
     });
     if (result.status === "exists") {
       throw new DropsBotWebhookResponseError(409, {
@@ -251,6 +275,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
       projectId: ownedProjectId,
       capabilityHash: capability.hash,
       consentedAt: rotatedAt,
+      legacyOwnerIdentity: member.legacyIdentity,
     });
     if (result.status === "not-found") {
       throw new DropsBotWebhookResponseError(404, {
@@ -287,6 +312,8 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     const result = await revokeDropsBotWebhookConnection(
       member.identity,
       ownedProjectId,
+      undefined,
+      member.legacyIdentity,
     );
     if (result.status === "not-found") {
       throw new DropsBotWebhookResponseError(404, {
