@@ -2,7 +2,6 @@ import { NextRequest } from "next/server.js";
 
 import {
   acceptTeamWorkspaceInvite,
-  resolveTeamWorkspaceIdentity,
   teamWorkspaceStorageConfigured,
   TeamWorkspaceStorageUnavailableError,
 } from "@/db/team-workspaces";
@@ -30,7 +29,7 @@ export async function POST(request: NextRequest) {
     if (!secret || !teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team invite acceptance is not configured or unavailable." }, 503);
     }
-    const account = await teamAccount(request);
+    const account = teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request, 8 * 1_024);
     const capability = String(body.capability ?? "");
@@ -38,9 +37,8 @@ export async function POST(request: NextRequest) {
     if (!invite) {
       throw new TeamWorkspaceValidationError("Team invite is invalid or expired.");
     }
-    const ownerIdentity = await resolveTeamWorkspaceIdentity(invite.ownerIdentity);
-    const entitlements = await proTeamEntitlements(ownerIdentity);
-    await enforceTeamRateLimit(account.identity, "team-workspace-invite-accept", account.legacyIdentity);
+    const entitlements = await proTeamEntitlements(invite.ownerIdentity);
+    await enforceTeamRateLimit(account.identity, "team-workspace-invite-accept");
     const result = await acceptTeamWorkspaceInvite({
       capability,
       memberIdentity: account.identity,

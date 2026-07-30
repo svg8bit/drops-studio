@@ -26,12 +26,12 @@ export async function PATCH(request: NextRequest, context: Context) {
     if (!teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team workspace storage is not configured or unavailable." }, 503);
     }
-    const account = await teamAccount(request);
+    const account = teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request);
     const ownerIdentity = String(body.ownerIdentity ?? "");
     await proTeamEntitlements(ownerIdentity);
-    await enforceTeamRateLimit(account.identity, "team-workspace-member-role", account.legacyIdentity);
+    await enforceTeamRateLimit(account.identity, "team-workspace-member-role");
     const { workspaceId } = await context.params;
     const result = await changeTeamMemberRole({
       actorIdentity: account.identity,

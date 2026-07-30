@@ -5,7 +5,7 @@ import {
 } from "./billing.ts";
 import {
   billingStorageConfigured,
-  readBillingAccountWithIdentityMigration,
+  readBillingAccount,
 } from "../db/billing.ts";
 import {
   consumeRequestLimitState,
@@ -25,13 +25,7 @@ export type WorkingAccessTier = "guest" | "member" | "pro" | "fallback" | "byok"
 export interface StudioAccount {
   provider: "openrouter";
   subject: string;
-  /** Current, peppered durable ownership key. Never expose the provider subject. */
   identity: string;
-  /**
-   * Pre-pepper ownership key used only for bounded, lazy storage migration.
-   * API responses must never return it.
-   */
-  legacyIdentity: string;
   issuedAt: number;
 }
 
@@ -42,7 +36,6 @@ export type FundedBuildSubject =
 export interface FundedBuildQuota {
   tier: "guest" | "member" | "pro";
   identity: string;
-  legacyIdentity?: string;
   namespace: "guest-ai-plan" | "member-ai-plan";
   limit: number;
   windowMs: number;
@@ -53,7 +46,6 @@ export interface ConsumedFundedBuildQuota extends FundedBuildQuota, RequestLimit
 type FundedQuotaConsumer = {
   consume(options: {
     identity: string | null;
-    legacyIdentity?: string | null;
     namespace: string;
     max: number;
     windowMs: number;
@@ -63,7 +55,6 @@ type FundedQuotaConsumer = {
 type EnvLike = Partial<Record<
   | "NODE_ENV"
   | "DROPS_ACCOUNT_COOKIE_SECRET"
-  | "DROPS_ACCOUNT_IDENTITY_PEPPER"
   | "DROPS_GUEST_COOKIE_SECRET"
   | "AI_GATEWAY_API_KEY"
   | "VERCEL_OIDC_TOKEN"
@@ -110,24 +101,9 @@ export function resolveAccountCookieSecret(env: EnvLike = process.env): string {
   return resolveGuestCookieSecret(env);
 }
 
-/**
- * Stable pseudonymization material is intentionally independent from the
- * session-cookie signing secret. Cookie keys can therefore rotate without
- * changing billing, project, team, or callback ownership.
- */
-export function resolveAccountIdentityPepper(env: EnvLike = process.env): string {
-  const configured = validConfiguredSecret(env.DROPS_ACCOUNT_IDENTITY_PEPPER, env);
-  if (configured) return configured;
-  return env.NODE_ENV === "production"
-    ? ""
-    : "drops-studio-development-only-account-identity-pepper";
-}
-
 export function platformAiReadiness(tier: "guest" | "member", env: EnvLike = process.env) {
   const signingConfigured = Boolean(
-    tier === "member"
-      ? resolveAccountCookieSecret(env) && resolveAccountIdentityPepper(env)
-      : resolveGuestCookieSecret(env),
+    tier === "member" ? resolveAccountCookieSecret(env) : resolveGuestCookieSecret(env),
   );
   const gatewayConfigured = Boolean(env.AI_GATEWAY_API_KEY?.trim() || env.VERCEL_OIDC_TOKEN?.trim());
   const durableQuotaConfigured = Boolean(
@@ -179,7 +155,7 @@ export async function resolveFundedBuildQuota(
   const expectedPriceId = stripeProPriceId();
   if (expectedPriceId && billingStorageConfigured()) {
     try {
-      const billing = await readStudioBillingAccount(subject.account);
+      const billing = await readBillingAccount(subject.account.identity);
       const tier = billingTierForAccount(billing, expectedPriceId);
       billingPolicy = {
         tier,
@@ -192,7 +168,6 @@ export async function resolveFundedBuildQuota(
   return {
     tier: billingPolicy.tier,
     identity: subject.account.identity,
-    legacyIdentity: subject.account.legacyIdentity,
     namespace: "member-ai-plan",
     limit: billingPolicy.limit,
     windowMs,
@@ -206,7 +181,6 @@ export async function consumeFundedBuildQuota(
   const policy = await resolveFundedBuildQuota(subject);
   const state = await options.consume({
     identity: policy.identity,
-    legacyIdentity: policy.legacyIdentity,
     namespace: policy.namespace,
     max: policy.limit,
     windowMs: policy.windowMs,
@@ -218,34 +192,13 @@ function validAccountSubject(value: string): boolean {
   return /^[a-z0-9][a-z0-9:_-]{5,199}$/i.test(value);
 }
 
-function legacyAccountIdentity(provider: StudioAccount["provider"], subject: string): string {
+function accountIdentity(provider: StudioAccount["provider"], subject: string): string {
+  // Storage ownership must survive independent cookie-signing key rotation.
+  // The provider subject is authenticated by the signed cookie before this
+  // pseudonymous, provider-scoped storage key is accepted.
   return createHash("sha256")
     .update(`drops-studio-account:v1:${provider}:${subject}`, "utf8")
     .digest("hex");
-}
-
-function accountIdentity(
-  provider: StudioAccount["provider"],
-  subject: string,
-  pepper: string,
-): string {
-  if (!pepper) throw new Error("Studio account identity is not configured.");
-  return createHmac("sha256", pepper)
-    .update(`drops-studio-account:v2:${provider}:${subject}`, "utf8")
-    .digest("hex");
-}
-
-export function studioAccountIdentityCandidates(
-  account: StudioAccount,
-): readonly [primary: string, legacy: string] {
-  return [account.identity, account.legacyIdentity];
-}
-
-export async function readStudioBillingAccount(account: StudioAccount) {
-  return readBillingAccountWithIdentityMigration(
-    account.identity,
-    account.legacyIdentity,
-  );
 }
 
 export function createStudioAccountCookie(
@@ -263,14 +216,9 @@ export function createStudioAccountCookie(
   return `${payload}.${signed}`;
 }
 
-export function readStudioAccountCookie(
-  value: string,
-  secret: string,
-  now = Date.now(),
-  identityPepper = resolveAccountIdentityPepper(),
-): StudioAccount | null {
+export function readStudioAccountCookie(value: string, secret: string, now = Date.now()): StudioAccount | null {
   const separator = value.lastIndexOf(".");
-  if (separator <= 0 || !secret || !identityPepper) return null;
+  if (separator <= 0 || !secret) return null;
   const payload = value.slice(0, separator);
   const provided = value.slice(separator + 1);
   if (!signaturesMatch(provided, signature(payload, secret))) return null;
@@ -288,8 +236,7 @@ export function readStudioAccountCookie(
     return {
       provider: parsed.p,
       subject: parsed.s,
-      identity: accountIdentity(parsed.p, parsed.s, identityPepper),
-      legacyIdentity: legacyAccountIdentity(parsed.p, parsed.s),
+      identity: accountIdentity(parsed.p, parsed.s),
       issuedAt,
     };
   } catch {
@@ -299,10 +246,7 @@ export function readStudioAccountCookie(
 
 export function resolveStudioAccount(value: string | undefined, env: EnvLike = process.env): StudioAccount | null {
   const secret = resolveAccountCookieSecret(env);
-  const identityPepper = resolveAccountIdentityPepper(env);
-  return secret && identityPepper
-    ? readStudioAccountCookie(value ?? "", secret, Date.now(), identityPepper)
-    : null;
+  return secret ? readStudioAccountCookie(value ?? "", secret) : null;
 }
 
 export function createGuestIdentityCookie(identity: string, secret: string): string {

@@ -30,12 +30,12 @@ export async function POST(request: NextRequest, context: Context) {
     if (!secret || !teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team invites are not configured or unavailable." }, 503);
     }
-    const account = await teamAccount(request);
+    const account = teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request, 8 * 1_024);
     const ownerIdentity = String(body.ownerIdentity ?? "");
     const entitlements = await proTeamEntitlements(ownerIdentity);
-    await enforceTeamRateLimit(account.identity, "team-workspace-invite", account.legacyIdentity);
+    await enforceTeamRateLimit(account.identity, "team-workspace-invite");
     const hours = Number(body.expiresInHours);
     if (!Number.isSafeInteger(hours) || hours < 1 || hours > 24 * 30) {
       return teamJson({ error: "Team invite expiry must be 1 to 720 hours." }, 400);

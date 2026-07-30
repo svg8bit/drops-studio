@@ -274,67 +274,6 @@ export async function readBillingAccount(
   return structuredClone(state.accounts.find((item) => item.accountIdentity === identity) ?? null);
 }
 
-/**
- * Lazily moves the pre-pepper ownership row to the current HMAC identity.
- * The move is idempotent and keeps the Stripe customer/subscription mapping
- * intact; callers must use this before starting Checkout or reading a tier.
- */
-export async function readBillingAccountWithIdentityMigration(
-  identity: string,
-  legacyIdentity: string,
-  storageOverride?: BlobStorage,
-): Promise<BillingAccountRecord | null> {
-  if (!validIdentity(identity) || !validIdentity(legacyIdentity)) {
-    throw new Error("Billing requires signed account identity candidates.");
-  }
-  if (identity === legacyIdentity) return readBillingAccount(identity, storageOverride);
-  if (!storageOverride && localEnabled()) {
-    const state = localState();
-    const current = state.accounts.find((item) => item.accountIdentity === identity);
-    if (current) return structuredClone(current);
-    const legacy = state.accounts.find((item) => item.accountIdentity === legacyIdentity);
-    if (!legacy) return null;
-    legacy.accountIdentity = identity;
-    return structuredClone(legacy);
-  }
-  const db = !storageOverride ? await ensureTables() : null;
-  if (db) {
-    const current = await readD1BillingAccount(db, "account_identity", identity);
-    if (current) return current;
-    const legacy = await readD1BillingAccount(db, "account_identity", legacyIdentity);
-    if (!legacy) return null;
-    try {
-      await db.prepare(
-        `UPDATE billing_accounts SET account_identity = ?
-         WHERE account_identity = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM billing_accounts WHERE account_identity = ?
-           )`,
-      ).bind(identity, legacyIdentity, identity).run();
-    } catch {
-      throw new BillingStorageUnavailableError();
-    }
-    const migrated = await readD1BillingAccount(db, "account_identity", identity);
-    if (migrated) return migrated;
-    const concurrentLegacy = await readD1BillingAccount(db, "account_identity", legacyIdentity);
-    if (!concurrentLegacy) {
-      return readD1BillingAccount(db, "account_identity", identity);
-    }
-    throw new BillingStorageUnavailableError(
-      "Billing identity migration could not be completed safely.",
-    );
-  }
-  if (!storageOverride && !blobConfigured()) throw new BillingStorageUnavailableError();
-  return mutateBlob(await blobStorage(storageOverride), (state) => {
-    const current = state.accounts.find((item) => item.accountIdentity === identity);
-    if (current) return structuredClone(current);
-    const legacy = state.accounts.find((item) => item.accountIdentity === legacyIdentity);
-    if (!legacy) return null;
-    legacy.accountIdentity = identity;
-    return structuredClone(legacy);
-  });
-}
-
 function newCustomer(identity: string, customerId: string): BillingAccountRecord {
   return sanitizedAccount({
     accountIdentity: identity,
@@ -451,17 +390,13 @@ function resolveEventMapping(
   current: BillingAccountRecord | null;
 } {
   const mappedIdentities = new Set([
-    accounts.identity?.accountIdentity ?? null,
+    event.accountIdentity,
     accounts.customer?.accountIdentity ?? null,
     accounts.subscription?.accountIdentity ?? null,
   ].filter((identity): identity is string => identity !== null));
-  // A signed Stripe event can retain pre-migration metadata indefinitely.
-  // Once its customer/subscription already maps to the current HMAC identity,
-  // that durable mapping is authoritative over an unmapped legacy metadata key.
-  const identity = accounts.identity?.accountIdentity
+  const identity = event.accountIdentity
     ?? accounts.customer?.accountIdentity
     ?? accounts.subscription?.accountIdentity
-    ?? event.accountIdentity
     ?? null;
   const current = accounts.identity ?? accounts.customer ?? accounts.subscription;
   const identityCustomerConflict = Boolean(

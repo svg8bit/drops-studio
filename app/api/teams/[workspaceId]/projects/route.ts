@@ -31,12 +31,12 @@ export async function PUT(request: NextRequest, context: Context) {
     if (!teamWorkspaceStorageConfigured()) {
       return teamJson({ error: "Team workspace storage is not configured or unavailable." }, 503);
     }
-    const account = await teamAccount(request);
+    const account = teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request, MEMBER_PROJECT_BODY_LIMIT_BYTES);
     const ownerIdentity = String(body.ownerIdentity ?? "");
     await proTeamEntitlements(ownerIdentity);
-    await enforceTeamRateLimit(account.identity, "team-workspace-project-write", account.legacyIdentity);
+    await enforceTeamRateLimit(account.identity, "team-workspace-project-write");
     const { workspaceId } = await context.params;
     const result = await upsertTeamWorkspaceProject({
       actorIdentity: account.identity,

@@ -315,50 +315,6 @@ test("callback creation reports fixed storage capacity separately from transient
   });
 });
 
-test("legacy callback ownership is found through the signed account and lazily migrated", async () => {
-  await withLocalDropsBot(async () => {
-    const owner = signedAccount(firstSubject);
-    seedProject(owner.account.legacyIdentity);
-    const {
-      createDropsBotWebhookConnection,
-    } = await import("../db/dropsbot-webhooks.ts");
-    const {
-      createDropsBotWebhookCapability,
-    } = await import("../lib/dropsbot-webhook.ts");
-    const capability = createDropsBotWebhookCapability();
-    const created = await createDropsBotWebhookConnection({
-      id: "11111111-2222-4333-8444-555555555555",
-      ownerIdentity: owner.account.legacyIdentity,
-      projectId,
-      capabilityHash: capability.hash,
-      createdAt: "2026-07-30T00:00:00.000Z",
-      consentedAt: "2026-07-30T00:00:00.000Z",
-    });
-    assert.equal(created.status, "created");
-
-    const { GET } = await import("../app/api/dropsbot/events/route.ts");
-    const { NextRequest } = await import("next/server.js");
-    const listed = await GET(new NextRequest(
-      `https://drops.example/api/dropsbot/events?projectId=${projectId}`,
-      { headers: { cookie: `${STUDIO_ACCOUNT_COOKIE}=${owner.cookie}` } },
-    ));
-    assert.equal(listed.status, 200);
-    assert.equal(
-      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__.connections[0].ownerIdentity,
-      owner.account.identity,
-    );
-
-    const rotated = await mutateConnection(owner.cookie, "PUT");
-    assert.equal(rotated.response.status, 200);
-    const revoked = await mutateConnection(owner.cookie, "DELETE");
-    assert.equal(revoked.response.status, 200);
-    assert.equal(
-      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__.connections.length,
-      0,
-    );
-  });
-});
-
 test("the signed owner explicitly rotates or revokes a callback and every old capability stops working", async () => {
   await withLocalDropsBot(async () => {
     const owner = signedAccount(firstSubject);

@@ -12,7 +12,6 @@ import {
 import {
   listMemberProjects,
   MemberProjectStorageUnavailableError,
-  migrateMemberProjectIdentity,
 } from "../../../../db/member-projects.ts";
 import {
   resolveStudioAccount,
@@ -155,7 +154,6 @@ async function requireOwnedProject(
   input: Record<string, unknown>,
 ): Promise<string> {
   const ownedProjectId = projectId(input.projectId);
-  await migrateMemberProjectIdentity(member.identity, member.legacyIdentity);
   const projects = await listMemberProjects(member.identity);
   if (!projects.some((project) => project.id === ownedProjectId)) {
     throw new DropsBotWebhookResponseError(404, {
@@ -236,7 +234,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       capabilityHash: capability.hash,
       createdAt,
       consentedAt: createdAt,
-      legacyOwnerIdentity: member.legacyIdentity,
     });
     if (result.status === "exists") {
       throw new DropsBotWebhookResponseError(409, {
@@ -275,7 +272,6 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
       projectId: ownedProjectId,
       capabilityHash: capability.hash,
       consentedAt: rotatedAt,
-      legacyOwnerIdentity: member.legacyIdentity,
     });
     if (result.status === "not-found") {
       throw new DropsBotWebhookResponseError(404, {
@@ -312,8 +308,6 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     const result = await revokeDropsBotWebhookConnection(
       member.identity,
       ownedProjectId,
-      undefined,
-      member.legacyIdentity,
     );
     if (result.status === "not-found") {
       throw new DropsBotWebhookResponseError(404, {

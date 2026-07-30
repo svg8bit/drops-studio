@@ -20,7 +20,6 @@ import {
 } from "../lib/team-workspaces.ts";
 import {
   sanitizeMemberProjectDraft,
-  sanitizeStoredMemberProjectDraft,
   type MemberProjectDraft,
 } from "../lib/member-project-cloud.ts";
 
@@ -58,7 +57,6 @@ interface TeamMembershipPointer {
 interface TeamEnvelope {
   schemaVersion: 1;
   ownerIdentity: string;
-  migratedTo?: string;
   revision: number;
   updatedAt: string;
   workspaces: StoredTeamWorkspace[];
@@ -239,7 +237,7 @@ function storedProject(value: unknown): TeamSharedProject {
   }
   let draft: MemberProjectDraft;
   try {
-    draft = sanitizeStoredMemberProjectDraft(input.draft);
+    draft = sanitizeMemberProjectDraft(input.draft);
   } catch {
     throw new TeamWorkspaceStorageUnavailableError("Team storage returned an unsafe shared project.");
   }
@@ -338,7 +336,6 @@ function parsedEnvelope(value: unknown, ownerIdentity: string): TeamEnvelope {
     throw new TeamWorkspaceStorageUnavailableError();
   }
   const input = value as Partial<TeamEnvelope>;
-  const migratedTo = input.migratedTo;
   if (
     input.schemaVersion !== 1
     || input.ownerIdentity !== ownerIdentity
@@ -352,15 +349,6 @@ function parsedEnvelope(value: unknown, ownerIdentity: string): TeamEnvelope {
       && (!Array.isArray(input.memberships) || input.memberships.length > 500))
   ) {
     throw new TeamWorkspaceStorageUnavailableError("Team storage returned an invalid owner envelope.");
-  }
-  if (
-    migratedTo !== undefined
-    && (!validTeamIdentity(migratedTo)
-      || migratedTo === ownerIdentity
-      || input.workspaces.length !== 0
-      || (input.memberships?.length ?? 0) !== 0)
-  ) {
-    throw new TeamWorkspaceStorageUnavailableError("Team storage returned an invalid identity redirect.");
   }
   const workspaces = input.workspaces.map((item) => storedWorkspace(item, ownerIdentity));
   if (new Set(workspaces.map((item) => item.id)).size !== workspaces.length) {
@@ -376,7 +364,6 @@ function parsedEnvelope(value: unknown, ownerIdentity: string): TeamEnvelope {
   return {
     schemaVersion: 1,
     ownerIdentity,
-    ...(migratedTo ? { migratedTo } : {}),
     revision: Number(input.revision),
     updatedAt: input.updatedAt,
     workspaces,
@@ -473,27 +460,16 @@ async function defaultBlob(runtime: TeamStorageRuntime): Promise<BlobStorage> {
 async function readEnvelope(
   ownerIdentity: string,
   runtime: TeamStorageRuntime,
-  seen: ReadonlySet<string> = new Set(),
 ): Promise<TeamEnvelope> {
   if (!validTeamIdentity(ownerIdentity)) {
     throw new TeamWorkspaceValidationError("Team owner identity is invalid.");
   }
-  if (seen.has(ownerIdentity) || seen.size >= 4) {
-    throw new TeamWorkspaceStorageUnavailableError("Team identity migration redirect is invalid.");
-  }
-  const envelope = runtime.storage
-    ? (await readBlob(ownerIdentity, runtime.storage)).envelope
-    : localEnabled()
-      ? structuredClone(localStore().get(ownerIdentity) ?? emptyEnvelope(ownerIdentity))
-      : await (async () => {
-          const db = await ensureTable();
-          if (db) return readD1(ownerIdentity, db);
-          if (!blobConfigured()) throw new TeamWorkspaceStorageUnavailableError();
-          return (await readBlob(ownerIdentity, await defaultBlob(runtime))).envelope;
-        })();
-  return envelope.migratedTo
-    ? readEnvelope(envelope.migratedTo, runtime, new Set([...seen, ownerIdentity]))
-    : envelope;
+  if (runtime.storage) return (await readBlob(ownerIdentity, runtime.storage)).envelope;
+  if (localEnabled()) return structuredClone(localStore().get(ownerIdentity) ?? emptyEnvelope(ownerIdentity));
+  const db = await ensureTable();
+  if (db) return readD1(ownerIdentity, db);
+  if (!blobConfigured()) throw new TeamWorkspaceStorageUnavailableError();
+  return (await readBlob(ownerIdentity, await defaultBlob(runtime))).envelope;
 }
 
 async function mutateEnvelope<T>(
@@ -503,10 +479,6 @@ async function mutateEnvelope<T>(
 ): Promise<T> {
   if (!validTeamIdentity(ownerIdentity)) {
     throw new TeamWorkspaceValidationError("Team owner identity is invalid.");
-  }
-  const resolved = await readEnvelope(ownerIdentity, runtime);
-  if (resolved.ownerIdentity !== ownerIdentity) {
-    return mutateEnvelope(resolved.ownerIdentity, runtime, mutate);
   }
   if (!runtime.storage && localEnabled()) {
     const store = localStore();
@@ -573,122 +545,6 @@ function bump(envelope: TeamEnvelope, workspace: StoredTeamWorkspace, now: strin
   workspace.updatedAt = now;
   envelope.revision += 1;
   envelope.updatedAt = now;
-}
-
-function replaceStoredIdentity(
-  envelope: TeamEnvelope,
-  identity: string,
-  legacyIdentity: string,
-): TeamEnvelope {
-  const next = structuredClone(envelope);
-  next.ownerIdentity = identity;
-  delete next.migratedTo;
-  next.workspaces = next.workspaces.map((workspace) => ({
-    ...workspace,
-    ownerIdentity: identity,
-    members: workspace.members.map((member) => ({
-      ...member,
-      identity: member.identity === legacyIdentity ? identity : member.identity,
-    })),
-    invites: workspace.invites.map((invite) => ({
-      ...invite,
-      acceptedBy: invite.acceptedBy === legacyIdentity ? identity : invite.acceptedBy,
-    })),
-    projects: workspace.projects.map((project) => ({
-      ...project,
-      updatedBy: project.updatedBy === legacyIdentity ? identity : project.updatedBy,
-    })),
-  }));
-  return next;
-}
-
-function mergeIdentityEnvelopes(
-  primary: TeamEnvelope,
-  legacy: TeamEnvelope,
-  identity: string,
-  legacyIdentity: string,
-): TeamEnvelope {
-  const normalizedLegacy = replaceStoredIdentity(legacy, identity, legacyIdentity);
-  const workspaces = new Map(primary.workspaces.map((workspace) => [workspace.id, workspace]));
-  for (const workspace of normalizedLegacy.workspaces) {
-    const current = workspaces.get(workspace.id);
-    if (!current || workspace.revision > current.revision) workspaces.set(workspace.id, workspace);
-  }
-  const memberships = new Map<string, TeamMembershipPointer>();
-  for (const pointer of [...normalizedLegacy.memberships, ...primary.memberships]) {
-    memberships.set(`${pointer.ownerIdentity}:${pointer.workspaceId}`, pointer);
-  }
-  const merged: TeamEnvelope = {
-    schemaVersion: 1,
-    ownerIdentity: identity,
-    revision: Math.max(primary.revision, legacy.revision) + 1,
-    updatedAt: new Date().toISOString(),
-    workspaces: [...workspaces.values()],
-    memberships: [...memberships.values()],
-  };
-  serialized(merged);
-  return merged;
-}
-
-export async function resolveTeamWorkspaceIdentity(
-  identity: string,
-  runtime: TeamStorageRuntime = {},
-): Promise<string> {
-  return (await readEnvelope(identity, runtime)).ownerIdentity;
-}
-
-/** Lazily migrates owned teams and membership pointers to the HMAC identity. */
-export async function migrateTeamWorkspaceIdentity(
-  identity: string,
-  legacyIdentity: string,
-  runtime: TeamStorageRuntime = {},
-): Promise<void> {
-  if (!validTeamIdentity(identity) || !validTeamIdentity(legacyIdentity)) {
-    throw new TeamWorkspaceValidationError("Team identity migration is invalid.");
-  }
-  if (identity === legacyIdentity) return;
-  const legacy = await readEnvelope(legacyIdentity, runtime);
-  if (legacy.ownerIdentity === identity) return;
-  if (legacy.workspaces.length === 0 && legacy.memberships.length === 0) return;
-  const primary = await readEnvelope(identity, runtime);
-  const merged = mergeIdentityEnvelopes(primary, legacy, identity, legacyIdentity);
-  await mutateEnvelope(identity, runtime, (envelope) => {
-    Object.assign(envelope, structuredClone(merged));
-  });
-  for (const pointer of merged.memberships) {
-    await mutateEnvelope(pointer.ownerIdentity, runtime, (ownerEnvelope) => {
-      const workspace = ownerEnvelope.workspaces.find((item) => item.id === pointer.workspaceId);
-      if (!workspace) return;
-      let changed = false;
-      for (const member of workspace.members) {
-        if (member.identity === legacyIdentity) {
-          member.identity = identity;
-          changed = true;
-        }
-      }
-      for (const invite of workspace.invites) {
-        if (invite.acceptedBy === legacyIdentity) {
-          invite.acceptedBy = identity;
-          changed = true;
-        }
-      }
-      for (const project of workspace.projects) {
-        if (project.updatedBy === legacyIdentity) {
-          project.updatedBy = identity;
-          changed = true;
-        }
-      }
-      if (changed) bump(ownerEnvelope, workspace, merged.updatedAt);
-    });
-  }
-  await mutateEnvelope(legacyIdentity, runtime, (envelope) => {
-    Object.assign(envelope, {
-      ...emptyEnvelope(legacyIdentity),
-      revision: envelope.revision + 1,
-      updatedAt: merged.updatedAt,
-      migratedTo: identity,
-    });
-  });
 }
 
 export async function createTeamWorkspace(

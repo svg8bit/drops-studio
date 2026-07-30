@@ -8,9 +8,9 @@ import {
 import {
   billingStorageConfigured,
   BillingStorageUnavailableError,
+  readBillingAccount,
 } from "@/db/billing";
 import {
-  readStudioBillingAccount,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "@/lib/access-tier";
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     return json({ error: "Billing status is not configured or unavailable." }, 503);
   }
   try {
-    const billing = await readStudioBillingAccount(account);
+    const billing = await readBillingAccount(account.identity);
     const tier = billingTierForAccount(billing, stripeProPriceId());
     return json({
       tier,

@@ -13,7 +13,6 @@ import {
   BillingStorageUnavailableError,
 } from "@/db/billing";
 import {
-  readStudioBillingAccount,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "@/lib/access-tier";
@@ -74,7 +73,6 @@ export async function POST(request: NextRequest) {
   }
   const limit = await consumeRequestLimit({
     identity: account.identity,
-    legacyIdentity: account.legacyIdentity,
     namespace: "billing-checkout",
     max: 8,
     windowMs: 60 * 60 * 1_000,
@@ -82,7 +80,6 @@ export async function POST(request: NextRequest) {
   if (limit === "limited") return json("Too many checkout requests. Try again later.", 429);
   if (limit === "unavailable") return json("Billing request protection is unavailable.", 503);
   try {
-    await readStudioBillingAccount(account);
     const receipt = await createProCheckout(
       { accountIdentity: account.identity, origin: request.nextUrl.origin, consent },
       {

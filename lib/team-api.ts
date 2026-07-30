@@ -10,7 +10,6 @@ import {
   billingStorageConfigured,
   readBillingAccount,
 } from "../db/billing.ts";
-import { migrateTeamWorkspaceIdentity } from "../db/team-workspaces.ts";
 import {
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
@@ -48,12 +47,11 @@ export function teamJson(
   return NextResponse.json(payload, { status, headers: TEAM_API_HEADERS });
 }
 
-export async function teamAccount(request: NextRequest): Promise<StudioAccount> {
+export function teamAccount(request: NextRequest): StudioAccount {
   const account = resolveStudioAccount(
     request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
   );
   if (!account) throw new TeamApiError(401, "A signed Studio member account is required.");
-  await migrateTeamWorkspaceIdentity(account.identity, account.legacyIdentity);
   return account;
 }
 
@@ -97,11 +95,9 @@ export async function teamRequestBody(
 export async function enforceTeamRateLimit(
   identity: string,
   namespace: string,
-  legacyIdentity?: string,
 ): Promise<void> {
   const status = await consumeRequestLimit({
     identity,
-    legacyIdentity,
     namespace,
     max: 60,
     windowMs: 60 * 60 * 1_000,

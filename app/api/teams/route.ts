@@ -8,17 +8,16 @@ import {
 import {
   billingStorageConfigured,
   BillingStorageUnavailableError,
+  readBillingAccount,
 } from "@/db/billing";
 import {
   createTeamWorkspace,
   listTeamWorkspaces,
   listTeamWorkspacesForMember,
-  migrateTeamWorkspaceIdentity,
   teamWorkspaceStorageConfigured,
   TeamWorkspaceStorageUnavailableError,
 } from "@/db/team-workspaces";
 import {
-  readStudioBillingAccount,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "@/lib/access-tier";
@@ -62,7 +61,6 @@ export async function GET(request: NextRequest) {
   }
   const ownerIdentity = request.nextUrl.searchParams.get("owner");
   try {
-    await migrateTeamWorkspaceIdentity(member.identity, member.legacyIdentity);
     const workspaces = ownerIdentity
       ? await listTeamWorkspaces(ownerIdentity, member.identity)
       : await listTeamWorkspacesForMember(member.identity);
@@ -101,8 +99,7 @@ export async function POST(request: NextRequest) {
     return json({ error: "Team creation request is invalid." }, 400);
   }
   try {
-    await migrateTeamWorkspaceIdentity(member.identity, member.legacyIdentity);
-    const billing = await readStudioBillingAccount(member);
+    const billing = await readBillingAccount(member.identity);
     const entitlements = billingEntitlements(
       billingTierForAccount(billing, stripeProPriceId()),
     );
@@ -114,7 +111,6 @@ export async function POST(request: NextRequest) {
     }
     const limit = await consumeRequestLimit({
       identity: member.identity,
-      legacyIdentity: member.legacyIdentity,
       namespace: "team-workspace-create",
       max: 20,
       windowMs: 60 * 60 * 1_000,
