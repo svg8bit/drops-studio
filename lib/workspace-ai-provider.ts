@@ -87,6 +87,8 @@ export interface WorkspaceAiProviderCredentials {
   identity?: string;
   openRouterKey?: string;
   providerKey?: string;
+  /** Short-lived Vercel Function OIDC token; request-scoped and never persisted. */
+  gatewayToken?: string;
 }
 
 interface PlatformGenerateInput {
@@ -230,7 +232,7 @@ async function generatePlatformPatch(
 ): Promise<GeneratedWorkspaceAiPatch> {
   const env = dependencies.env ?? process.env;
   const gatewayToken = credential(
-    env.AI_GATEWAY_API_KEY || env.VERCEL_OIDC_TOKEN,
+    credentials.gatewayToken || env.AI_GATEWAY_API_KEY || env.VERCEL_OIDC_TOKEN,
   );
   if (!gatewayToken) {
     throw new WorkspaceAiProviderUnavailableError(

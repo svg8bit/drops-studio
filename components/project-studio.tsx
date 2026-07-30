@@ -60,6 +60,7 @@ import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
 import { DropsBotWebhookConnection } from "@/components/dropsbot-webhook-connection";
 import { StudioAccountTeamPanel } from "@/components/studio-account-team-panel";
 import { DropsBrand } from "@/components/drops-brand";
+import { ProjectV2StudioSurface } from "@/components/project-v2-studio-surface";
 import {
   ProjectWorkspaceDialog,
   type WorkspaceAiEvidenceView,
@@ -73,6 +74,12 @@ import {
   type DirectorProposal,
 } from "@/lib/project-director";
 import { createProjectArchive } from "@/lib/project-export";
+import {
+  createProjectV2ArchiveBlob,
+  projectV2ArchiveFilename,
+} from "@/lib/project-v2-export";
+import type { ProjectV2 } from "@/lib/project-v2-types";
+import type { BuilderAgentResult } from "@/lib/builder-agent/types";
 import { applyAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import { evaluateProjectQuality } from "@/lib/project-quality";
 import {
@@ -108,6 +115,11 @@ import {
   MemberProjectSyncError,
   saveMemberProjectToCloud,
 } from "@/lib/member-project-sync-client";
+import {
+  loadProjectV2FromCloud,
+  ProjectV2SyncError,
+  saveProjectV2ToCloud,
+} from "@/lib/project-v2-sync-client";
 import { validateEditableRuntimeHtml } from "@/lib/source-workspace";
 import {
   addWorkspaceFile,
@@ -522,6 +534,7 @@ export function ProjectStudio() {
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const cloudSyncAvailableRef = useRef(false);
   const cloudRevisionRef = useRef<number | null>(null);
+  const projectV2CloudRevisionRef = useRef<number | null>(null);
   const [project, setProject] = useState<GeneratedProject | null>(null);
   const [runtimeProject, setRuntimeProject] =
     useState<GeneratedProject | null>(null);
@@ -610,6 +623,13 @@ export function ProjectStudio() {
             cloudRevisionRef.current ?? 0,
           );
           cloudRevisionRef.current = record.revision;
+          if (next.projectV2) {
+            const v2Record = await saveProjectV2ToCloud(
+              next.projectV2,
+              projectV2CloudRevisionRef.current ?? 0,
+            );
+            projectV2CloudRevisionRef.current = v2Record.storageRevision;
+          }
           setProjectSyncStatus("synced");
         } catch (error) {
           if (
@@ -620,6 +640,17 @@ export function ProjectStudio() {
             setProjectSyncStatus("conflict");
             setToast(
               "This project changed in another signed-in session. Your browser copy is safe; reload to review the cloud version.",
+            );
+          } else if (
+            error instanceof ProjectV2SyncError &&
+            error.code === "PROJECT_V2_REVISION_CONFLICT"
+          ) {
+            if (error.storageRevision !== undefined) {
+              projectV2CloudRevisionRef.current = error.storageRevision;
+            }
+            setProjectSyncStatus("conflict");
+            setToast(
+              "The Project V2 filesystem changed in another session. Your browser copy is safe; reload before writing files.",
             );
           } else {
             setProjectSyncStatus("local");
@@ -680,9 +711,21 @@ export function ProjectStudio() {
               });
               if (stored.status === "saved") found = materialized;
             }
+            const cloudProjectV2 = await loadProjectV2FromCloud(params.id);
+            projectV2CloudRevisionRef.current = cloudProjectV2?.storageRevision ?? 0;
+            if (
+              cloudProjectV2 &&
+              found &&
+              (!found.projectV2 ||
+                Date.parse(cloudProjectV2.project.updatedAt) >=
+                  Date.parse(found.projectV2.updatedAt))
+            ) {
+              found = { ...found, projectV2: cloudProjectV2.project };
+            }
             setProjectSyncStatus("synced");
           } else {
             cloudRevisionRef.current = 0;
+            projectV2CloudRevisionRef.current = 0;
             setProjectSyncStatus(found ? "local" : "synced");
           }
         } else {
@@ -720,11 +763,34 @@ export function ProjectStudio() {
               html: storedHtml,
             });
         const html = compileWorkspaceRuntime(spec, workspace);
+        const projectV2Source = {
+          ...found,
+          spec,
+          html,
+          workspace,
+        };
+        let projectV2: import("@/lib/project-v2-types").ProjectV2;
+        try {
+          projectV2 = found.projectV2
+            ? await import("@/lib/project-v2-validator").then(({ validateProjectV2 }) =>
+                validateProjectV2(found.projectV2),
+              )
+            : await import("@/lib/project-v2-migration").then(
+                ({ migrateGeneratedProjectToV2 }) =>
+                  migrateGeneratedProjectToV2(projectV2Source),
+              );
+        } catch {
+          projectV2 = await import("@/lib/project-v2-migration").then(
+            ({ migrateGeneratedProjectToV2 }) =>
+              migrateGeneratedProjectToV2(projectV2Source),
+          );
+        }
         const migrated: GeneratedProject = {
           ...found,
           spec,
           html,
           workspace,
+          projectV2,
           sourceEditedAt: storedSourceIsValid
             ? found.sourceEditedAt
             : undefined,
@@ -761,6 +827,9 @@ export function ProjectStudio() {
         setRuntimeSmoke(null);
         setProject(migrated);
         setRuntimeProject(migrated);
+        if (projectV2.manifest.framework.name === "nextjs") {
+          setTab("code");
+        }
         setRuntimeRevision((revision) => revision + 1);
         setDirty(
           Boolean(
@@ -1112,6 +1181,52 @@ export function ProjectStudio() {
     setRuntimeRevision((revision) => revision + 1);
     setDirty(true);
   }, []);
+
+  const adoptProjectV2 = useCallback(
+    (nextProjectV2: ProjectV2, storageRevision?: number) => {
+      const current = projectRef.current;
+      if (!current || current.id !== nextProjectV2.id) return;
+      if (storageRevision !== undefined) {
+        projectV2CloudRevisionRef.current = storageRevision;
+      }
+      const next: GeneratedProject = {
+        ...current,
+        projectV2: nextProjectV2,
+        updatedAt: nextProjectV2.updatedAt,
+      };
+      projectRef.current = next;
+      committedProjectRef.current = next;
+      setProject(next);
+      setDirty(true);
+      setProjectSyncStatus(storageRevision !== undefined ? "synced" : "local");
+      const save = () =>
+        saveProjectSafely(next, {
+          expectedUpdatedAt: current.updatedAt,
+        })
+          .then((result) => {
+            if (result.status === "conflict") {
+              setProjectSyncStatus("conflict");
+              setToast(
+                "A newer browser revision exists. Reload before continuing Project V2 edits.",
+              );
+              return false;
+            }
+            return true;
+          })
+          .catch(() => {
+            setProjectSyncStatus("error");
+            setToast(
+              storageRevision !== undefined
+                ? "Project V2 is safe in private cloud storage, but the browser copy could not be updated."
+                : "This Project V2 change could not be saved in this browser. Free storage, then retry.",
+            );
+            return false;
+          });
+      const queued = saveQueueRef.current.then(save, save);
+      saveQueueRef.current = queued;
+    },
+    [],
+  );
 
   const replaceProject = useCallback(
     (next: GeneratedProject) => {
@@ -1472,6 +1587,166 @@ export function ProjectStudio() {
     };
     projectRef.current = conversationDraft;
     setProject(conversationDraft);
+    if (activeProject.projectV2 && cloudSyncAvailableRef.current) {
+      try {
+        await fetch("/api/access", {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        let snapshot = await loadProjectV2FromCloud(activeProject.id);
+        if (!snapshot) {
+          snapshot = await saveProjectV2ToCloud(activeProject.projectV2, 0);
+        }
+        projectV2CloudRevisionRef.current = snapshot.storageRevision;
+        const provider = activeProvider;
+        const headers: Record<string, string> = {
+          accept: "application/json",
+          "content-type": "application/json",
+        };
+        const key =
+          provider === "free" || provider === "gateway"
+            ? null
+            : window.sessionStorage.getItem(`drops-studio:${provider}`);
+        if (provider === "openrouter" && key) {
+          headers["x-openrouter-key"] = key;
+        } else if (key) {
+          headers["x-provider-key"] = key;
+        }
+        const model =
+          window.sessionStorage.getItem(
+            provider === "custom"
+              ? "drops-studio:custom-model"
+              : `drops-studio:${provider}:model`,
+          ) || undefined;
+        const response = await fetch("/api/builder/agent", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          signal: AbortSignal.timeout(120_000),
+          body: JSON.stringify({
+            projectId: activeProject.id,
+            prompt: instruction,
+            mode: "edit",
+            provider: {
+              provider,
+              ...(model ? { model } : {}),
+              ...(provider === "custom"
+                ? {
+                    baseUrl:
+                      window.sessionStorage.getItem(
+                        "drops-studio:custom-endpoint",
+                      ) || undefined,
+                  }
+                : {}),
+            },
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          result?: BuilderAgentResult;
+          error?: string;
+        };
+        if (!payload.result) {
+          throw new Error(payload.error || "The Project V2 agent returned no verified result.");
+        }
+        const remote = await loadProjectV2FromCloud(activeProject.id);
+        const projectV2 = remote?.project ?? payload.result.project;
+        if (remote) projectV2CloudRevisionRef.current = remote.storageRevision;
+        const changedFiles = Array.from(
+          new Set([
+            ...Object.keys(snapshot.project.files),
+            ...Object.keys(projectV2.files),
+          ]),
+        ).filter(
+          (path) =>
+            snapshot.project.files[path]?.hash !== projectV2.files[path]?.hash,
+        ).length;
+        const assistant: ProjectChatMessage = {
+          id: nowId("assistant"),
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          content: payload.result.releaseGate.ok
+            ? `${payload.result.providerMode === "deterministic-fallback" ? "Free Auto fallback" : "AI agent"} changed ${changedFiles} real file${changedFiles === 1 ? "" : "s"}, passed the release gate, refreshed preview and created a checkpoint. Open Builder to inspect the diff and evidence.`
+            : `${payload.result.summary} The changed Project V2 files and exact blocking checks are available in Builder; no deployment was claimed.`,
+        };
+        const next: GeneratedProject = {
+          ...conversationDraft,
+          projectV2,
+          conversation: [...baseConversation, assistant],
+          updatedAt: projectV2.updatedAt,
+        };
+        projectRef.current = next;
+        committedProjectRef.current = next;
+        setProject(next);
+        setProjectSyncStatus(remote ? "synced" : "local");
+        setTab("code");
+        const save = () =>
+          saveProjectSafely(next, {
+            expectedUpdatedAt: activeProject.updatedAt,
+          });
+        const queued = saveQueueRef.current.then(save, save);
+        saveQueueRef.current = queued.then(
+          () => true,
+          () => false,
+        );
+        const saved = await queued;
+        if (saved.status === "conflict") {
+          setProjectSyncStatus("conflict");
+          setToast(
+            "Another tab saved a newer browser version. Reload before continuing Project V2 edits.",
+          );
+          return;
+        }
+        setToast(
+          remote
+            ? payload.result.releaseGate.ok
+              ? "Project V2 files changed and verified in Sandbox"
+              : "Project V2 edit saved with blocking check evidence"
+            : payload.result.releaseGate.ok
+              ? "Sandbox verification passed; the Project V2 update is saved in this browser because private cloud sync could not be confirmed."
+              : "Blocking check evidence is saved in this browser because private cloud sync could not be confirmed.",
+        );
+      } catch (error) {
+        const assistant: ProjectChatMessage = {
+          id: nowId("assistant"),
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          content: `${error instanceof Error ? error.message : "The Project V2 agent is unavailable."} No deployment or external action was performed.`,
+        };
+        const next: GeneratedProject = {
+          ...conversationDraft,
+          conversation: [...baseConversation, assistant],
+        };
+        projectRef.current = next;
+        setProject(next);
+        const save = () =>
+          saveProjectSafely(next, {
+            expectedUpdatedAt: activeProject.updatedAt,
+          });
+        const queued = saveQueueRef.current.then(save, save);
+        saveQueueRef.current = queued.then(
+          () => true,
+          () => false,
+        );
+        try {
+          const saved = await queued;
+          if (saved.status === "conflict") {
+            setProjectSyncStatus("conflict");
+            setToast(
+              "The agent result could not be added because another tab saved a newer browser version. Reload to continue.",
+            );
+          }
+        } catch {
+          setProjectSyncStatus("error");
+          setToast(
+            "The agent result could not be saved in this browser. Free storage, then retry.",
+          );
+        }
+      } finally {
+        setDirecting(false);
+      }
+      return;
+    }
     try {
       let proposal: DirectorProposal;
       const provider = activeProvider;
@@ -2183,11 +2458,21 @@ export function ProjectStudio() {
     const currentProject =
       commitPendingSpec() ?? projectRef.current ?? project;
     if (!currentProject) return;
-    const bytes = await projectArchive(currentProject);
-    downloadBlob(
-      `${currentProject.spec.slug}-source.zip`,
-      new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" }),
-    );
+    if (
+      currentProject.projectV2 &&
+      currentProject.projectV2.manifest.framework.name !== "legacy-html"
+    ) {
+      downloadBlob(
+        projectV2ArchiveFilename(currentProject.projectV2),
+        await createProjectV2ArchiveBlob(currentProject.projectV2),
+      );
+    } else {
+      const bytes = await projectArchive(currentProject);
+      downloadBlob(
+        `${currentProject.spec.slug}-source.zip`,
+        new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" }),
+      );
+    }
     setToast(
       nextHost
         ? `Git-ready deployment package created for ${nextHost}`
@@ -2631,7 +2916,14 @@ export function ProjectStudio() {
     { id: "logic", label: "Logic", icon: Blocks },
     { id: "connections", label: "Connect", icon: KeyRound },
     { id: "quality", label: "Tests", icon: ShieldCheck },
-    { id: "code", label: "Code", icon: Code2 },
+    {
+      id: "code",
+      label:
+        project.projectV2?.manifest.framework.name === "nextjs"
+          ? "Builder"
+          : "Code",
+      icon: Code2,
+    },
     { id: "history", label: "Versions", icon: History },
   ];
   const game = project.spec.gameDirection;
@@ -2713,10 +3005,23 @@ export function ProjectStudio() {
           <button
             className="workspace-run-action"
             type="button"
-            aria-label="Run app"
-            onClick={openRuntime}
+            aria-label={
+              project.projectV2?.manifest.framework.name === "nextjs"
+                ? "Open Builder to run this app"
+                : "Run app"
+            }
+            onClick={() =>
+              project.projectV2?.manifest.framework.name === "nextjs"
+                ? setTab("code")
+                : openRuntime()
+            }
           >
-            <Play /> <span>Run app</span>
+            <Play />{" "}
+            <span>
+              {project.projectV2?.manifest.framework.name === "nextjs"
+                ? "Open Builder"
+                : "Run app"}
+            </span>
           </button>
           <button
             className="workspace-connections-action"
@@ -2758,7 +3063,13 @@ export function ProjectStudio() {
         </div>
       </header>
 
-      <div className={`project-studio-layout tab-${tab}`}>
+      <div
+        className={`project-studio-layout tab-${tab}${
+          tab === "code" && project.projectV2?.manifest.framework.name === "nextjs"
+            ? " v2-builder-active"
+            : ""
+        }`}
+      >
         <aside className="studio-rail">
           {nav.map((item) => {
             const Icon = item.icon;
@@ -2785,6 +3096,21 @@ export function ProjectStudio() {
             </span>
           </div>
         </aside>
+
+        {project.projectV2?.manifest.framework.name === "nextjs" ? (
+          <section
+            className="project-v2-studio-host"
+            hidden={tab !== "code"}
+          >
+            <ProjectV2StudioSurface
+              key={project.projectV2.id}
+              onNotify={setToast}
+              onProjectChange={adoptProjectV2}
+              project={project.projectV2}
+              provider={activeProvider}
+            />
+          </section>
+        ) : null}
 
         <aside className="studio-inspector">
           {tab === "project" && (

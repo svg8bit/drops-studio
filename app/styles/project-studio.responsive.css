@@ -333,3 +333,46 @@
     box-shadow: none;
   }
 }
+
+/* Native Project V2 owns the canvas only while Builder is selected. The
+ * approved rail stays available, and no permanent fourth column is added. */
+.project-studio-layout.v2-builder-active {
+  grid-template-areas: "rail builder";
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.project-v2-studio-host {
+  grid-area: builder;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.project-studio-layout.v2-builder-active > :is(
+  .studio-inspector,
+  .runtime-stage,
+  .assistant-panel
+) {
+  display: none !important;
+}
+
+@media (max-width: 1280px) and (min-width: 921px) {
+  .project-studio-layout.v2-builder-active {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 920px) {
+  .project-studio-layout.v2-builder-active {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100dvh - 239px);
+  }
+
+  .project-studio-layout.v2-builder-active .project-v2-studio-host {
+    display: block;
+    min-height: calc(100dvh - 239px);
+    order: 1;
+    overflow: visible;
+  }
+}

@@ -9,6 +9,7 @@ import {
   type GeneratedProjectSpec,
 } from "../../lib/project-types"
 import type { MemberProjectRecord } from "../../lib/member-project-cloud"
+import type { ProjectV2 } from "../../lib/project-v2-types"
 import {
   expect,
   prepareHomePage,
@@ -88,6 +89,46 @@ async function installMemberAccess(page: Page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(memberAccessPayload()),
+    })
+  })
+}
+
+async function installProjectV2Cloud(page: Page) {
+  let project: ProjectV2 | null = null
+  let storageRevision = 0
+
+  await page.route("**/api/projects/v2**", async (route) => {
+    const request = route.request()
+    if (new URL(request.url()).pathname !== "/api/projects/v2") {
+      await route.fallback()
+      return
+    }
+    if (request.method() === "GET") {
+      await route.fulfill({
+        status: project ? 200 : 404,
+        contentType: "application/json",
+        body: JSON.stringify(
+          project
+            ? { project, storageRevision }
+            : { code: "PROJECT_V2_NOT_FOUND", error: "Project not found." },
+        ),
+      })
+      return
+    }
+
+    expect(request.method()).toBe("PUT")
+    const body = request.postDataJSON() as {
+      project: ProjectV2
+      expectedStorageRevision: number
+    }
+    expect(body.expectedStorageRevision).toBe(storageRevision)
+    expect(JSON.stringify(body)).not.toContain(SESSION_ONLY_KEY)
+    storageRevision += 1
+    project = body.project
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ project, storageRevision }),
     })
   })
 }
@@ -178,6 +219,7 @@ test("signed-in home restores and opens a remote-only runnable project", async (
   let remote = remoteProject()
 
   await installMemberAccess(page)
+  await installProjectV2Cloud(page)
   await page.route("**/api/projects", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillProjectList(route, [remote])
@@ -334,6 +376,7 @@ test("Studio restores a remote-only project and syncs validated source without p
     window.sessionStorage.setItem("drops-studio:anthropic", key)
   }, { key: SESSION_ONLY_KEY })
   await installMemberAccess(page)
+  await installProjectV2Cloud(page)
   await page.route("**/api/projects", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillProjectList(route, [remote])

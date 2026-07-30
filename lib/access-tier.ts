@@ -29,6 +29,11 @@ export interface StudioAccount {
   issuedAt: number;
 }
 
+export interface StudioProjectActor {
+  kind: "member" | "guest";
+  identity: string;
+}
+
 export type FundedBuildSubject =
   | { kind: "guest"; identity: string }
   | { kind: "account"; account: StudioAccount };
@@ -247,6 +252,25 @@ export function readStudioAccountCookie(value: string, secret: string, now = Dat
 export function resolveStudioAccount(value: string | undefined, env: EnvLike = process.env): StudioAccount | null {
   const secret = resolveAccountCookieSecret(env);
   return secret ? readStudioAccountCookie(value ?? "", secret) : null;
+}
+
+export function resolveStudioProjectActor(
+  input: { accountCookie?: string; guestCookie?: string },
+  env: EnvLike = process.env,
+): StudioProjectActor | null {
+  const account = resolveStudioAccount(input.accountCookie, env);
+  if (account) return { kind: "member", identity: account.identity };
+  const secret = resolveGuestCookieSecret(env);
+  const guest = secret
+    ? readGuestIdentityCookie(input.guestCookie ?? "", secret)
+    : null;
+  if (!guest) return null;
+  return {
+    kind: "guest",
+    identity: createHash("sha256")
+      .update(`drops-studio-guest:v1:${guest}`, "utf8")
+      .digest("hex"),
+  };
 }
 
 export function createGuestIdentityCookie(identity: string, secret: string): string {

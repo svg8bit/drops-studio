@@ -122,6 +122,25 @@ test("platform generation is honestly unavailable without gateway credentials", 
   );
 });
 
+test("platform generation prefers a request-scoped Vercel Function OIDC token", async () => {
+  const { generateWorkspaceAiPatch } = api();
+  const oidc = `ey${"A".repeat(24)}.ey${"B".repeat(24)}.${"C".repeat(32)}`;
+  let observedToken = null;
+  const result = await generateWorkspaceAiPatch(
+    request(),
+    { identity: "guest-oidc-123456", gatewayToken: oidc },
+    {
+      env: {},
+      async platformGenerate(input) {
+        observedToken = input.gatewayToken;
+        return { output: modelPatch(), providerRequestId: "req-oidc" };
+      },
+    },
+  );
+  assert.equal(observedToken, oidc);
+  assert.equal(JSON.stringify(result).includes(oidc), false);
+});
+
 test("OpenRouter uses request-only BYOK, strict JSON Schema and no Studio markup", async () => {
   const { generateWorkspaceAiPatch } = api();
   let fetchInput;

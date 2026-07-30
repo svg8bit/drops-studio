@@ -59,6 +59,7 @@ import {
   materializeMemberProject,
   saveMemberProjectToCloud,
 } from "@/lib/member-project-sync-client";
+import { saveProjectV2ToCloud } from "@/lib/project-v2-sync-client";
 import { customProductPreset, defaultPresetId, getProjectPreset, presets, type PresetId } from "@/lib/presets";
 import {
   isModelProviderId,
@@ -1520,10 +1521,15 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       spec = validateProjectSpec(buildPayload.spec);
       serverBuildWarning = buildPayload.warning || "";
 
-      const [{ compileProject }, { evaluateProjectQuality }] =
+      const [
+        { compileProject },
+        { evaluateProjectQuality },
+        { materializeProjectV2Template },
+      ] =
         await Promise.all([
           import("@/lib/project-compiler"),
           import("@/lib/project-quality"),
+          import("@/lib/project-template-materializer"),
         ]);
       const html = compileProject(spec);
       setActivity(
@@ -1565,10 +1571,17 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         "Static contract passed · sandbox smoke continues in Studio",
       );
       const now = new Date().toISOString();
+      const projectId = crypto.randomUUID();
+      const projectV2 = await materializeProjectV2Template({
+        id: projectId,
+        spec,
+        now,
+      });
       const project: GeneratedProject = {
-        id: crypto.randomUUID(),
+        id: projectId,
         spec,
         html,
+        projectV2,
         quality,
         createdAt: now,
         updatedAt: now,
@@ -1586,11 +1599,20 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           "A project with this identity was created in another tab. Build again to keep both versions.",
         );
       }
+      let builderSnapshotSaved = false;
+      if (projectSyncAvailable) {
+        try {
+          await saveProjectV2ToCloud(projectV2, 0);
+          builderSnapshotSaved = true;
+        } catch {
+          builderSnapshotSaved = false;
+        }
+      }
       let cloudSaved = false;
       if (projectSyncAvailable) {
         try {
           await saveMemberProjectToCloud(project, 0);
-          cloudSaved = true;
+          cloudSaved = builderSnapshotSaved;
         } catch {
           cloudSaved = false;
         }
@@ -1602,6 +1624,8 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           ? `${serverBuildWarning} Opening your editable live project…`
           : cloudSaved
             ? "Project built and saved to your account. Opening the live workspace…"
+            : builderSnapshotSaved
+              ? "Project V2 saved for its isolated build. Opening the live workspace…"
             : projectSyncAvailable
               ? "Project built and saved in this browser. Cloud sync will retry in Studio…"
               : "Opening your editable live project…",

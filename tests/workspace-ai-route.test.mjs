@@ -174,6 +174,26 @@ test("returns one canonical runnable workspace revision with provider evidence",
   });
 });
 
+test("passes the injected Vercel OIDC header only to platform generation", async () => {
+  const { handleWorkspaceAiPatchRequest } = api();
+  const oidc = `ey${"D".repeat(24)}.ey${"E".repeat(24)}.${"F".repeat(32)}`;
+  let received = null;
+  const response = await handleWorkspaceAiPatchRequest(
+    request(requestBody(), { "x-vercel-oidc-token": oidc }),
+    {
+      consumeLimit: allow,
+      reservePlatformQuota: reserveGuestQuota,
+      async generate(input, credentials) {
+        received = structuredClone(credentials);
+        return providerResult(input.baseRevision);
+      },
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(received.gatewayToken, oidc);
+  assert.equal(JSON.stringify(await response.json()).includes(oidc), false);
+});
+
 test("rejects cross-origin requests before rate limits or model calls", async () => {
   const { handleWorkspaceAiPatchRequest } = api();
   let touched = false;

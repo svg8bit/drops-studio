@@ -11,6 +11,9 @@ const cases = [
   ["Create my own CoinMarketCap crypto aggregator", "crypto-aggregator"],
   ["Daily morning brief delivered in Telegram", "morning-alpha"],
   ["Map Polymarket odds changes to related tokens", "prediction-impact"],
+  ["Build a whale intelligence dashboard that monitors selected wallets, enriches swaps with DropsTab market cap, FDV, unlock and funding context, scores relevance and sends approved Telegram alerts.", "smart-money-copy"],
+  ["Build an AI alpha channel that combines price movement, token unlocks, funding rounds and wallet activity, creates sourced posts and delivers them to Telegram.", "alpha-channel"],
+  ["Build a playable crypto game whose mechanics react to current DropsTab market data.", "crypto-game"],
 ];
 
 test("output-first routing preserves the requested product category", () => {

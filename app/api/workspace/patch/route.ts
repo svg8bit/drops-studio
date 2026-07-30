@@ -134,7 +134,9 @@ async function requestBody(request: NextRequest): Promise<RequestBodyResult> {
 
 function headerCredential(request: NextRequest, name: string): string | undefined {
   const value = request.headers.get(name)?.trim() ?? "";
-  return value || undefined;
+  return value && value.length <= 4_096 && !/[\r\n\0]/.test(value)
+    ? value
+    : undefined;
 }
 
 function directCredentialError(
@@ -256,6 +258,7 @@ export async function handleWorkspaceAiPatchRequest(
     identity: identity ?? undefined,
     openRouterKey: headerCredential(request, "x-openrouter-key"),
     providerKey: headerCredential(request, "x-provider-key"),
+    gatewayToken: headerCredential(request, "x-vercel-oidc-token"),
   };
   const connectionError = directCredentialError(parsed, credentials);
   if (connectionError) {

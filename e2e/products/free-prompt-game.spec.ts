@@ -36,7 +36,11 @@ async function deterministicFallbackPlan() {
     const response = await planProduct(
       new NextRequest("http://drops-studio.test/api/agent/plan", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          origin: "http://drops-studio.test",
+          "sec-fetch-site": "same-origin",
+        },
         body: JSON.stringify({ prompt: RETRO_WOLF_PROMPT }),
       })
     )
@@ -178,7 +182,11 @@ test("a Russian free prompt builds and runs the illustrated retro wolf game", as
   )
 
   if ((page.viewportSize()?.width ?? 1440) <= 680) {
-    await page.getByRole("button", { name: "Preview", exact: true }).click()
+    await page.locator(".mobile-preview-tab").click()
+  } else {
+    // New projects open in the Project V2 Files workspace. Select the approved
+    // project surface before exercising the deterministic legacy preview.
+    await page.getByRole("button", { name: "Project", exact: true }).click()
   }
   const runtime = page.frameLocator("iframe[title$='live application']")
   await expect(runtime.locator(".catcher-runtime")).toBeVisible()
