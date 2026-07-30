@@ -65,13 +65,16 @@ Report exact failures. Never update baselines or skip a gate automatically.
 These rules apply whenever work targets Project V2, the AI builder loop, or
 persistent Vercel Sandbox previews.
 
-### Protected state and worktree
+### Full repository and release authority
 
-- Before planning, inspect `git status -sb`, `git branch -vv`, `git worktree list`, recent commits, open PRs, and the latest default-branch CI.
-- Work only in the isolated worktree on `codex/drops-studio-v2-sandbox-builder`, based on the verified current `origin/main`. Reuse it if it exists; never create competing suffix branches silently.
-- `main`, the production deployment and aliases, historical PR #1 and PR #2, every non-owned PR branch, and every other worktree are read-only.
-- Never reset, clean, stash, rebase, force-push, rewrite history, switch another worktree, merge to `main`, or change a production alias.
-- Preserve V1 projects, all 12 recipes, `/p/{slug}`, ZIP export, current connections, checkpoints, and session-only BYOK behavior. Project V2 extends the canonical workspace through explicit adapters and migrations; it does not replace V1 in place.
+- Before planning, inspect `git status -sb`, `git branch -vv`, `git worktree list`, recent commits, open PRs, and the latest default-branch CI so every mutation starts from verified current state.
+- `codex/drops-studio-v2-sandbox-builder` is the prepared starting worktree, not an access boundary. The lead may inspect, create, switch, repair, or retire any Drops Studio branch or worktree needed to complete the product.
+- The lead has full read/write/admin and release authority across the complete Drops Studio surface: `main`, every branch and worktree, historical and active PRs/issues, GitHub Actions and repository settings, Vercel project settings and environment variables, previews, production deployments, domains and aliases, Drops Studio VPS/runtime/services/storage, Sandbox resources, provider configuration, and product integrations.
+- Commit, push, fetch, rebase, cherry-pick, merge, close or supersede PRs, update `main`, deploy, promote, roll back, and change the production alias when useful to finish or recover the product. These operations do not require another approval within the Drops Studio task.
+- Historical PR #1 and PR #2 are normal repository history, not protected read-only state. Reuse, supersede, close, or modify their remaining branches when the verified current architecture benefits.
+- Access includes reading and updating protected provider or deployment configuration through their proper interfaces. Never print secrets, place them in source/generated files/logs, or commit them.
+- Preserve V1 projects, all 12 recipes, `/p/{slug}`, ZIP export, current connections, checkpoints, and session-only BYOK behavior as product outcomes. Migrate or replace internals when necessary, but verify compatibility before release.
+- `/opt/coldmath`, ColdMath services, and the ColdMath repository remain outside this task because they are a separate product. Using the saved ColdMath VPS host as the task entry point does not authorize ColdMath changes.
 
 ### Work-package ownership
 
@@ -82,7 +85,7 @@ persistent Vercel Sandbox previews.
 - Studio owns the current unified workspace UI, real file/editor/preview/log/history states, Storybook, accessibility, and browser flows. It must not restore obsolete panels.
 - Crypto integrations own typed DropsTab and Drops Bot proxies, provider evidence, fixtures, Telegram boundaries, and truthful unavailable or setup-required states.
 - QA/release owns adversarial tests, CI parity, preview verification, and the final evidence table. It cannot waive a failing gate.
-- Parallel agents receive disjoint files. Only the lead edits shared types, configs, manifests, and integration points. Subagents do not commit, push, deploy, or change branches.
+- Parallel agents normally receive disjoint files. The lead coordinates shared types, configs, manifests, integration points, and may explicitly delegate branch, commit, push, PR, deployment, or production operations when that accelerates delivery without creating conflicting ownership.
 
 ### Plugin-first workflow
 
@@ -107,7 +110,7 @@ persistent Vercel Sandbox previews.
 - DropsTab quota-bearing tests use fixtures and cache boundaries. Live Sandbox or provider smoke tests run only behind explicit flags and never use production user accounts implicitly.
 - Never promote preview or browser telemetry into provider evidence.
 
-### Validation and preview-only release
+### Validation and production release
 
 - Reproduce inherited default-branch failures before feature work. Fix their root cause without changing visual baselines or weakening thresholds.
 - During implementation run narrow owner-specific tests. Run the full CI-equivalent gate once at the final boundary:
@@ -127,6 +130,6 @@ npm run test:lighthouse:prepared
 npm run build
 ```
 
-- Never update visual baselines, weaken thresholds, skip tests, or consume live DropsTab quota to make a gate pass.
-- After green gates, the only authorized release is: commit the dedicated branch, push it, open one separate PR, and create a provider-confirmed preview deployment.
-- Do not merge, promote, alias, or deploy to production. Record `main`, production, and protected PR state before and after release and prove they did not change.
+- Visual baselines, thresholds, fixtures, and test configuration are editable when an intentional product change requires it; document the reason and never use the change to conceal a regression. Do not consume live DropsTab quota in routine tests.
+- After the bounded gates, choose and execute the complete release path needed for the task: commit and push, open/update/merge PRs, update `main`, deploy or promote the verified Vercel build, change the production alias, configure runtime resources, and verify the public product.
+- Record the before/after Git, CI, deployment, alias, migration, and smoke-test evidence. Maintain a tested rollback path, but do not stop at a preview when a production release is required to complete the product.
