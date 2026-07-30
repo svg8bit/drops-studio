@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { DropsBrand } from "@/components/drops-brand";
+import { DropsStudioSetup } from "@/components/drops-studio-setup";
 import {
   ArrowLeft,
   ArrowRight,
@@ -96,32 +97,6 @@ const PreviewCanvas = dynamic(
           <span className="preview-ready">Preparing category-native preview</span>
         </div>
         <div className="preview-device" />
-      </section>
-    ),
-  },
-);
-
-const DropsStudioSetup = dynamic(
-  () =>
-    import("@/components/drops-studio-setup").then(
-      (module) => module.DropsStudioSetup,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <section
-        className="setup-card"
-        style={{ minHeight: "min(925px, 85vh)" }}
-        aria-busy="true"
-        aria-label="Loading builder controls"
-      >
-        <div className="setup-heading">
-          <div>
-            <span>SET UP YOUR PRODUCT</span>
-            <h2>Loading builder controls</h2>
-            <p>Preparing editable data, logic and integration controls…</p>
-          </div>
-        </div>
       </section>
     ),
   },
