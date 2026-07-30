@@ -50,6 +50,7 @@ type RequestLimitOptions = {
 };
 
 type BlobStorage = Pick<typeof import("@vercel/blob"), "get" | "put">;
+type BlobAccess = "private" | "public";
 
 function unavailableState(): RequestLimitState {
   return { status: "unavailable", count: null, remaining: null };
@@ -116,16 +117,28 @@ function validStoredState(value: unknown): { count: number; windowEndsAt: number
   return { count: Number(count), windowEndsAt: Number(windowEndsAt) };
 }
 
-async function blobPathname(options: RequestLimitOptions & { identity: string }): Promise<string> {
-  const key = await shortHash(`${options.namespace}:${options.identity}`);
+async function blobPathname(
+  options: RequestLimitOptions & { identity: string },
+  access: BlobAccess,
+): Promise<string> {
+  // Preserve the original private-store key so an active limiter window is
+  // never reset during rollout. Public-store compatibility uses a peppered key
+  // so the object pathname cannot disclose or make an identity-derived key
+  // guessable.
+  const pepper = process.env.DROPS_ACCOUNT_IDENTITY_PEPPER
+    || process.env.DROPS_GUEST_COOKIE_SECRET
+    || "";
+  const identityKey = `${options.namespace}:${options.identity}`;
+  const key = await shortHash(access === "public" ? `${pepper}:${identityKey}` : identityKey);
   return `drops-studio/rate-limit/${options.namespace}/${key}.json`;
 }
 
 async function storedBlobCount(
   storage: BlobStorage,
   pathname: string,
+  access: BlobAccess,
 ): Promise<{ count: number; windowEndsAt: number; etag: string } | null> {
-  const current = await storage.get(pathname, { access: "private", useCache: false });
+  const current = await storage.get(pathname, { access, useCache: false });
   if (!current) return null;
   if (current.statusCode !== 200) throw new Error("Rate-limit state could not be read.");
   const parsed = JSON.parse(await new Response(current.stream).text()) as unknown;
@@ -149,11 +162,28 @@ export async function consumeRequestLimitState(
   }
   try {
     const storage = await blobStorage(storageOverride);
-    const pathname = await blobPathname({ ...options, identity: options.identity });
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    const pathnameOptions = { ...options, identity: options.identity };
+    const pathnames: Record<BlobAccess, string> = {
+      private: await blobPathname(pathnameOptions, "private"),
+      public: await blobPathname(pathnameOptions, "public"),
+    };
+    // Blob access is fixed at store creation time. Existing Drops Studio
+    // installations may use the original public publication store, while new
+    // installations can use a private store. Alternate access modes so both
+    // configurations retain the same atomic limiter contract.
+    const accessAttempts: BlobAccess[] = [
+      "private",
+      "public",
+      "private",
+      "public",
+      "private",
+      "public",
+    ];
+    for (const access of accessAttempts) {
+      const pathname = pathnames[access];
       let current: Awaited<ReturnType<typeof storedBlobCount>>;
       try {
-        current = await storedBlobCount(storage, pathname);
+        current = await storedBlobCount(storage, pathname, access);
       } catch {
         continue;
       }
@@ -162,7 +192,7 @@ export async function consumeRequestLimitState(
       if (!current) {
         try {
           await storage.put(pathname, JSON.stringify({ count: 1, windowEndsAt }), {
-            access: "private",
+            access,
             addRandomSuffix: false,
             allowOverwrite: false,
             cacheControlMaxAge: 60,
@@ -177,7 +207,7 @@ export async function consumeRequestLimitState(
       const count = expired ? 1 : current.count + 1;
       try {
         await storage.put(pathname, JSON.stringify({ count, windowEndsAt: expired ? windowEndsAt : current.windowEndsAt }), {
-          access: "private",
+          access,
           addRandomSuffix: false,
           allowOverwrite: true,
           cacheControlMaxAge: 60,
@@ -206,10 +236,18 @@ export async function readRequestLimitState(
   if (!storageOverride && !durableBackendConfigured()) return unavailableState();
   try {
     const storage = await blobStorage(storageOverride);
-    const pathname = await blobPathname({ ...options, identity: options.identity });
-    const current = await storedBlobCount(storage, pathname);
-    const count = current && current.windowEndsAt > Date.now() ? current.count : 0;
-    return countedState(count, options.max, count >= options.max);
+    const pathnameOptions = { ...options, identity: options.identity };
+    for (const access of ["private", "public"] satisfies BlobAccess[]) {
+      try {
+        const pathname = await blobPathname(pathnameOptions, access);
+        const current = await storedBlobCount(storage, pathname, access);
+        const count = current && current.windowEndsAt > Date.now() ? current.count : 0;
+        return countedState(count, options.max, count >= options.max);
+      } catch {
+        continue;
+      }
+    }
+    return unavailableState();
   } catch {
     return unavailableState();
   }

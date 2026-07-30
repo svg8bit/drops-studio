@@ -106,7 +106,25 @@ const DropsStudioSetup = dynamic(
     import("@/components/drops-studio-setup").then(
       (module) => module.DropsStudioSetup,
     ),
-  { ssr: false },
+  {
+    ssr: false,
+    loading: () => (
+      <section
+        className="setup-card"
+        style={{ minHeight: "min(925px, 85vh)" }}
+        aria-busy="true"
+        aria-label="Loading builder controls"
+      >
+        <div className="setup-heading">
+          <div>
+            <span>SET UP YOUR PRODUCT</span>
+            <h2>Loading builder controls</h2>
+            <p>Preparing editable data, logic and integration controls…</p>
+          </div>
+        </div>
+      </section>
+    ),
+  },
 );
 
 type ProviderId =
@@ -428,7 +446,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   const carouselRef = useRef<HTMLDivElement>(null);
   const centeredPresetRef = useRef(false);
   const guestIdRef = useRef("");
-  const setupSection = useNearViewport();
   const previewSection = useNearViewport();
 
   const selectedPreset = useMemo(
@@ -1915,8 +1932,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
             </div>
           </section>
 
-          {setupSection.ready ? (
-            <DropsStudioSetup
+          <DropsStudioSetup
               key={`${selectedId}-${customMode}`}
               preset={selectedPreset}
               draftSpec={draftSpec}
@@ -1972,23 +1988,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
                 );
               }}
             />
-          ) : (
-            <section
-              ref={setupSection.elementRef}
-              className="setup-card"
-              style={{ minHeight: "min(925px, 85vh)" }}
-              aria-busy="true"
-              aria-label="Preparing builder controls"
-            >
-              <div className="setup-heading">
-                <div>
-                  <span>SET UP THIS RECIPE</span>
-                  <h2>{selectedPreset.title}</h2>
-                  <p>Preparing the editable data, logic and AI controls…</p>
-                </div>
-              </div>
-            </section>
-          )}
         </section>
 
         {previewSection.ready ? (

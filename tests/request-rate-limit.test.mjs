@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 // Next 16 does not publish a package exports map, so direct Node ESM tests
 // must address the public server entry with its file extension.
@@ -323,4 +324,97 @@ test("durable limiter retries a transient read failure before consuming", async 
   assert.deepEqual(state, { status: "allowed", count: 1, remaining: 2 });
   assert.equal(reads, 2);
   assert.equal(writes, 1);
+});
+
+test("durable limiter supports an existing public Blob store without weakening the limit", async () => {
+  const accesses = [];
+  let record = null;
+  let version = 0;
+  const storage = {
+    async get(_pathname, options) {
+      accesses.push(`get:${options.access}`);
+      if (options.access === "private") throw new Error("store access is public");
+      if (!record) return null;
+      return {
+        statusCode: 200,
+        stream: new Blob([record.body]).stream(),
+        blob: { etag: record.etag },
+      };
+    },
+    async put(_pathname, body, options) {
+      accesses.push(`put:${options.access}`);
+      assert.equal(options.access, "public");
+      if (options.allowOverwrite === false && record) throw new Error("exists");
+      if (options.ifMatch && options.ifMatch !== record?.etag) throw new Error("etag mismatch");
+      version += 1;
+      record = { body: String(body), etag: `etag-${version}` };
+      return { pathname: "rate-limit.json", etag: record.etag };
+    },
+  };
+  const options = {
+    identity: "session:public-store",
+    namespace: "project-build-run",
+    max: 1,
+    windowMs: 60_000,
+  };
+
+  assert.deepEqual(await requestLimitModule.consumeRequestLimitState(options, storage), {
+    status: "allowed",
+    count: 1,
+    remaining: 0,
+  });
+  assert.deepEqual(await requestLimitModule.consumeRequestLimitState(options, storage), {
+    status: "limited",
+    count: 2,
+    remaining: 0,
+  });
+  assert.deepEqual(accesses.slice(0, 3), ["get:private", "get:public", "put:public"]);
+});
+
+test("peppered public fallback preserves the active legacy private counter", async () => {
+  const previousPepper = process.env.DROPS_ACCOUNT_IDENTITY_PEPPER;
+  process.env.DROPS_ACCOUNT_IDENTITY_PEPPER = "test-rate-limit-pepper";
+  const identity = "member:legacy-counter";
+  const namespace = "project-build-run";
+  const legacyHash = createHash("sha256")
+    .update(`${namespace}:${identity}`)
+    .digest("hex")
+    .slice(0, 32);
+  const legacyPathname = `drops-studio/rate-limit/${namespace}/${legacyHash}.json`;
+  let stored = {
+    body: JSON.stringify({ count: 7, windowEndsAt: Date.now() + 60_000 }),
+    etag: "legacy-etag",
+  };
+
+  try {
+    const state = await requestLimitModule.consumeRequestLimitState({
+      identity,
+      namespace,
+      max: 10,
+      windowMs: 60_000,
+    }, {
+      async get(pathname, options) {
+        assert.equal(options.access, "private");
+        assert.equal(pathname, legacyPathname);
+        return {
+          statusCode: 200,
+          stream: new Blob([stored.body]).stream(),
+          blob: { etag: stored.etag },
+        };
+      },
+      async put(pathname, body, options) {
+        assert.equal(pathname, legacyPathname);
+        assert.equal(options.access, "private");
+        assert.equal(options.ifMatch, "legacy-etag");
+        stored = { body: String(body), etag: "next-etag" };
+        return { pathname, etag: stored.etag };
+      },
+    });
+
+    assert.deepEqual(state, { status: "allowed", count: 8, remaining: 2 });
+    assert.equal(JSON.parse(stored.body).count, 8);
+  } finally {
+    if (previousPepper === undefined) delete process.env.DROPS_ACCOUNT_IDENTITY_PEPPER;
+    else process.env.DROPS_ACCOUNT_IDENTITY_PEPPER = previousPepper;
+  }
 });
