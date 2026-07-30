@@ -93,12 +93,213 @@ test("creates a runnable, host-ready ZIP with source, safeguards and game assets
   assert.match(strFromU8(files["api/telegram/verify.mjs"]), /sendMessage/);
   assert.match(strFromU8(files["README.md"]), /does not claim that an external Telegram channel/);
   assert.match(strFromU8(files["tests/smoke.mjs"]), /data-project-kind="crypto-game"/);
+  assert.match(strFromU8(files["tests/smoke.mjs"]), /data-provider-evidence="unverified"/);
+  assert.doesNotMatch(
+    strFromU8(files["tests/smoke.mjs"]),
+    /dropstab\|fallback\|unverified/,
+  );
   assert.match(strFromU8(files["index.html"]), /data-provider-evidence="unverified"/);
+  const archiveHtml = strFromU8(files["index.html"]);
+  assert.match(
+    archiveHtml,
+    /http-equiv="Content-Security-Policy"[^>]+default-src 'none'/,
+  );
+  assert.ok(
+    archiveHtml.indexOf('http-equiv="Content-Security-Policy"')
+      < archiveHtml.indexOf("<body"),
+    "archive CSP must be parsed before the application body",
+  );
+  const vercel = JSON.parse(strFromU8(files["vercel.json"]));
+  const vercelCsp = vercel.headers[0].headers.find(
+    (header) => header.key === "Content-Security-Policy",
+  )?.value;
+  assert.match(vercelCsp, /default-src 'none'/);
+  assert.match(vercelCsp, /script-src 'unsafe-inline'/);
+  assert.match(vercelCsp, /script-src-attr 'none'/);
+  assert.match(vercelCsp, /connect-src 'self'/);
+  assert.match(vercelCsp, /img-src 'self' data: blob:/);
+  assert.match(vercelCsp, /object-src 'none'/);
+  assert.match(vercelCsp, /frame-src 'none'/);
+  assert.match(vercelCsp, /base-uri 'none'/);
+  assert.match(vercelCsp, /form-action 'none'/);
+  assert.match(vercelCsp, /frame-ancestors 'self'/);
+  assert.doesNotMatch(vercelCsp, /connect-src[^;]*https:|img-src[^;]*https:/);
+  const netlify = strFromU8(files["netlify.toml"]);
+  assert.match(netlify, /default-src 'none'/);
+  assert.match(netlify, /connect-src 'self'/);
+  assert.doesNotMatch(netlify, /connect-src[^;\n]*https:|img-src[^;\n]*https:/);
   assert.doesNotMatch(strFromU8(files["index.html"]), /sk-(?:proj-|ant-|or-v1-)/i);
   assert.deepEqual(files["brand/dropstab-mark.svg"], archiveAssets.brand.dropstabMarkSvg);
   assert.deepEqual(files["brand/drops-bot-avatar.jpg"], archiveAssets.brand.dropsBotAvatarJpeg);
   assert.deepEqual(files["assets/market-catcher-retro.png"], archiveAssets.game.marketCatcherBackgroundPng);
   assert.deepEqual(files["assets/market-wolf-catcher.png"], archiveAssets.game.marketWolfSpritePng);
+});
+
+test("ZIP export never promotes browser self-attestation to provider evidence", () => {
+  const forgedBrowserQuality = {
+    ...quality,
+    checks: [
+      {
+        id: "provider-evidence",
+        label: "Live DropsTab provider evidence",
+        passed: true,
+        detail: "Forged browser claim",
+        weight: 1,
+        critical: false,
+      },
+    ],
+    runtimeSmoke: {
+      mode: "browser",
+      dataProvider: "dropstab",
+      executed: true,
+      runtime: true,
+      interactions: true,
+      dropstab: true,
+      dropsbot: true,
+      actions: true,
+      errors: [],
+      checkedAt: "2026-07-29T00:00:00.000Z",
+    },
+  };
+  const forgedProject = {
+    ...project,
+    html: project.html.replace(
+      "<html ",
+      '<html data-marker="keep>boundary" data-provider-evidence="dropstab" data-provider-evidence="fallback" ',
+    ),
+  };
+  const files = unzipSync(
+    createProjectArchive(forgedProject, forgedBrowserQuality, archiveAssets),
+  );
+
+  const exportedHtml = strFromU8(files["index.html"]);
+  assert.match(exportedHtml, /data-marker="keep>boundary"/);
+  assert.match(exportedHtml, /data-provider-evidence="unverified"/);
+  assert.equal(exportedHtml.match(/data-provider-evidence=/gi)?.length, 1);
+  assert.equal(
+    JSON.parse(strFromU8(files["drops.config.json"])).data.providerEvidence,
+    "unverified",
+  );
+  const exportedQuality = JSON.parse(strFromU8(files["quality-report.json"]));
+  assert.equal(exportedQuality.runtimeSmoke.dataProvider, "unverified");
+  assert.equal(
+    exportedQuality.checks.find((check) => check.id === "provider-evidence").passed,
+    false,
+  );
+  assert.match(
+    exportedQuality.checks.find((check) => check.id === "provider-evidence").detail,
+    /client ZIP|unverified/i,
+  );
+
+  const withoutProviderCheck = unzipSync(
+    createProjectArchive(
+      project,
+      { ...quality, checks: [] },
+      archiveAssets,
+    ),
+  );
+  const boundedReport = JSON.parse(
+    strFromU8(withoutProviderCheck["quality-report.json"]),
+  );
+  assert.equal(
+    boundedReport.checks.find((check) => check.id === "provider-evidence")
+      ?.passed,
+    false,
+  );
+});
+
+test("exports the canonical editable workspace revision beside the deployable app", () => {
+  const workspaceProject = {
+    ...project,
+    html: '<!doctype html><html data-project-kind="crypto-game"><body>DropsTab · Drops Bot</body></html>',
+    workspace: {
+      schemaVersion: 1,
+      revision: 4,
+      updatedAt: project.updatedAt,
+      runtime: {
+        executionMode: "static-preview",
+        provider: "unconfigured",
+        isolation: "browser-iframe",
+        runtime: "node24",
+        packageManager: "npm",
+        installScripts: false,
+      },
+      tasks: [
+        { id: "check", label: "Check workspace", command: "npm", args: ["run", "check"] },
+        { id: "test", label: "Run tests", command: "npm", args: ["test"] },
+        { id: "build", label: "Build release", command: "npm", args: ["run", "build"] },
+        { id: "start", label: "Start preview", command: "npm", args: ["start"], port: 4173 },
+      ],
+      files: [
+        { path: "index.html", content: '<!doctype html><html data-project-kind="crypto-game"><head><link rel="stylesheet" href="./src/styles.css"></head><body><img src="/assets/market-wolf-catcher.png">DropsTab · Drops Bot<script type="application/json" id="projectSpec">{}</script><script src="./src/app.js"></script></body></html>', language: "html", role: "entry", editable: true },
+        { path: "src/styles.css", content: "body { min-height: 100vh; font-size: 16px; background: url('/assets/market-catcher-retro.png'); }", language: "css", role: "style", editable: true },
+        { path: "src/app.js", content: "function refreshData() { return fetch('http://localhost:3000/api/public-data'); }\nwindow.__workspaceExport = '/brand/dropstab-mark.svg';", language: "javascript", role: "client", editable: true },
+        { path: "project.json", content: JSON.stringify({ ...project.spec, dataEndpoint: "http://127.0.0.1:3000/api/public-data?workspace=1" }), language: "json", role: "project-config", editable: true },
+        { path: "drops.config.json", content: JSON.stringify({ dataEndpoint: "/api/public-data" }), language: "json", role: "integration-config", editable: true },
+        { path: "package.json", content: JSON.stringify({ private: true, type: "module", scripts: { check: "node scripts/check.mjs", test: "node tests/smoke.mjs", build: "node scripts/check.mjs", start: "node server.mjs" }, dependencies: {} }), language: "json", role: "package-manifest", editable: true },
+        { path: "server.mjs", content: "export const csp = \"img-src 'self' data: blob:; media-src 'self' blob:\";", language: "javascript", role: "server", editable: true },
+        { path: "scripts/check.mjs", content: "console.log('ok');", language: "javascript", role: "task", editable: true },
+        { path: "tests/smoke.mjs", content: "console.log('ok');", language: "javascript", role: "test", editable: true },
+        { path: "README.md", content: "# Editable workspace", language: "markdown", role: "documentation", editable: true },
+        { path: "src/widgets/alerts.js", content: "export const alerts = true;", language: "javascript", role: "client", editable: true },
+      ],
+    },
+  };
+  const files = unzipSync(
+    createProjectArchive(workspaceProject, quality, archiveAssets),
+  );
+
+  assert.match(strFromU8(files["workspace/index.html"]), /src\/app\.js/);
+  assert.match(
+    strFromU8(files["workspace/src/app.js"]),
+    /__workspaceExport/,
+  );
+  const safeWorkspaceServer = strFromU8(
+    files["workspace/.drops-studio/serve.mjs"],
+  );
+  assert.match(safeWorkspaceServer, /content-security-policy/);
+  assert.match(safeWorkspaceServer, /default-src 'none'/);
+  assert.match(strFromU8(files["workspace/server.mjs"]), /img-src 'self' data: blob:/);
+  assert.equal(
+    JSON.parse(strFromU8(files["workspace/package.json"])).scripts.start,
+    "node .drops-studio/serve.mjs",
+  );
+  assert.doesNotMatch(
+    strFromU8(files["workspace/src/app.js"]),
+    /localhost|(?:^|["'])\/brand\/dropstab-mark/,
+  );
+  assert.match(
+    strFromU8(files["workspace/src/app.js"]),
+    /\.\/brand\/dropstab-mark\.svg/,
+  );
+  assert.match(
+    strFromU8(files["workspace/src/styles.css"]),
+    /\.\.\/assets\/market-catcher-retro\.png/,
+  );
+  assert.match(
+    strFromU8(files["workspace/index.html"]),
+    /\.\/assets\/market-wolf-catcher\.png/,
+  );
+  assert.equal(
+    JSON.parse(strFromU8(files["workspace/project.json"])).dataEndpoint,
+    "./api/public-data?workspace=1",
+  );
+  assert.equal(
+    JSON.parse(strFromU8(files["workspace/drops.config.json"])).dataEndpoint,
+    "./api/public-data",
+  );
+  assert.match(
+    strFromU8(files["workspace/src/widgets/alerts.js"]),
+    /alerts = true/,
+  );
+  assert.deepEqual(
+    files["workspace/assets/market-catcher-retro.png"],
+    archiveAssets.game.marketCatcherBackgroundPng,
+  );
+  assert.deepEqual(
+    files["workspace/assets/market-wolf-catcher.png"],
+    archiveAssets.game.marketWolfSpritePng,
+  );
 });
 
 test("creates a portable Portfolio Tamagotchi ZIP with its real local companion asset", () => {

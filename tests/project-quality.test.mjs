@@ -19,7 +19,7 @@ const spec = {
 
 const html = `${"x".repeat(19_000)}<html data-project-kind="morning-alpha" data-delivery-mode="connection-required"><head><title>Brief</title><meta name="viewport"></head><body data-studio-block="application">approval required<script>function refreshData(){} function dropsbotSetup(){} function save(){localStorage.setItem("x","y")} document.addEventListener("click",()=>{})</script><style>@media(max-width:760px){}</style></body></html>`;
 
-test("publish readiness requires a successful executed runtime smoke", () => {
+test("publish readiness requires a successful host-side runtime check", () => {
   const pending = evaluateProjectQuality(spec, html);
   assert.equal(pending.readyToPublish, false);
   assert.ok(pending.criticalFailures.includes("runtime"));
@@ -36,7 +36,18 @@ test("publish readiness requires a successful executed runtime smoke", () => {
     errors: [],
     checkedAt: new Date().toISOString(),
   };
-  const passed = evaluateProjectQuality(spec, html, smoke);
+  const browserOnly = evaluateProjectQuality(spec, html, smoke);
+  assert.equal(browserOnly.readyToPublish, false);
+  assert.ok(browserOnly.criticalFailures.includes("runtime"));
+  assert.match(
+    browserOnly.checks.find((item) => item.id === "runtime")?.detail ?? "",
+    /Browser telemetry.*unverified/i,
+  );
+
+  const passed = evaluateProjectQuality(spec, html, {
+    ...smoke,
+    mode: "server-artifact",
+  });
   assert.equal(passed.readyToPublish, true);
   assert.equal(passed.score, 100);
   assert.equal(passed.launchStatus, "external-setup-required");
@@ -44,7 +55,7 @@ test("publish readiness requires a successful executed runtime smoke", () => {
 
 test("a runtime error blocks publishing even when static markers pass", () => {
   const failed = evaluateProjectQuality(spec, html, {
-    mode: "browser",
+    mode: "server-artifact",
     dataProvider: "dropstab",
     executed: true,
     runtime: true,

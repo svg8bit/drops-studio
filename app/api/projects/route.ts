@@ -9,10 +9,19 @@ import {
   upsertMemberProject,
 } from "../../../db/member-projects.ts";
 import {
+  billingStorageConfigured,
+  readBillingAccount,
+} from "../../../db/billing.ts";
+import {
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
   type StudioAccount,
 } from "../../../lib/access-tier.ts";
+import {
+  billingEntitlements,
+  billingTierForAccount,
+  stripeProPriceId,
+} from "../../../lib/billing.ts";
 import {
   ArtifactSecretError,
   assertProjectPayloadSafe,
@@ -207,6 +216,20 @@ function requireStorage(): void {
   }
 }
 
+async function privateProjectLimit(member: StudioAccount): Promise<number> {
+  const expectedPriceId = stripeProPriceId();
+  if (!expectedPriceId || !billingStorageConfigured()) return MEMBER_PROJECT_LIMIT;
+  try {
+    const billing = await readBillingAccount(member.identity);
+    return billingEntitlements(
+      billingTierForAccount(billing, expectedPriceId),
+    ).privateProjects;
+  } catch {
+    // Paid storage expansion is fail-closed when billing proof is unavailable.
+    return MEMBER_PROJECT_LIMIT;
+  }
+}
+
 function responseError(error: unknown): NextResponse {
   if (error instanceof MemberProjectResponseError) {
     return json(error.payload, error.status);
@@ -233,10 +256,13 @@ export async function GET(request: NextRequest) {
     const member = account(request);
     requireStorage();
     await enforceLimit(member, "read");
-    const projects = await listMemberProjects(member.identity);
+    const [projects, limit] = await Promise.all([
+      listMemberProjects(member.identity),
+      privateProjectLimit(member),
+    ]);
     return json({
       projects,
-      limit: MEMBER_PROJECT_LIMIT,
+      limit,
       materialization: "compile-spec-client-side",
     }, 200);
   } catch (error) {
@@ -254,10 +280,13 @@ export async function PUT(request: NextRequest) {
     requireBodyFields(input, ["project", "expectedRevision"]);
     const expectedRevision = revision(input.expectedRevision, true);
     const draft = projectDraft(input.project);
+    const limit = await privateProjectLimit(member);
     const result = await upsertMemberProject(
       member.identity,
       draft,
       expectedRevision,
+      undefined,
+      limit,
     );
     if (result.status === "conflict") {
       return json({
@@ -269,7 +298,7 @@ export async function PUT(request: NextRequest) {
     if (result.status === "limit") {
       return json({
         code: "PROJECT_LIMIT",
-        error: `A member account can sync up to ${MEMBER_PROJECT_LIMIT} projects. Delete or export one before adding another.`,
+        error: `This account can sync up to ${limit} projects. Delete or export one before adding another.`,
       }, 409);
     }
     if (result.status === "too-large") {

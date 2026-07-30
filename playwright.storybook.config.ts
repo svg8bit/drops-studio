@@ -37,19 +37,24 @@ const projects = [
 export default defineConfig({
   testDir: "./storybook-e2e",
   outputDir: "outputs/storybook-test-results",
+  snapshotPathTemplate: executablePath
+    ? "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}-system{ext}"
+    : "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   timeout: 60_000,
   expect: {
     timeout: 10_000,
     toHaveScreenshot: {
       animations: "disabled",
       caret: "hide",
-      maxDiffPixels: 0,
+      // Canonical CI snapshots are exact; the optional local system browser
+      // gets a bounded raster tolerance for the host GPU/font renderer.
+      maxDiffPixels: executablePath ? 50 : 0,
       scale: "css",
-      threshold: 0,
+      threshold: executablePath ? 0.01 : 0,
     },
   },
   reporter: [

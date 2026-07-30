@@ -190,10 +190,10 @@ const providerList: Provider[] = [
   },
   {
     id: "dropsbot",
-    name: "Telegram + Drops Bot",
-    eyebrow: "Account, bot and channels",
+    name: "Telegram delivery + Drops Bot setup",
+    eyebrow: "Separate provider boundaries",
     description:
-      "Connect your Telegram account, create a real channel, add a bot as administrator and publish the first post.",
+      "Create and verify a Telegram channel with the selected Telegram bot, then link an official Drops Bot Profile through its documented guided flow.",
     docs: "https://core.telegram.org/method/channels.createChannel",
   },
   {
@@ -451,17 +451,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         : null,
     [projects, telegramProjectSlug],
   );
-  const handleTelegramConnected = useCallback((connected: boolean) => {
-    if (connected) {
-      window.sessionStorage.setItem(
-        "drops-studio:dropsbot",
-        "account-connected",
-      );
-    } else {
-      window.sessionStorage.removeItem("drops-studio:dropsbot");
-    }
-    setConnections((current) => ({ ...current, dropsbot: connected }));
-  }, []);
   const applyAccessStatus = useCallback((access: StudioAccessStatus) => {
     const signedIn = Boolean(access.authenticated && access.account?.connected);
     const available = access.platformAi?.available === true;
@@ -557,16 +546,15 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         /* Legacy drafts are optional. */
       }
       setProjects(savedProjects);
+      // A Telegram user-account session is not evidence that Drops Bot is linked.
+      window.sessionStorage.removeItem("drops-studio:dropsbot");
       setConnections((current) => {
         const connected = { ...current };
         providerList.forEach((item) => {
           const marker = window.sessionStorage.getItem(
             `drops-studio:${item.id}`,
           );
-          if (
-            item.id !== "free" &&
-            (item.id === "dropsbot" ? marker === "account-connected" : marker)
-          )
+          if (item.id !== "free" && item.id !== "dropsbot" && marker)
             connected[item.id] = true;
         });
         return connected;
@@ -706,12 +694,15 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   );
 
   useEffect(() => {
-    if (!centeredPresetRef.current) {
-      centeredPresetRef.current = true;
+    const isInitialSelection = !centeredPresetRef.current;
+    centeredPresetRef.current = true;
+    if (
+      isInitialSelection &&
+      !window.matchMedia("(max-width: 620px)").matches
+    )
       return;
-    }
     const frame = window.requestAnimationFrame(() => {
-      centerPreset(selectedId, "smooth");
+      centerPreset(selectedId, isInitialSelection ? "auto" : "smooth");
     });
     return () => window.cancelAnimationFrame(frame);
   }, [centerPreset, selectedId]);
@@ -1224,9 +1215,17 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       return;
     }
     if (providerId === "dropsbot") {
-      window.open("https://t.me/Drops", "_blank", "noopener,noreferrer");
+      const popup = window.open("about:blank", "_blank");
+      if (!popup) {
+        setToast(
+          "Your browser blocked the Drops Bot tab. Allow popups or open the official bot manually to continue.",
+        );
+        return;
+      }
+      popup.opener = null;
+      popup.location.replace("https://t.me/Drops");
       setToast(
-        "Official Drops Bot opened. Finish setup there; Drops Studio marks it connected only after account verification.",
+        "Official Drops Bot opened. Telegram account verification remains separate; follow the documented Profile steps before treating alerts as configured.",
       );
       setConnectionOpen(false);
       return;
@@ -2047,7 +2046,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           projectSyncAvailable={projectSyncAvailable}
           onDisconnectOpenRouter={() => void disconnectOpenRouterAccount()}
           onConnectProvider={() => void connectProvider()}
-          onTelegramConnected={handleTelegramConnected}
           onOpenProject={(id) => router.push(`/studio/${id}`)}
         />
       )}

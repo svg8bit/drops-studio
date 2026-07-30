@@ -66,7 +66,8 @@ Drops Bot is integrated through the official Telegram surface and documented set
 - Solana trading surfaces
 - wallet event webhooks where available to the connected account
 
-There are two distinct real flows:
+There are three distinct real flows. The first two are Telegram transport flows,
+not proof that the official Drops Bot API was configured:
 
 1. **New channel through MTProto.** The Studio wizard connects the user's
    Telegram account with `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, seals the
@@ -80,6 +81,43 @@ There are two distinct real flows:
    permission, and optionally sends a test post through the Bot API. It does not
    create or select an existing channel through the MTProto wizard and does not
    persist the token.
+3. **Wallet-event webhook receiver MVP.** A signed Studio account may create one secret
+   callback URL for a project it owns, and only after explicit consent. The user
+   registers that URL manually through the official `@drops` product because the
+   public documentation does not publish a webhook-registration REST path,
+   authentication header, payload schema, signature header, or retry contract.
+   Studio therefore does not invent any of them. The receiver authenticates the
+   capability embedded in the URL, accepts only JSON up to 64 KiB, removes
+   credential-like fields and values before persistence, and de-duplicates exact
+   deliveries by the SHA-256 hash of the raw body. The secret itself is returned
+   once and only its hash is stored. Event reads require the same signed project
+   owner.
+
+The official Drops Bot API page currently lists a free allowance of 20 tracked
+wallets and 10,000 webhook calls per month. Drops Studio shows that provider
+allowance as informational context only; it does not invent or locally override
+the account limit reported by `@drops`.
+
+Creating a callback leaves callback evidence at `pending`; it does not mean that
+`@drops` accepted the URL. Evidence changes to `callback-received` only after a
+valid capability-authenticated callback is actually persisted. The URL is also
+known to the user who created it, so this receipt proves neither provider identity
+nor provider configuration. It is never described as a Drops Bot verification or
+provider-signature verification because the public docs define neither a signature
+scheme nor a provider-only secret. Cloudflare D1 is used when bound. When D1 is
+absent and Vercel Blob credentials are configured, the receiver uses one private,
+CAS-protected Blob state; if neither durable backend is configured, production
+fails closed with an unavailable response. The local in-memory path exists only
+in the repository proof mode.
+
+The documented Profile flow remains a guided Telegram operation rather than a
+fabricated REST call. The user opens their active Drops Bot and sends `/profiles`
+in the private chat, adds that same bot instance to the destination, then sends
+`/use_thread <Profile>` in the group, channel or topic. Only the user who added
+the bot may link that user's Profiles, and one Drops Bot instance is allowed per
+destination. Drops Studio copies the command for the user; it does not send the
+command or inspect the bot's reply. Even a future Telegram message receipt would
+prove only that the command was sent, not that Drops Bot applied the Profile.
 
 `BLOB_READ_WRITE_TOKEN` or the provider combination `BLOB_STORE_ID` plus
 `VERCEL_OIDC_TOKEN` supplies durable production request/rate-limit state. These
@@ -90,6 +128,8 @@ Relevant official references:
 
 - <https://t.me/Drops>
 - <https://etherdrops.gitbook.io/etherdrops-bot/>
+- <https://etherdrops.gitbook.io/etherdrops-bot/advanced-tools/api>
+- <https://etherdrops.gitbook.io/etherdrops-bot/bot-for-groups-and-channels/linking-profiles>
 - <https://etherdrops.gitbook.io/etherdrops-bot/llms.txt>
 
 ## Polymarket
@@ -126,19 +166,65 @@ and limits remain controlled by OpenRouter. Custom endpoints are called directly
 from the visitor's browser, so the hosting service does not become an
 unrestricted request proxy.
 
-Models never generate executable HTML. The server and browser compile the same validated project specification, so model output cannot inject scripts or credentials into a published product.
+The visual Director still returns a validated design object. The source
+workspace route is a separate bounded code-generation path: a provider may
+return only strict create/update/delete operations against the current optimistic
+revision. It cannot directly submit an execution command, lifecycle install
+script, lockfile, dot-env file, secret or traversal path; generated source files
+also reject `eval`, dynamic functions and direct child-process imports. Validated
+`index.html` keeps one inert `application/json` project payload, one exact local
+stylesheet and one exact local runtime script. Extra scripts, import maps, link
+loads, frames, objects, embeds, base URLs, meta refreshes, inline event handlers,
+script-scheme URLs and outbound form actions fail the complete revision.
+Validated manifest scripts are derived into explicit package task buttons and run only
+after the user selects one inside the isolated sandbox. The server applies file
+operations atomically, validates the exact dependency and task contract,
+recompiles the canonical runtime and rejects category changes before returning
+the revision. Platform-funded generation tries GPT-5.6 Sol first and then the
+configured free fallback; BYOK credentials are request-only and do not consume
+the platform quota or receive a Drops Studio markup.
+
+### Bounded multi-package workspaces
+
+The canonical root remains a directly previewable and publishable static product:
+`index.html`, `src/styles.css` and `src/app.js` are required even when backend or
+tooling packages are added. The root `package.json` may declare at most six
+explicit one-level directories matching `packages/<safe-name>`. Globs, traversal,
+URLs, nested workspace declarations and a missing child `package.json` fail the
+entire revision.
+
+Every root or child manifest must set `private: true`. Dependencies and
+devDependencies must use exact public npm registry versions. Install lifecycle
+scripts, lockfiles, custom registry configuration, overrides, resolutions,
+optional/bundled dependencies and package-manager escape hatches are rejected.
+The AI patch boundary permits at most 24 aggregate dependency entries across all
+manifests; the independently validated sandbox boundary permits at most 64.
+Canonical source and sandbox input share a 1.5 MB total file-content limit (the AI
+route additionally keeps its existing 512 KB per-generated-file limit).
+
+Declared npm tasks may use the root or one of the declared package directories as
+their `cwd`, and the selected task must exist in that directory's manifest. Raw
+commands and package-install tasks remain blocked. Vercel Sandbox writes the full
+file graph, runs the one root npm install with `--workspaces` and
+`--ignore-scripts` while outbound access is limited to the npm registry, then
+switches the Firecracker microVM to deny-all networking before any user task.
+Package servers therefore run as isolated task/preview processes with provider
+receipts; publishing `/p/{slug}` still publishes the required validated web
+runtime and does not pretend an ephemeral backend is durable hosting.
 
 ## Publishing and source ownership
 
 Free publishing stores a validated specification and freshly compiled standalone HTML in Cloudflare D1 on Sites or Vercel Blob on the public fallback, then returns an anonymous `/p/{slug}` URL. The public route is the product itself and contains no editor chrome. The Hobby Blob path is capped by the provider's free quota rather than silently creating charges.
 
 Publishing is fail-closed at the server boundary. The server recompiles the
-validated specification, parses every executable inline script, verifies the
-category-native runtime marker, interaction contract, truthful delivery mode,
-adapter and Drops Bot handoffs, approval-safe actions, and credential safety,
-then rejects the release with `422` if any critical check fails. This server
-artifact smoke is recorded separately from the browser-executed sandbox smoke;
-it is not presented as proof that an external provider completed setup.
+validated specification, parses every executable inline script and statically
+inspects the category-native marker, interaction contract, truthful delivery
+mode, adapter and Drops Bot handoffs, approval-safe actions, and credential
+safety, then rejects the release with `422` if any critical check fails. The
+result is recorded as `server-inspection` with `executed: false`: it is syntax
+and contract evidence, not a claim that the app ran in a sandbox or that an
+external provider completed setup. Editable iframe messages remain untrusted
+browser telemetry and cannot mint provider evidence.
 
 Before persistence, the complete incoming specification (including the full
 prompt and nested values) and the generated HTML are scanned for BotFather
@@ -150,9 +236,12 @@ never in prompts, project values, source, or published HTML.
 The ZIP export contains:
 
 - the same runnable `index.html`;
+- the complete canonical source under `workspace/`, including `src/`, the safe
+  Node server, exact package manifest and declared Check/Test/Build/Start tasks;
 - editable `project.json` without credentials;
 - `drops.config.json` with the honest data/action/AI integration manifest;
-- `quality-report.json` from the same release gate used before publishing;
+- an evidence-sanitized `quality-report.json` from the same release gate used
+  before publishing;
 - `tests/smoke.mjs` for source-owned runtime checks;
 - Vercel, Cloudflare, Netlify and GitHub Pages configuration;
 - a run and deployment README.
@@ -161,11 +250,45 @@ Archive creation applies the same secret policy to **every ZIP entry**, even an
 entry with a binary-looking extension. It also converts root-relative game
 assets and included API paths to relative URLs. The downloaded application is
 tested from a nested deployment path, so its artwork and interactive runtime do
-not depend on being hosted at `/`. `drops.config.json`, `quality-report.json`,
-and the root HTML attribute preserve `dropstab | fallback | unverified`
-provider evidence without upgrading fallback data into a DropsTab claim.
+not depend on being hosted at `/`. Client-created ZIPs always stamp
+`data-provider-evidence="unverified"` and write the same value to
+`drops.config.json`; browser runtime telemetry is never copied into an archive
+as provider proof.
+
+The root archive embeds a restrictive CSP and repeats it in Vercel and Netlify
+headers: inline compiled code is allowed, but active subresources and connections
+are same-origin only, while frames, objects, workers, base URLs, inline event
+handlers and form submission are blocked. The canonical workspace preview uses
+a separate HTML response policy that allows only its local `src/app.js` and
+`src/styles.css`. Normal HTTPS anchor handoffs remain available because they do
+not grant remote code access to the product document.
 
 Paid-hosting cards are honest export handoffs. Only Drops Studio Cloud reports `Published` after persistence confirms success.
+
+## Billing and team collaboration
+
+Stripe is the sole authority for Pro access. Checkout always uses the
+server-configured Price; subscription state is accepted only from a verified
+webhook and stored with duplicate-event and out-of-order protection. Only an
+`active` or `trialing` subscription for that exact Price and an unexpired
+subscription period enables the Pro quota and team-write entitlements. Billing
+storage or provider failure falls back to Member access instead of trusting
+client metadata. AI generation and isolated sandbox execution use separate
+tier-derived daily counters, so a generate-then-run flow does not double-charge
+the model allowance.
+
+Team workspaces are signed-account resources persisted in D1 or private Vercel
+Blob state. Owners manage one-time editor/viewer invites and roles; editors can
+write shared projects; viewers are read-only. Shared project writes validate the
+same bounded project-draft schema used by cloud sync and compare both workspace
+and project revisions. Model keys, executable artifacts, publish capabilities
+and Telegram session material are never copied into team records.
+
+Required deployment variables are `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID`,
+`DROPS_TEAM_INVITE_SECRET` and the existing signed-account and durable-storage
+configuration. Missing prerequisites keep these surfaces unavailable and are
+not presented as completed billing or collaboration.
 
 ## Execution safety
 

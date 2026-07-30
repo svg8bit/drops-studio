@@ -5,8 +5,13 @@ import {
   type MemberProjectRecord,
   sanitizeMemberProjectDraft,
 } from "../lib/member-project-cloud.ts";
+import {
+  MEMBER_PRIVATE_PROJECT_LIMIT,
+  PRO_PRIVATE_PROJECT_LIMIT,
+} from "../lib/billing.ts";
 
-export const MEMBER_PROJECT_LIMIT = 50;
+export const MEMBER_PROJECT_LIMIT = MEMBER_PRIVATE_PROJECT_LIMIT;
+export const MEMBER_PROJECT_STORAGE_LIMIT = PRO_PRIVATE_PROJECT_LIMIT;
 
 interface MemberProjectEnvelope {
   schemaVersion: 1;
@@ -86,7 +91,7 @@ function parseEnvelope(value: unknown): MemberProjectEnvelope {
     || typeof input.updatedAt !== "string"
     || !Number.isFinite(Date.parse(input.updatedAt))
     || !Array.isArray(input.projects)
-    || input.projects.length > MEMBER_PROJECT_LIMIT
+    || input.projects.length > MEMBER_PROJECT_STORAGE_LIMIT
   ) {
     throw new MemberProjectStorageUnavailableError("Member project storage returned an invalid envelope.");
   }
@@ -216,6 +221,7 @@ function planUpsert(
   draft: MemberProjectDraft,
   expectedRevision: number,
   now: string,
+  projectLimit: number,
 ): MemberProjectWriteResult | { status: "write"; envelope: MemberProjectEnvelope; project: MemberProjectRecord } {
   const current = envelope.projects.find((project) => project.id === draft.id);
   if (current && current.revision !== expectedRevision) {
@@ -224,7 +230,7 @@ function planUpsert(
   if (!current && expectedRevision !== 0) {
     return { status: "conflict" };
   }
-  if (!current && envelope.projects.length >= MEMBER_PROJECT_LIMIT) {
+  if (!current && envelope.projects.length >= projectLimit) {
     return { status: "limit" };
   }
   const project = updatedRecord(draft, current, now);
@@ -256,17 +262,31 @@ export async function upsertMemberProject(
   value: unknown,
   expectedRevision: number,
   storageOverride?: BlobStorage,
+  projectLimit = MEMBER_PROJECT_LIMIT,
 ): Promise<MemberProjectWriteResult> {
   validIdentity(identity);
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
     throw new Error("Expected project revision must be a non-negative integer.");
+  }
+  if (
+    !Number.isSafeInteger(projectLimit)
+    || (projectLimit !== MEMBER_PROJECT_LIMIT
+      && projectLimit !== MEMBER_PROJECT_STORAGE_LIMIT)
+  ) {
+    throw new Error("Member project limit is outside the supported billing entitlement range.");
   }
   const draft = sanitizeMemberProjectDraft(value);
 
   if (!storageOverride && localStoreEnabled()) {
     const store = localStore();
     const current = store.get(identity) ?? emptyEnvelope();
-    const planned = planUpsert(current, draft, expectedRevision, new Date().toISOString());
+    const planned = planUpsert(
+      current,
+      draft,
+      expectedRevision,
+      new Date().toISOString(),
+      projectLimit,
+    );
     if (planned.status !== "write") return planned;
     if (!serializedEnvelope(planned.envelope)) return { status: "too-large" };
     store.set(identity, structuredClone(planned.envelope));
@@ -289,6 +309,7 @@ export async function upsertMemberProject(
       draft,
       expectedRevision,
       new Date().toISOString(),
+      projectLimit,
     );
     if (planned.status !== "write") return planned;
     const written = await writeBlobEnvelope(identity, current, planned.envelope, storage);

@@ -1,17 +1,27 @@
-import { NextRequest, NextResponse } from "next/server.js";
+import { NextRequest } from "next/server.js";
 
 import { inspectTelegramAccountToken } from "@/lib/telegram-account";
+import {
+  readTelegramAccountJson,
+  telegramAccountJson,
+  telegramAccountRequestErrorResponse,
+} from "@/lib/telegram-account-request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null) as { accountToken?: unknown } | null;
-  const token = typeof body?.accountToken === "string" ? body.accountToken : "";
-  if (!token) return NextResponse.json({ connected: false });
+  let body: Record<string, unknown>;
   try {
-    return NextResponse.json({ connected: true, account: inspectTelegramAccountToken(token) }, { headers: { "cache-control": "no-store, max-age=0" } });
+    body = await readTelegramAccountJson(request);
+  } catch (error) {
+    return telegramAccountRequestErrorResponse(error);
+  }
+  const token = typeof body?.accountToken === "string" ? body.accountToken : "";
+  if (!token) return telegramAccountJson({ connected: false });
+  try {
+    return telegramAccountJson({ connected: true, account: inspectTelegramAccountToken(token) });
   } catch {
-    return NextResponse.json({ connected: false }, { headers: { "cache-control": "no-store, max-age=0" } });
+    return telegramAccountJson({ connected: false });
   }
 }

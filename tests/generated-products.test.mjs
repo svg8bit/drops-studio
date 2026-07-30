@@ -17,6 +17,30 @@ const presetIds = [
   "crypto-siri",
 ];
 
+test("prepared browser tests cannot inherit the production DropsTab API key", async () => {
+  const [packageJson, workflow] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(
+      new URL("../.github/workflows/ui-quality.yml", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(
+    packageJson.scripts["serve:test"],
+    /(?:^|\s)DROPSTAB_API_KEY=(?:\s|$)/,
+  );
+  assert.match(
+    packageJson.scripts["serve:lighthouse"],
+    /(?:^|\s)DROPSTAB_API_KEY=(?:\s|$)/,
+  );
+  assert.match(
+    packageJson.scripts["serve:storybook:test"],
+    /(?:^|\s)DROPSTAB_API_KEY=(?:\s|$)/,
+  );
+  assert.match(workflow, /\n\s+DROPSTAB_API_KEY:\s*["']{2}\s*\n/);
+});
+
 test("the compiler contains a distinct runnable product for every preset", async () => {
   const [compiler, presets] = await Promise.all([
     readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
@@ -94,12 +118,13 @@ test("publishing recompiles validated specs and persists recoverable public buil
 });
 
 test("professional editing and category direction apply to every product", async () => {
-  const [types, validator, director, compiler, studio] = await Promise.all([
+  const [types, validator, director, compiler, studio, workspaceDialog] = await Promise.all([
     readFile(new URL("../lib/project-types.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/project-validator.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/project-director.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
     readFile(new URL("../components/project-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/project-workspace-dialog.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(types, /interface ProjectExperienceDirection/);
@@ -137,8 +162,15 @@ test("professional editing and category direction apply to every product", async
   assert.match(studio, /categoryPrompts/);
   assert.match(studio, /Apply changes/);
   assert.match(studio, /Reordered product modules/);
-  assert.match(studio, /Owned source workspace/);
-  assert.match(studio, /Validate & apply/);
+  assert.match(studio, /ProjectWorkspaceDialog/);
+  assert.match(studio, /StudioAccountTeamPanel/);
+  assert.match(workspaceDialog, /Owned source workspace/);
+  assert.match(workspaceDialog, /AI source change/);
+  assert.match(workspaceDialog, /Generate & apply/);
+  assert.match(workspaceDialog, /Validate & apply/);
+  assert.match(workspaceDialog, /Verified sandbox receipt/);
+  assert.match(studio, /\/api\/workspace\/patch/);
+  assert.match(studio, /AI workspace revision/);
   assert.match(studio, /Release checks/);
   assert.doesNotMatch(studio, /\{game && <label className="art-upload"/);
 });

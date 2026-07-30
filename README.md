@@ -1,6 +1,6 @@
 # Drops Studio
 
-Drops Studio turns a crypto idea into a real, editable and publishable product powered by DropsTab intelligence and Drops Bot automation.
+Drops Studio turns a crypto idea into a real, editable and publishable product powered by DropsTab intelligence with explicit Drops Bot setup handoffs.
 
 The start page is a prompt-first recipe builder. Choose one of 12 products, tune its settings or describe something custom, then build. Drops Studio compiles a standalone application and opens its Project Studio, where the user can run it, change logic and branding, publish a public URL and download the runnable source.
 
@@ -26,13 +26,30 @@ must not be used to restore an older editor layout.
   block variants/visibility, uploaded hero artwork and category-specific chat directions
 - explicit Plan and Build Now flows with visible compilation stages
 - editable Project Studio for project metadata, data, product logic, AI,
-  branding, validated source, release checks and checkpoints
-- sandboxed live application preview
+  branding, a canonical multi-file source workspace with up to six bounded npm
+  packages, release checks and checkpoints
+- bounded AI source patches with GPT-5.6 Sol first when the platform route is
+  configured, a free-model fallback, request-only BYOK and optimistic revisions
+- browser live preview plus real root or package-scoped Check, Test, Build and
+  Start tasks in an ephemeral Vercel Sandbox Firecracker microVM, with
+  stdout/stderr/exit receipts
 - DropsTab Public API production adapter with a 15-minute shared cache, no generated-app polling, user-triggered BYOK snapshots and a clearly labelled public demo fallback
-- Drops Bot alert, channel, Telegram and action handoffs
+- owner-scoped webhook receivers for user-registered Drops Bot callbacks, with
+  one-time capabilities, redacted/idempotent events and provider-unverified receipts
+- Telegram MTProto channel creation, bot administration and provider-confirmed
+  first-post delivery, plus the session-only existing-channel Bot API fallback
+- Stripe-backed Pro checkout, billing portal and signed subscription webhooks,
+  with provider-confirmed 100-build and 100-sandbox-run daily allowances that
+  fail closed to Member
+- revisioned team workspaces with one-time invites, validated canonical
+  multi-file source, owner/editor writes, and read-only viewer apply when Pro
+  billing and durable storage are configured; provider keys, runtime receipts,
+  terminal output and compiled HTML never enter the shared draft
 - one-click free public publishing to an anonymous `/p/{slug}` application URL
 - deterministic quality gate on every edit and before publishing
-- runnable source ZIP with `index.html`, editable project config, integration manifest, quality report, smoke test and Vercel, Cloudflare, Netlify and GitHub Pages files
+- runnable source ZIP with the complete editable workspace, exact dependency
+  manifest, tasks, `index.html`, project/integration manifests, quality report,
+  smoke test and Vercel, Cloudflare, Netlify and GitHub Pages files
 - local project persistence and automatic migration from the earlier blueprint prototype
 - responsive builder, Studio and standalone products
 
@@ -67,9 +84,33 @@ change creates a restorable checkpoint.
 - A deployment can set `DROPSTAB_API_KEY` server-side so every published app uses the official DropsTab Public API without exposing the key. Without it, apps label the public demo feed as a fallback.
 - The platform-owned feed is cached for 15 minutes and targets one shared market request per warm runtime cache window; CDN caching and in-flight de-duplication suppress duplicate traffic. Serverless cold starts, regions and retries mean this is a budget policy, not a false global hard cap. Generated apps do not poll it. A visitor's own key is called only on an explicit connect or refresh action.
 - Generated products preserve DropsTab attribution, compatible market data and research links.
-- Drops Bot actions continue through the official Telegram product; the app never claims an undocumented remote configuration succeeded.
+- Drops Bot callback registration continues through the official `@drops` API
+  screen until its public documentation exposes a stable registration endpoint;
+  the app never claims that an undocumented remote configuration succeeded.
 - Trading-like actions are explicit research, paper-mode or official-product handoffs until the user approves an action in the connected product.
-- Connected models return a validated JSON design object. They never author the executable runtime.
+- The visual Director returns a validated design object. The source workspace
+  path may return only strict create/update/delete file operations; it cannot
+  directly invoke commands, install lifecycle scripts, add lockfiles, persist
+  secrets or escape through traversal paths. Validated manifest scripts become
+  explicit task buttons and run only after a user selects one in the isolated
+  sandbox. Every patch is compiled and validated before it becomes a revision.
+  Canonical HTML permits only the inert `projectSpec` JSON block and the exact
+  local CSS/runtime entries; extra scripts, active embeds, link loads, inline
+  handlers, script-scheme URLs and outbound form actions are rejected.
+- A multi-package workspace is deliberately bounded: the root manifest may list
+  at most six explicit `packages/<safe-name>` directories (never globs or URLs),
+  every package manifest stays private, and dependencies/devDependencies use
+  exact registry versions. AI revisions allow 24 aggregate dependencies; the
+  isolated sandbox accepts at most 64. Canonical source and sandbox input share
+  a 1.5 MB total limit.
+- Pro and team capabilities activate only from a signed Stripe webhook for the
+  exact configured Price. Missing billing, invite or durable-storage secrets
+  keep checkout and collaboration visibly unavailable instead of granting a
+  client-asserted tier.
+- Public builds, root ZIP apps and the generated workspace server enforce
+  restrictive, same-origin CSP boundaries. Client ZIP export always records
+  provider evidence as `unverified`; browser iframe telemetry is never promoted
+  into a DropsTab provider claim.
 
 See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md), [docs/ACCESS_TIERS.md](docs/ACCESS_TIERS.md), [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md), [docs/COMPETITIVE-BENCHMARK.md](docs/COMPETITIVE-BENCHMARK.md) and [docs/ACCOUNTABILITY_REPORT_RU.md](docs/ACCOUNTABILITY_REPORT_RU.md) for the product, access-tier, competitor, security and process-correction contracts.
 
@@ -113,6 +154,8 @@ Visual baselines are never updated without explicit approval.
   primitives, short Framer Motion transitions and Lucide icons
 - Cloudflare D1 on Sites or Vercel Blob on the public fallback for
   published-project persistence
+- Vercel Sandbox for isolated Node 24 task execution with network-denied runtime
+  and registry-only dependency installation with install scripts disabled
 - Fflate for browser-side runnable source archives
 - Cloudflare Workers-compatible Sites runtime
 

@@ -36,9 +36,7 @@ test("home builder keeps sample previews honest, coherent and responsive", async
   const primaryBrandAssets = page.locator(
     ".studio-header .drops-brand-marks img:visible"
   )
-  await expect(primaryBrandAssets).toHaveCount(
-    testInfo.project.name === "chromium-390" ? 2 : 1
-  )
+  await expect(primaryBrandAssets).toHaveCount(2)
   await expect(
     page.locator(".studio-header .drops-brand-partners img")
   ).toHaveCount(2)
@@ -46,9 +44,7 @@ test("home builder keeps sample previews honest, coherent and responsive", async
   await revealPreview(page)
   const morningPreview = page.locator(".preview-column").last()
   const morningCard = morningPreview.locator(".telegram-card")
-  await expect(morningCard.locator(".sample-data-pill")).toHaveText(
-    "Sample data"
-  )
+  await expect(morningPreview.locator(".data-mode")).toHaveText("Sample data")
   await expect(morningCard).toContainText("BTC +4.21%")
   await expect(morningCard).toContainText("ARB unlocks in 2 days")
   await expect(morningCard).toContainText("$32.4M")
@@ -80,7 +76,7 @@ test("home builder keeps sample previews honest, coherent and responsive", async
   await expect(alphaCard).toContainText("Solana smart money")
   await expect(alphaCard).toContainText("Solana is +2.31%")
   await expect(alphaCard).not.toContainText("BTC signal caught early")
-  await expect(alphaCard.locator(".sample-data-pill")).toHaveText("Sample data")
+  await expect(alphaPreview.locator(".data-mode")).toHaveText("Sample data")
 
   const alphaScreenshot = testInfo.outputPath("alpha-channel-sample.png")
   await page.screenshot({ path: alphaScreenshot, fullPage: false })

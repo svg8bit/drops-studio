@@ -154,8 +154,14 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
 
   const iframe = page.locator("iframe[title$='live application']")
   const runtime = page.frameLocator("iframe[title$='live application']")
+  const showPreviewOnMobile = async () => {
+    if (testInfo.project.name !== "chromium-390") return
+    await page.getByRole("button", { name: "Preview", exact: true }).click()
+    await expect(iframe).toBeVisible()
+  }
   const initialSrcdoc = await iframe.getAttribute("srcdoc")
   expect(initialSrcdoc).toContain("Crypto Game")
+  await showPreviewOnMobile()
   await expect(runtime.getByText("Crypto Game", { exact: true }).first()).toBeVisible()
 
   await page.getByRole("button", { name: "Director", exact: true }).click()
@@ -184,6 +190,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
     .poll(async () => (await iframe.getAttribute("srcdoc"))?.includes(EXPECTED_NAME))
     .toBe(true)
   expect(await iframe.getAttribute("srcdoc")).not.toBe(initialSrcdoc)
+  await showPreviewOnMobile()
   await expect(runtime.getByText(EXPECTED_NAME, { exact: true }).first()).toBeVisible()
 
   const applied = await storedDirectorProject(page)
@@ -203,6 +210,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
       (await restoredIframe.getAttribute("srcdoc"))?.includes(EXPECTED_NAME),
     )
     .toBe(true)
+  await showPreviewOnMobile()
   await expect(
     restoredRuntime.getByText(EXPECTED_NAME, { exact: true }).first(),
   ).toBeVisible()
@@ -224,8 +232,9 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   await page.getByRole("button", { name: "Director", exact: true }).click()
   await expect(page.getByText("Applied as a new checkpoint.")).toBeVisible()
   if (testInfo.project.name === "chromium-390") {
+    await page.getByRole("button", { name: "Preview", exact: true }).click()
     const runtimeReady = page.locator('[data-runtime-ready="true"]')
-    await expect(runtimeReady).toContainText("Runtime ready")
+    await expect(runtimeReady).toContainText("Browser telemetry")
     await expect(runtimeReady).toBeVisible()
     await expect(runtimeReady).toBeInViewport()
   }

@@ -68,6 +68,9 @@ const projects = [
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "outputs/test-results",
+  snapshotPathTemplate: executablePath
+    ? "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}-system{ext}"
+    : "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -80,7 +83,10 @@ export default defineConfig({
       caret: "hide",
       maxDiffPixels: 0,
       scale: "css",
-      threshold: 0,
+      // The GitHub release gate uses the canonical bundled browser and exact
+      // color matching. The optional local system browser gets only a
+      // one-channel antialias tolerance while keeping a zero-pixel budget.
+      threshold: executablePath ? 0.01 : 0,
     },
   },
   reporter: [

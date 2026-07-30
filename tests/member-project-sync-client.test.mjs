@@ -20,6 +20,11 @@ registerHooks({
 });
 
 const { createProjectSpec } = await import("../lib/project-factory.ts");
+const { compileProject } = await import("../lib/project-compiler.ts");
+const {
+  materializeProjectWorkspace,
+  updateWorkspaceFile,
+} = await import("../lib/project-workspace.ts");
 const {
   materializeMemberProject,
   memberProjectDraft,
@@ -92,6 +97,53 @@ test("member project drafts omit compiled artifacts and client-only state", asyn
   assert.equal(draft.futureCheckpoints[0].label, "Redo version");
 });
 
+test("member project drafts round-trip canonical workspace source while stripping runtime evidence", async () => {
+  const cloudRecord = record();
+  const compiled = compileProject(cloudRecord.spec);
+  const workspace = materializeProjectWorkspace({
+    id: cloudRecord.id,
+    spec: cloudRecord.spec,
+    html: compiled,
+    createdAt: cloudRecord.createdAt,
+    updatedAt: cloudRecord.updatedAt,
+  });
+  cloudRecord.workspace = updateWorkspaceFile(
+    cloudRecord.spec,
+    workspace,
+    "src/app.js",
+    `${workspace.files.find((item) => item.path === "src/app.js").content}\nwindow.__sharedSource = "round-trip";`,
+  );
+
+  const project = await materializeMemberProject(cloudRecord);
+  assert.match(project.html, /__sharedSource = "round-trip"/);
+  assert.equal(project.workspace.revision, cloudRecord.workspace.revision);
+
+  project.workspace.receipt = { runId: "run-private-123" };
+  project.workspace.terminalOutput = "private sandbox stdout";
+  project.workspace.runtime.providerKey = "request-only-provider-key";
+  project.runtimeReceipt = { status: "completed" };
+  project.terminalOutput = "private task output";
+  project.providerKey = "request-only-provider-key";
+  const draft = memberProjectDraft(project);
+  const serialized = JSON.stringify(draft);
+
+  assert.equal(draft.workspace.revision, cloudRecord.workspace.revision);
+  assert.match(
+    draft.workspace.files.find((item) => item.path === "src/app.js").content,
+    /__sharedSource = "round-trip"/,
+  );
+  assert.equal("receipt" in draft.workspace, false);
+  assert.equal("terminalOutput" in draft.workspace, false);
+  assert.equal("providerKey" in draft.workspace.runtime, false);
+  assert.equal("runtimeReceipt" in draft, false);
+  assert.equal("terminalOutput" in draft, false);
+  assert.equal("providerKey" in draft, false);
+  assert.doesNotMatch(
+    serialized,
+    /sandbox stdout|task output|run-private|request-only-provider-key/i,
+  );
+});
+
 test("member cloud drafts strip browser-owned source checkpoints", async () => {
   const project = await materializeMemberProject(record());
   project.sourceEditedAt = "2026-07-30T10:00:00.000Z";
@@ -103,12 +155,14 @@ test("member cloud drafts strip browser-owned source checkpoints", async () => {
       source: "manual",
       spec: project.spec,
       runtimeHtml: project.html,
+      workspace: { revision: 2, files: [{ path: "src/app.js", content: "private edit" }] },
     },
   ];
 
   const draft = memberProjectDraft(project);
   assert.equal("sourceEditedAt" in draft, false);
   assert.equal("runtimeHtml" in draft.checkpoints[0], false);
+  assert.equal("workspace" in draft.checkpoints[0], false);
   assert.doesNotMatch(JSON.stringify(draft), /<!doctype html>/i);
 });
 

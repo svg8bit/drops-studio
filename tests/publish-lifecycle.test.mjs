@@ -27,6 +27,7 @@ const publishCapability = await import("../lib/publish-capability.ts").catch(() 
 const publishLifecycle = await import("../lib/publish-lifecycle.ts").catch(() => ({}));
 const publishRoute = await import("../app/api/projects/publish/route.ts");
 const { createProjectArchive } = await import("../lib/project-export.ts");
+const { compileProject } = await import("../lib/project-compiler.ts");
 const { createProjectSpec } = await import("../lib/project-factory.ts");
 
 const TEST_SECRET = "publish-capability-test-secret-that-is-longer-than-32-bytes";
@@ -205,6 +206,32 @@ test("publish capability creates, updates and unpublishes one URL without enteri
     if (previous.vercel === undefined) delete process.env.VERCEL;
     else process.env.VERCEL = previous.vercel;
   });
+
+  const localEditedSpec = createBaseSpec("Build an edited source launch board");
+  const localEditedHtml = compileProject(localEditedSpec).replace(
+    "</body>",
+    '<aside data-edited-before-publish="true">Edited before publish</aside></body>',
+  );
+  const editedCreateResponse = await publishRoute.POST(
+    mutationRequest("POST", { spec: localEditedSpec, html: localEditedHtml }),
+  );
+  assert.equal(editedCreateResponse.status, 201);
+  const editedCreated = await editedCreateResponse.json();
+  assert.notEqual(editedCreated.slug, localEditedSpec.slug);
+  const editedStored = globalThis.__DROPS_STUDIO_LOCAL_PROJECTS__.get(editedCreated.slug);
+  assert.ok(editedStored);
+  assert.match(editedStored.html, /data-edited-before-publish="true"/);
+  const embeddedPayload = editedStored.html.match(
+    /<script type="application\/json" id="projectSpec">([\s\S]*?)<\/script>/,
+  );
+  assert.ok(embeddedPayload);
+  const publicRuntimeSpec = JSON.parse(embeddedPayload[1]);
+  assert.equal(publicRuntimeSpec.slug, editedCreated.slug);
+  assert.equal(publicRuntimeSpec.dataEndpoint, "https://drops.example/api/public-data");
+  assert.match(
+    editedStored.html,
+    new RegExp(`var studioTelegramUrl="https://drops\\.example/\\?connections=1&provider=dropsbot&flow=telegram-channel&project=${editedCreated.slug}"`),
+  );
 
   const createResponse = await publishRoute.POST(
     mutationRequest("POST", { spec: createBaseSpec() }),

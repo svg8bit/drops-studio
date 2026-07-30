@@ -21,6 +21,11 @@ registerHooks({
 const { createProjectSpec } = await import("../lib/project-factory.ts");
 const { compileProject } = await import("../lib/project-compiler.ts");
 const {
+  compileWorkspaceRuntime,
+  materializeProjectWorkspace,
+  updateWorkspaceFile,
+} = await import("../lib/project-workspace.ts");
+const {
   commitProjectCheckpoint,
   redoProjectCheckpoint,
   undoProjectCheckpoint,
@@ -223,7 +228,66 @@ test("a later spec checkpoint cannot silently erase owned manual source", () => 
   }).project;
 
   assert.match(afterSpecEdit.html, /data-source-proof="true"/);
-  assert.match(afterSpecEdit.checkpoints.at(-1).runtimeHtml, /data-source-proof="true"/);
+  assert.match(
+    compileWorkspaceRuntime(
+      afterSpecEdit.spec,
+      afterSpecEdit.checkpoints.at(-1).workspace,
+    ),
+    /data-source-proof="true"/,
+  );
   assert.equal(afterSpecEdit.spec.name, "Renamed after source edit");
   assert.equal(afterSpecEdit.sourceEditedAt, "2026-07-30T03:01:00.000Z");
+});
+
+test("multi-file workspace edits survive undo and redo as one revision", () => {
+  const initialSpec = spec("Workspace history");
+  const initial = {
+    id: "workspace-history",
+    spec: initialSpec,
+    html: compileProject(initialSpec),
+    createdAt: "2026-07-30T04:00:00.000Z",
+    updatedAt: "2026-07-30T04:00:00.000Z",
+    checkpoints: [
+      checkpoint(
+        "checkpoint-workspace-base",
+        "Workspace history",
+        "2026-07-30T04:00:00.000Z",
+      ),
+    ],
+    futureCheckpoints: [],
+  };
+  const baselineWorkspace = materializeProjectWorkspace(initial);
+  const app = baselineWorkspace.files.find((file) => file.path === "src/app.js");
+  assert.ok(app);
+  const workspace = updateWorkspaceFile(
+    initial.spec,
+    baselineWorkspace,
+    "src/app.js",
+    `${app.content}\nwindow.__historyWorkspace = true;`,
+  );
+  const edited = commitProjectCheckpoint(initial, {
+    id: "checkpoint-workspace-edit",
+    label: "Edited src/app.js",
+    createdAt: "2026-07-30T04:01:00.000Z",
+    source: "manual",
+    spec: initial.spec,
+    workspace,
+  }).project;
+
+  assert.equal(edited.workspace.revision, 2);
+  assert.match(edited.html, /__historyWorkspace = true/);
+  assert.equal(edited.html, compileWorkspaceRuntime(initial.spec, workspace));
+
+  const undone = undoProjectCheckpoint(edited, "2026-07-30T04:02:00.000Z");
+  assert.ok(undone);
+  assert.equal(undone.project.workspace.revision, 1);
+  assert.doesNotMatch(undone.project.html, /__historyWorkspace = true/);
+
+  const redone = redoProjectCheckpoint(
+    undone.project,
+    "2026-07-30T04:03:00.000Z",
+  );
+  assert.ok(redone);
+  assert.equal(redone.project.workspace.revision, 2);
+  assert.match(redone.project.html, /__historyWorkspace = true/);
 });

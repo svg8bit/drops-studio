@@ -41,30 +41,53 @@ function categoryNative(spec: GeneratedProjectSpec): boolean {
   return true;
 }
 
-export function evaluateProjectQuality(spec: GeneratedProjectSpec, html: string, runtimeSmoke?: ProjectRuntimeSmokeResult | null): ProjectQualityReport {
-  const smokePassed = Boolean(runtimeSmoke?.executed && (runtimeSmoke.errors?.length ?? 0) === 0);
-  const providerEvidence = String(runtimeSmoke?.dataProvider || "unverified").trim().toLowerCase();
-  const runtimeEvidence = runtimeSmoke?.mode === "server-artifact"
-    ? "Server artifact smoke parsed the runtime and verified category-native release markers"
-    : "Compiled app executed inside the sandbox and rendered its category runtime";
+export interface ProjectQualityHostEvidence {
+  dataProvider?: "dropstab" | "fallback" | "unverified";
+}
+
+export function evaluateProjectQuality(
+  spec: GeneratedProjectSpec,
+  html: string,
+  runtimeSmoke?: ProjectRuntimeSmokeResult | null,
+  hostEvidence?: ProjectQualityHostEvidence,
+): ProjectQualityReport {
+  const staticInspection = runtimeSmoke?.mode === "server-inspection"
+    || runtimeSmoke?.mode === "server-artifact";
+  const smokePassed = Boolean(
+    staticInspection
+      && (runtimeSmoke.errors?.length ?? 0) === 0,
+  );
+  const trustedApiProvider = hostEvidence?.dataProvider === "dropstab"
+    || hostEvidence?.dataProvider === "fallback"
+    ? hostEvidence.dataProvider
+    : null;
+  const providerEvidence = trustedApiProvider
+    ?? (staticInspection
+      ? String(runtimeSmoke?.dataProvider || "unverified").trim().toLowerCase()
+      : "unverified");
+  const runtimeEvidence = staticInspection
+    ? "Static server inspection parsed JavaScript syntax and found the category runtime contract; it did not execute the application"
+    : runtimeSmoke
+      ? "Browser telemetry received; isolated execution remains unverified until a host-side check completes"
+      : "Waiting for a host-side runtime check";
   const reality = getProductReality(spec.presetId);
   const truthfulness = truthfulnessViolations(spec.presetId, html);
   const deliveryMarker = `data-delivery-mode="${reality.deliveryMode}"`;
   const checks: ProjectQualityCheck[] = [
     check("category", "Category-native product", categoryNative(spec), `${spec.experience.archetype} matches ${spec.presetId}`, 3, true),
     check("truthfulness", "Truthful delivery contract", truthfulness.length === 0 && html.includes(deliveryMarker), truthfulness.length ? `Unsupported claims: ${truthfulness.join(", ")}` : `${reality.deliveryMode} contract is visible in the runtime`, 3, true),
-    check("runtime", "Runnable standalone output", html.length > 18_000 && html.includes(`data-project-kind="${spec.presetId}"`) && smokePassed && Boolean(runtimeSmoke?.runtime), runtimeSmoke ? runtimeEvidence : "Waiting for the sandboxed runtime smoke test", 3, true),
+    check("runtime", "Runnable standalone output", html.length > 18_000 && html.includes(`data-project-kind="${spec.presetId}"`) && smokePassed && Boolean(runtimeSmoke?.runtime), runtimeEvidence, 3, true),
     check("screens", "Complete experience map", spec.blueprint.screens.length >= 3 && spec.blueprint.modules.length >= 4, `${spec.blueprint.screens.length} screens · ${spec.blueprint.modules.length} modules`, 2),
-    check("interactions", "Working interaction contract", spec.blueprint.interactions.length >= 4 && /addEventListener\(["']click["']/.test(html) && smokePassed && Boolean(runtimeSmoke?.interactions), runtimeSmoke ? `${spec.blueprint.interactions.length} declared interactions and live controls verified` : "Waiting for live controls to execute in the sandbox", 2, true),
-    check("data-adapter", "DropsTab-compatible adapter contract", spec.blueprint.dropsTabUse.length >= 2 && html.includes("refreshData") && smokePassed && Boolean(runtimeSmoke?.dropstab), runtimeSmoke ? `${spec.blueprint.dropsTabUse.length} mapped capabilities and the honest data-adapter contract passed` : "Waiting for the sandboxed data-adapter handshake", 2, true),
-    check("provider-evidence", "Live DropsTab provider evidence", providerEvidence === "dropstab", providerEvidence === "dropstab" ? "Runtime response verified provider=dropstab" : `Provider evidence: ${providerEvidence || "unverified"}. The runnable fallback is not labelled as live DropsTab data.`, 1),
-    check("dropsbot", "Drops Bot action handoff", spec.blueprint.dropsBotUse.length >= 1 && html.includes("dropsbotSetup") && smokePassed && Boolean(runtimeSmoke?.dropsbot), runtimeSmoke ? `${spec.blueprint.dropsBotUse.length} truthful setup or approval handoffs verified in the runtime; no external action is claimed` : "Waiting for the Drops Bot handoff to be discovered in the runtime", 2, true),
+    check("interactions", "Working interaction contract", spec.blueprint.interactions.length >= 4 && /addEventListener\(["']click["']/.test(html) && smokePassed && Boolean(runtimeSmoke?.interactions), staticInspection ? `${spec.blueprint.interactions.length} declared interactions and their static event contracts were inspected` : runtimeSmoke ? "Browser interaction telemetry received; host verification is still required" : "Waiting for a host-side interaction check", 2, true),
+    check("data-adapter", "DropsTab-compatible adapter contract", spec.blueprint.dropsTabUse.length >= 2 && html.includes("refreshData") && smokePassed && Boolean(runtimeSmoke?.dropstab), staticInspection ? `${spec.blueprint.dropsTabUse.length} mapped capabilities and the static data-adapter contract were inspected` : runtimeSmoke ? "Browser adapter telemetry received; provider and host execution remain unverified" : "Waiting for a host-side data-adapter check", 2, true),
+    check("provider-evidence", "Live DropsTab provider evidence", providerEvidence === "dropstab", providerEvidence === "dropstab" ? "Same-origin host/API evidence reports provider=dropstab" : `Provider evidence: ${providerEvidence || "unverified"}. Browser telemetry cannot assert a live DropsTab provider.`, 1),
+    check("dropsbot", "Drops Bot action handoff", spec.blueprint.dropsBotUse.length >= 1 && html.includes("dropsbotSetup") && smokePassed && Boolean(runtimeSmoke?.dropsbot), staticInspection ? `${spec.blueprint.dropsBotUse.length} truthful setup or approval handoff contracts were inspected; no external action is claimed` : runtimeSmoke ? "Browser handoff telemetry received; host verification is still required" : "Waiting for a host-side Drops Bot handoff check", 2, true),
     check("state", "Persistent product state", html.includes("localStorage") && html.includes("function save"), "User progress and settings persist in the standalone app", 1),
     check("design", "Visual editing contract", html.includes("data-studio-block") && Object.keys(spec.blocks).length <= 32, "Runtime exposes safe selectable blocks", 1),
     check("responsive", "Responsive runtime", html.includes("@media(max-width:760px)"), "Desktop and mobile layout rules compiled", 1),
     check("a11y", "Document essentials", /<title>[\s\S]+<\/title>/.test(html) && html.includes('name="viewport"'), "Title and viewport metadata are present", 1),
     check("security", "No executable secret or unsafe evaluator", findArtifactSecrets(html, "runtime").length === 0 && !/\beval\s*\(|new Function/.test(html), "No known credential pattern, eval or Function constructor found", 3, true),
-    check("actions", "Approval-safe external actions", /Nothing was executed|no trade executed|approve|approval/i.test(html) && smokePassed && Boolean(runtimeSmoke?.actions), runtimeSmoke ? "The executed runtime exposes handoffs without an automatic trade action" : "Waiting for action safety verification in the sandbox", 2, true),
+    check("actions", "Approval-safe external actions", /Nothing was executed|no trade executed|approve|approval/i.test(html) && smokePassed && Boolean(runtimeSmoke?.actions), staticInspection ? "Static inspection found approval boundaries and no automatic trade control" : runtimeSmoke ? "Browser action telemetry received; it is not execution evidence" : "Waiting for a host-side action safety check", 2, true),
   ];
   const totalWeight = checks.reduce((sum, item) => sum + item.weight, 0);
   const passedWeight = checks.filter((item) => item.passed).reduce((sum, item) => sum + item.weight, 0);

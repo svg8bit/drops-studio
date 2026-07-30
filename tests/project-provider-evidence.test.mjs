@@ -19,7 +19,7 @@ const spec = {
 };
 const html = `${"x".repeat(19_000)}<html data-project-kind="morning-alpha" data-delivery-mode="connection-required"><head><title>Brief</title><meta name="viewport"></head><body data-studio-block="application">approval required<script>function refreshData(){} function dropsbotSetup(){} function save(){localStorage.setItem("x","y")} document.addEventListener("click",()=>{})</script><style>@media(max-width:760px){}</style></body></html>`;
 const smoke = (dataProvider) => ({
-  mode: "browser",
+  mode: "server-artifact",
   dataProvider,
   executed: true,
   runtime: true,
@@ -46,4 +46,51 @@ test("only provider=dropstab passes the live provider evidence check", () => {
   }
   const verified = evaluateProjectQuality(spec, html, smoke("dropstab"));
   assert.equal(verified.checks.find((item) => item.id === "provider-evidence")?.passed, true);
+});
+
+test("editable browser telemetry cannot mint DropsTab provider evidence", () => {
+  const spoofed = evaluateProjectQuality(spec, html, {
+    ...smoke("dropstab"),
+    mode: "browser",
+  });
+  assert.equal(spoofed.readyToPublish, false);
+  assert.equal(
+    spoofed.checks.find((item) => item.id === "provider-evidence")?.passed,
+    false,
+  );
+  assert.match(
+    spoofed.checks.find((item) => item.id === "provider-evidence")?.detail ?? "",
+    /Browser telemetry cannot assert/i,
+  );
+
+  const trustedFallback = evaluateProjectQuality(
+    spec,
+    html,
+    { ...smoke("dropstab"), mode: "browser" },
+    { dataProvider: "fallback" },
+  );
+  assert.equal(
+    trustedFallback.checks.find((item) => item.id === "provider-evidence")?.passed,
+    false,
+  );
+  assert.match(
+    trustedFallback.checks.find((item) => item.id === "provider-evidence")?.detail ?? "",
+    /fallback/i,
+  );
+
+  const trustedDropstab = evaluateProjectQuality(
+    spec,
+    html,
+    { ...smoke("fallback"), mode: "browser" },
+    { dataProvider: "dropstab" },
+  );
+  assert.equal(
+    trustedDropstab.checks.find((item) => item.id === "provider-evidence")?.passed,
+    true,
+  );
+  assert.equal(
+    trustedDropstab.readyToPublish,
+    false,
+    "trusted same-origin provider evidence must not upgrade forged browser execution telemetry",
+  );
 });

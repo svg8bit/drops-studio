@@ -44,7 +44,7 @@ This release does not claim an undocumented Drops Bot write API, unrestricted ar
 | Source ownership | Code view plus Git/GitHub export | Editable project JSON, source view and runnable ZIP; two-way Git sync is not claimed |
 | Integrations | Managed databases, AI and deployment resources | DropsTab, Drops Bot, Telegram, Polymarket and BYOK AI connections with explicit provider evidence |
 | Public launch | Free or paid hosted URL | Anonymous `/p/{slug}` public app plus external-host export paths |
-| Quality feedback | Agent self-test and deployment logs | Release score, executed runtime smoke, Playwright/Axe/visual/Lighthouse CI and console gates |
+| Quality feedback | Agent self-test and deployment logs | Release score, static server contract inspection, provider-bound sandbox receipts, Playwright/Axe/visual/Lighthouse CI and console gates |
 
 The vertical advantage is not a cosmetic crypto template. A Drops Studio build
 starts with market intelligence and action primitives that a general-purpose

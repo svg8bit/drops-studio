@@ -65,52 +65,10 @@
 }
 
 /*
- * Current Project Studio contract.
- * Keep the rebuilt rail + inspector + live canvas + Director architecture.
- * Publish remains a contextual dialog; this layout never adds a publish column.
+ * Persistent Project Studio contract: one contextual surface on the left and
+ * one live canvas. Director uses the existing Director tool in that left
+ * surface; no wide-screen breakpoint may add a permanent right column.
  */
-@media (min-width: 1600px) {
-  .project-studio-layout,
-  .project-studio-layout.tab-connections {
-    grid-template-areas: "rail inspector canvas director";
-    grid-template-columns:
-      68px
-      minmax(300px, 340px)
-      minmax(680px, 1fr)
-      minmax(340px, 400px);
-  }
-
-  .studio-rail {
-    grid-area: rail;
-  }
-
-  .studio-inspector,
-  .project-studio-layout.tab-director .studio-inspector {
-    display: block;
-    grid-area: inspector;
-  }
-
-  .runtime-stage {
-    grid-area: canvas;
-  }
-
-  .assistant-panel,
-  .project-studio-layout:not(.tab-director) .assistant-panel {
-    display: flex;
-    grid-area: director;
-  }
-}
-
-@media (min-width: 1760px) {
-  .project-studio-layout,
-  .project-studio-layout.tab-connections {
-    grid-template-columns:
-      72px
-      minmax(320px, 380px)
-      minmax(680px, 1fr)
-      minmax(360px, 400px);
-  }
-}
 
 /* Controls and labels are readable without relying on a global emergency override. */
 .project-studio-shell :is(
@@ -228,8 +186,8 @@
   font-size: 14px !important;
 }
 
-:where(.source-dialog, .publish-dialog) p {
-  font-size: 14px;
+:where(.publish-dialog) p {
+  font-size: 16px;
   line-height: 1.55;
 }
 

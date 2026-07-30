@@ -47,9 +47,17 @@ test("remaining project dialogs trap focus, close on Escape and restore their tr
   const publishTrigger = page.locator(".workspace-actions .publish-top")
   await verifyKeyboardDialog(page, publishTrigger, /Publish a working product/i)
 
-  const sourceTrigger = page
-    .locator(".stage-toolbar")
+  const codeTool = page
+    .locator(".studio-rail")
     .getByRole("button", { name: "Code", exact: true })
+  await codeTool.focus()
+  await expect(codeTool).toBeFocused()
+  await codeTool.press("Enter")
+
+  const sourceTrigger = page.getByRole("button", {
+    name: "Open source workspace",
+    exact: true,
+  })
   await verifyKeyboardDialog(page, sourceTrigger, /Owned source workspace/i)
 
   await assertCleanRuntime()

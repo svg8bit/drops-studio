@@ -48,7 +48,7 @@ test("Telegram verification rejects cross-origin send requests before provider c
   }
 });
 
-test("published cloud apps and exported Telegram verification use same-origin boundaries", async () => {
+test("published cloud apps and exported Telegram verification use isolated same-origin boundaries", async () => {
   const [publishedRoute, exporter] = await Promise.all([
     readFile(new URL("../app/p/[slug]/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/project-export.ts", import.meta.url), "utf8"),
@@ -65,7 +65,10 @@ test("published cloud apps and exported Telegram verification use same-origin bo
 
   const telegramFunction = exporter.slice(telegramFunctionStart, publicDataFunctionStart);
 
-  assert.match(publishedRoute, /frame-ancestors 'self'/);
+  assert.match(publishedRoute, /buildPublicProjectShell/);
+  assert.match(publishedRoute, /publicProjectShellCsp/);
+  assert.doesNotMatch(publishedRoute, /new Response\(project\.html/);
+  assert.match(publishedRoute, /crypto\.randomUUID\(\)/);
   assert.doesNotMatch(publishedRoute, /frame-ancestors \*/);
   assert.match(telegramFunction, /sameOrigin/);
   assert.doesNotMatch(telegramFunction, /access-control-allow-origin[^\n]*\*/i);

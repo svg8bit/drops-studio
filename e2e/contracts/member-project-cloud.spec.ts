@@ -110,7 +110,35 @@ async function fulfillProjectList(
 function assertSafeProjectWrite(body: unknown) {
   const serialized = JSON.stringify(body)
   expect(serialized).not.toContain(SESSION_ONLY_KEY)
-  expect(serialized).not.toMatch(/<!doctype|<html|compiledhtml/i)
+
+  const assertNoPrivateRuntimeFields = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(assertNoPrivateRuntimeFields)
+      return
+    }
+    if (!value || typeof value !== "object") return
+    for (const [key, nested] of Object.entries(value)) {
+      const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLowerCase()
+      expect([
+        "apikey",
+        "compiledhtml",
+        "html",
+        "modelkey",
+        "providerkey",
+        "publishcapability",
+        "quality",
+        "receipt",
+        "runtimereceipt",
+        "runtimehtml",
+        "sessionkey",
+        "stderr",
+        "stdout",
+        "terminaloutput",
+      ]).not.toContain(normalizedKey)
+      assertNoPrivateRuntimeFields(nested)
+    }
+  }
+  assertNoPrivateRuntimeFields(body)
 
   expect(body).toEqual(
     expect.objectContaining({
@@ -131,6 +159,16 @@ function assertSafeProjectWrite(body: unknown) {
   expect(project).not.toHaveProperty("publishCapability")
   expect(project.spec).not.toHaveProperty("apiKey")
   expect(project.spec).not.toHaveProperty("key")
+  if (project.workspace) {
+    expect(project.workspace).toEqual(expect.objectContaining({
+      files: expect.any(Array),
+      tasks: expect.any(Array),
+      runtime: expect.objectContaining({
+        provider: "unconfigured",
+        installScripts: false,
+      }),
+    }))
+  }
 }
 
 test("signed-in home restores and opens a remote-only runnable project", async ({
@@ -279,7 +317,7 @@ test("a new build keeps its runnable browser copy when cloud sync fails", async 
   )
 })
 
-test("Studio restores a remote-only project and syncs an edit without executable artifacts or keys", async ({
+test("Studio restores a remote-only project and syncs validated source without private runtime artifacts or keys", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-1440")

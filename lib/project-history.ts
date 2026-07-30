@@ -5,6 +5,11 @@ import type {
   ProjectCheckpoint,
 } from "./project-types.ts";
 import { validateEditableRuntimeHtml } from "./source-workspace.ts";
+import {
+  compileWorkspaceRuntime,
+  materializeProjectWorkspace,
+  validateProjectWorkspace,
+} from "./project-workspace.ts";
 import { validateProjectSpec } from "./project-validator.ts";
 
 export const PROJECT_HISTORY_LIMIT = 12;
@@ -23,22 +28,43 @@ function compiledProjectAtCheckpoint(
   futureCheckpoints: ProjectCheckpoint[],
 ): GeneratedProject {
   const spec = validateProjectSpec(checkpoint.spec);
+  const workspaceValidation = checkpoint.workspace
+    ? validateProjectWorkspace(spec, checkpoint.workspace)
+    : null;
+  if (workspaceValidation && !workspaceValidation.valid) {
+    throw new Error(
+      workspaceValidation.issues[0] ?? "The workspace checkpoint is invalid.",
+    );
+  }
   const sourceValidation = checkpoint.runtimeHtml
     ? validateEditableRuntimeHtml(spec, checkpoint.runtimeHtml)
     : null;
   if (sourceValidation && !sourceValidation.valid) {
     throw new Error(sourceValidation.issues[0] ?? "The source checkpoint is invalid.");
   }
-  const html = checkpoint.runtimeHtml ?? compileProject(spec);
+  const html = checkpoint.workspace
+    ? compileWorkspaceRuntime(spec, checkpoint.workspace)
+    : checkpoint.runtimeHtml ?? compileProject(spec);
+  const workspace = checkpoint.workspace ?? materializeProjectWorkspace({
+    ...project,
+    spec,
+    html,
+    updatedAt: changedAt,
+    workspace: undefined,
+  });
   return {
     ...project,
     spec,
     html,
+    workspace,
     quality: evaluateProjectQuality(spec, html),
     updatedAt: changedAt,
     checkpoints,
     futureCheckpoints,
-    sourceEditedAt: checkpoint.runtimeHtml ? checkpoint.createdAt : undefined,
+    sourceEditedAt:
+      checkpoint.workspace || checkpoint.runtimeHtml
+        ? checkpoint.createdAt
+        : undefined,
   };
 }
 
@@ -47,9 +73,11 @@ export function commitProjectCheckpoint(
   checkpointInput: ProjectCheckpoint,
 ): ProjectHistoryTransition {
   const sourceOwningCheckpoint =
-    checkpointInput.runtimeHtml || !project.sourceEditedAt
+    checkpointInput.workspace || checkpointInput.runtimeHtml || !project.sourceEditedAt
       ? checkpointInput
-      : { ...checkpointInput, runtimeHtml: project.html };
+      : project.workspace
+        ? { ...checkpointInput, workspace: project.workspace }
+        : { ...checkpointInput, runtimeHtml: project.html };
   const futureCheckpoints = (project.futureCheckpoints ?? []).slice(
     0,
     PROJECT_HISTORY_LIMIT,

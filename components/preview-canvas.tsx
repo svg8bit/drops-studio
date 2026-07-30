@@ -286,7 +286,7 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
           {isTelegram && <span className="telegram-back" aria-hidden="true"><ArrowLeft /></span>}
           <div className={`preview-brand-mark ${isTelegram ? "drops-bot" : "dropstab"}`}>
             <Image
-              src={isTelegram ? "/brand/drops-bot-avatar.jpg" : "/brand/dropstab-mark.svg"}
+              src={isTelegram ? "/brand/drops-bot-avatar.png" : "/brand/dropstab-mark.svg"}
               alt={isTelegram ? "Drops Bot" : "DropsTab"}
               width={32}
               height={32}

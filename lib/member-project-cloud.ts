@@ -3,6 +3,11 @@ import {
   assertPublishedArtifactSafe,
 } from "./artifact-security.ts";
 import { compileProject } from "./project-compiler.ts";
+import {
+  compileWorkspaceRuntime,
+  validateProjectWorkspace,
+  type ProjectWorkspace,
+} from "./project-workspace.ts";
 import type {
   GeneratedProjectSpec,
   ProjectChatMessage,
@@ -10,7 +15,7 @@ import type {
 } from "./project-types.ts";
 import { validateProjectSpec } from "./project-validator.ts";
 
-export const MEMBER_PROJECT_BODY_LIMIT_BYTES = 1_250_000;
+export const MEMBER_PROJECT_BODY_LIMIT_BYTES = 2_000_000;
 export const MEMBER_PROJECT_STORE_LIMIT_BYTES = 3_000_000;
 export const MEMBER_PROJECT_CHECKPOINT_LIMIT = 12;
 export const MEMBER_PROJECT_CONVERSATION_LIMIT = 100;
@@ -21,6 +26,7 @@ export interface MemberProjectDraft {
   checkpoints: ProjectCheckpoint[];
   futureCheckpoints: ProjectCheckpoint[];
   conversation: ProjectChatMessage[];
+  workspace?: ProjectWorkspace;
   publishedUrl?: string;
   publishedSlug?: string;
   publishedAt?: string;
@@ -39,6 +45,7 @@ const projectFields = new Set([
   "checkpoints",
   "futureCheckpoints",
   "conversation",
+  "workspace",
   "publishedUrl",
   "publishedSlug",
   "publishedAt",
@@ -75,12 +82,61 @@ const forbiddenExecutableFields = new Set([
   "sourcedraft",
 ]);
 const credentialField = /(?:api)?key|token|secret|password|authorization|credential/i;
+const workspaceFields = new Set([
+  "schemaVersion",
+  "revision",
+  "updatedAt",
+  "files",
+  "tasks",
+  "runtime",
+]);
+const workspaceFileFields = new Set([
+  "path",
+  "content",
+  "language",
+  "role",
+  "editable",
+]);
+const workspaceTaskFields = new Set([
+  "id",
+  "label",
+  "command",
+  "args",
+  "cwd",
+  "port",
+]);
+const workspaceRuntimeFields = new Set([
+  "executionMode",
+  "provider",
+  "isolation",
+  "runtime",
+  "packageManager",
+  "installScripts",
+]);
+
+export class MemberProjectValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MemberProjectValidationError";
+  }
+}
 
 function plainObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
   return value as Record<string, unknown>;
+}
+
+function onlyFields(
+  input: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  label: string,
+): void {
+  const unknownFields = Object.keys(input).filter((field) => !allowed.has(field));
+  if (unknownFields.length) {
+    throw new Error(`${label} contains unsupported fields: ${unknownFields.join(", ")}.`);
+  }
 }
 
 function text(value: unknown, label: string, max: number): string {
@@ -155,6 +211,69 @@ function validatedSpec(value: unknown, label: string): GeneratedProjectSpec {
     throw new Error(`${label} did not compile into a runnable project.`);
   }
   return normalized;
+}
+
+function validatedWorkspace(
+  value: unknown,
+  spec: GeneratedProjectSpec,
+): ProjectWorkspace {
+  const input = plainObject(value, "Member project workspace");
+  onlyFields(input, workspaceFields, "Member project workspace");
+  if (!Array.isArray(input.files) || !Array.isArray(input.tasks)) {
+    throw new Error("Member project workspace files and tasks must be arrays.");
+  }
+  const files = input.files.map((value, index) => {
+    const item = plainObject(value, `Workspace file ${index + 1}`);
+    onlyFields(item, workspaceFileFields, `Workspace file ${index + 1}`);
+    return {
+      path: item.path,
+      content: item.content,
+      language: item.language,
+      role: item.role,
+      editable: item.editable,
+    };
+  });
+  const tasks = input.tasks.map((value, index) => {
+    const item = plainObject(value, `Workspace task ${index + 1}`);
+    onlyFields(item, workspaceTaskFields, `Workspace task ${index + 1}`);
+    if (!Array.isArray(item.args)) {
+      throw new Error(`Workspace task ${index + 1} args must be an array.`);
+    }
+    return {
+      id: item.id,
+      label: item.label,
+      command: item.command,
+      args: [...item.args],
+      ...(item.cwd === undefined ? {} : { cwd: item.cwd }),
+      ...(item.port === undefined ? {} : { port: item.port }),
+    };
+  });
+  const runtime = plainObject(input.runtime, "Member project workspace runtime");
+  onlyFields(runtime, workspaceRuntimeFields, "Member project workspace runtime");
+  const workspace = {
+    schemaVersion: input.schemaVersion,
+    revision: input.revision,
+    updatedAt: input.updatedAt,
+    files,
+    tasks,
+    runtime: {
+      executionMode: runtime.executionMode,
+      provider: runtime.provider,
+      isolation: runtime.isolation,
+      runtime: runtime.runtime,
+      packageManager: runtime.packageManager,
+      installScripts: runtime.installScripts,
+    },
+  } as unknown as ProjectWorkspace;
+  const validation = validateProjectWorkspace(spec, workspace);
+  if (!validation.valid) {
+    throw new Error(
+      `Member project workspace is invalid: ${validation.issues[0] ?? "workspace validation failed."}`,
+    );
+  }
+  const html = compileWorkspaceRuntime(spec, workspace);
+  assertPublishedArtifactSafe(spec, html);
+  return workspace;
 }
 
 function checkpoint(value: unknown, index: number): ProjectCheckpoint {
@@ -239,13 +358,15 @@ function message(value: unknown, index: number): ProjectChatMessage {
   };
 }
 
-export function sanitizeMemberProjectDraft(value: unknown): MemberProjectDraft {
+function sanitizeMemberProjectDraftValue(value: unknown): MemberProjectDraft {
   assertProjectPayloadSafe(value, "member project sync payload");
-  const forbidden = findForbiddenField(value);
+  const input = plainObject(value, "Member project");
+  const nonWorkspaceInput = { ...input };
+  delete nonWorkspaceInput.workspace;
+  const forbidden = findForbiddenField(nonWorkspaceInput);
   if (forbidden) {
     throw new Error(`Member project sync rejected ${forbidden}. Credentials and compiled HTML stay out of cloud project storage.`);
   }
-  const input = plainObject(value, "Member project");
   const unknownFields = Object.keys(input).filter((field) => !projectFields.has(field));
   if (unknownFields.length) {
     throw new Error(`Member project contains unsupported fields: ${unknownFields.join(", ")}.`);
@@ -274,18 +395,37 @@ export function sanitizeMemberProjectDraft(value: unknown): MemberProjectDraft {
     throw new Error("Published slug is invalid.");
   }
   const publishedUrl = optionalUrl(input.publishedUrl, "Published URL");
+  const id = identifier(input.id, "Project id");
+  const spec = validatedSpec(input.spec, "Project spec");
+  const workspace = input.workspace === undefined
+    ? undefined
+    : validatedWorkspace(input.workspace, spec);
   return {
-    id: identifier(input.id, "Project id"),
-    spec: validatedSpec(input.spec, "Project spec"),
+    id,
+    spec,
     checkpoints: checkpointInput.map(checkpoint),
     futureCheckpoints: futureCheckpointInput.map(checkpoint),
     conversation: conversationInput.map(message),
+    ...(workspace ? { workspace } : {}),
     ...(publishedUrl ? { publishedUrl } : {}),
     ...(publishedSlug ? { publishedSlug } : {}),
     ...(input.publishedAt === undefined ? {} : {
       publishedAt: timestamp(input.publishedAt, "Published at"),
     }),
   };
+}
+
+export function sanitizeMemberProjectDraft(value: unknown): MemberProjectDraft {
+  try {
+    return sanitizeMemberProjectDraftValue(value);
+  } catch (error) {
+    if (error instanceof MemberProjectValidationError) throw error;
+    throw new MemberProjectValidationError(
+      error instanceof Error && error.message
+        ? error.message
+        : "Member project payload is invalid or unsafe.",
+    );
+  }
 }
 
 export function sanitizeMemberProjectRecord(value: unknown): MemberProjectRecord {
@@ -309,6 +449,7 @@ export function sanitizeMemberProjectRecord(value: unknown): MemberProjectRecord
     checkpoints: input.checkpoints,
     futureCheckpoints: input.futureCheckpoints,
     conversation: input.conversation,
+    ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
     ...(input.publishedUrl ? { publishedUrl: input.publishedUrl } : {}),
     ...(input.publishedSlug ? { publishedSlug: input.publishedSlug } : {}),
     ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
