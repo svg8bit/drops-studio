@@ -8,9 +8,11 @@ import {
   Check,
   Copy,
   ExternalLink,
+  KeyRound,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   Webhook,
 } from "lucide-react"
 
@@ -45,6 +47,8 @@ export function DropsBotWebhookConnection({
   const [consent, setConsent] = useState(false)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [mutating, setMutating] = useState<"rotate" | "revoke" | null>(null)
+  const [mutationConsent, setMutationConsent] = useState(false)
   const [callbackUrl, setCallbackUrl] = useState("")
   const [events, setEvents] = useState<DropsBotWebhookEventView[]>([])
   const [evidence, setEvidence] = useState<DropsBotCallbackEvidenceView | null>(null)
@@ -84,6 +88,7 @@ export function DropsBotWebhookConnection({
       setCanCreate(false)
       setEvidence(payload.callbackEvidence ?? null)
       setEvents(Array.isArray(payload.events) ? payload.events : [])
+      setMutationConsent(false)
       setMessage("")
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Callback events are unavailable.")
@@ -141,6 +146,66 @@ export function DropsBotWebhookConnection({
       onToast(errorMessage)
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function mutateCallback(method: "PUT" | "DELETE") {
+    if (!mutationConsent || mutating) return
+    const action = method === "PUT" ? "rotate" : "revoke"
+    if (
+      method === "DELETE"
+      && !window.confirm("Revoke this callback now? Its secret URL and saved event receipts will be permanently removed.")
+    ) {
+      return
+    }
+    setMutating(action)
+    setMessage("")
+    try {
+      const response = await fetch("/api/dropsbot/webhooks", {
+        method,
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ projectId, consent: true }),
+      })
+      const payload = (await response.json().catch(() => ({}))) as {
+        callbackUrl?: string
+        callbackEvidence?: DropsBotCallbackEvidenceView
+        revoked?: boolean
+        error?: string
+      }
+      if (response.status === 401) {
+        setCallbackUrl("")
+        setEvidence(null)
+        setEvents([])
+        setCanCreate(false)
+      }
+      if (!response.ok) {
+        throw new Error(payload.error || `Drops Bot callback could not be ${action}d.`)
+      }
+      setMutationConsent(false)
+      if (method === "PUT") {
+        if (!payload.callbackUrl) {
+          throw new Error("The rotated one-time callback URL was not returned.")
+        }
+        setCallbackUrl(payload.callbackUrl)
+        setEvidence(payload.callbackEvidence ?? null)
+        setMessage("Copy the replacement URL now and update @drops. The previous secret URL no longer works.")
+        onToast("Drops Bot callback secret rotated")
+      } else {
+        setCallbackUrl("")
+        setEvidence(null)
+        setEvents([])
+        setCanCreate(true)
+        setMessage("Callback revoked. Its previous secret URL no longer works; you can create a new callback when ready.")
+        onToast("Drops Bot callback revoked")
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : `Drops Bot callback could not be ${action}d.`
+      setMessage(errorMessage)
+      onToast(errorMessage)
+    } finally {
+      setMutating(null)
     }
   }
 
@@ -224,19 +289,53 @@ export function DropsBotWebhookConnection({
         {message ? <p className="text-sm leading-6 text-muted-foreground">{message}</p> : null}
 
         {evidence ? (
-          <div className="grid gap-2 rounded-lg border border-border bg-muted/25 p-3 text-sm">
-            <span className="flex items-center gap-2">
-              <Check className="size-4 text-emerald-600" aria-hidden="true" />
-              Capability URL authentication enabled
-            </span>
-            <span className="text-muted-foreground">
-              Provider identity and signature: unverified because the public specification defines neither
-            </span>
-            {evidence.receivedAt ? (
-              <span className="text-muted-foreground">
-                Last capability-authenticated callback: {new Date(evidence.receivedAt).toLocaleString()}
+          <div className="grid gap-3 rounded-lg border border-border bg-muted/25 p-3 text-sm">
+            <div className="grid gap-2">
+              <span className="flex items-center gap-2">
+                <Check className="size-4 text-emerald-600" aria-hidden="true" />
+                Capability URL authentication enabled
               </span>
-            ) : null}
+              <span className="text-muted-foreground">
+                Provider identity and signature: unverified because the public specification defines neither
+              </span>
+              {evidence.receivedAt ? (
+                <span className="text-muted-foreground">
+                  Last capability-authenticated callback: {new Date(evidence.receivedAt).toLocaleString()}
+                </span>
+              ) : null}
+            </div>
+            <div className="grid gap-3 border-t border-border pt-3">
+              <Label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
+                <Checkbox
+                  checked={mutationConsent}
+                  onCheckedChange={(checked) => setMutationConsent(checked === true)}
+                  aria-label="Consent to rotate or revoke the Drops Bot callback"
+                />
+                <span>
+                  I understand the current secret URL will stop working immediately. Revoking also removes saved event receipts.
+                </span>
+              </Label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!mutationConsent || Boolean(mutating)}
+                  onClick={() => void mutateCallback("PUT")}
+                >
+                  {mutating === "rotate" ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : <KeyRound data-icon="inline-start" aria-hidden="true" />}
+                  Rotate secret URL
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={!mutationConsent || Boolean(mutating)}
+                  onClick={() => void mutateCallback("DELETE")}
+                >
+                  {mutating === "revoke" ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : <Trash2 data-icon="inline-start" aria-hidden="true" />}
+                  Revoke callback
+                </Button>
+              </div>
+            </div>
           </div>
         ) : null}
 

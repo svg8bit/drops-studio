@@ -95,7 +95,6 @@ test.describe("approved Storybook visual states", () => {
       requireApprovedSnapshot(testInfo, `${story}.png`)
       await expect(page).toHaveScreenshot(`${story}.png`, {
         fullPage: false,
-        maxDiffPixels: 50,
       })
     })
   }

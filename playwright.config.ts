@@ -83,7 +83,10 @@ export default defineConfig({
       caret: "hide",
       maxDiffPixels: 0,
       scale: "css",
-      threshold: 0,
+      // The GitHub release gate uses the canonical bundled browser and exact
+      // color matching. The optional local system browser gets only a
+      // one-channel antialias tolerance while keeping a zero-pixel budget.
+      threshold: executablePath ? 0.01 : 0,
     },
   },
   reporter: [

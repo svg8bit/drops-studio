@@ -31,7 +31,11 @@ import type {
   PublishedProjectRecord,
 } from "@/lib/project-types";
 import { validateProjectSpec } from "@/lib/project-validator";
-import { validateEditableRuntimeHtml } from "@/lib/source-workspace";
+import {
+  bindPublishedRuntimeHtml,
+  PublishedRuntimeBindingError,
+  validateEditableRuntimeHtml,
+} from "@/lib/source-workspace";
 import {
   consumeRequestLimit,
   requestIdentity,
@@ -173,10 +177,22 @@ function publishedArtifact(options: {
     slug: options.slug,
     dataEndpoint: `${options.origin}/api/public-data`,
   });
+  let sourceHtml: string | undefined;
   if (options.htmlOverride) {
+    try {
+      sourceHtml = bindPublishedRuntimeHtml(options.htmlOverride, publishedSpec);
+    } catch (error) {
+      if (error instanceof PublishedRuntimeBindingError) {
+        throw new PublishResponseError(422, {
+          error: "The edited source could not be bound to its public runtime.",
+          criticalFailures: [error.message],
+        });
+      }
+      throw error;
+    }
     const validation = validateEditableRuntimeHtml(
       publishedSpec,
-      options.htmlOverride,
+      sourceHtml,
     );
     if (!validation.valid) {
       throw new PublishResponseError(422, {
@@ -186,7 +202,7 @@ function publishedArtifact(options: {
     }
   }
   const html = stampProviderEvidence(
-    options.htmlOverride ?? compileProject(publishedSpec),
+    sourceHtml ?? compileProject(publishedSpec),
     "unverified",
   );
   assertPublishedArtifactSafe(publishedSpec, html);

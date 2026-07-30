@@ -47,7 +47,9 @@ export default defineConfig({
     toHaveScreenshot: {
       animations: "disabled",
       caret: "hide",
-      maxDiffPixels: 0,
+      // Canonical CI snapshots are exact; the optional local system browser
+      // may vary by a few raster-only pixels across GPU processes.
+      maxDiffPixels: executablePath ? 50 : 0,
       scale: "css",
       threshold: 0,
     },

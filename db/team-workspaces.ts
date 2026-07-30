@@ -24,7 +24,8 @@ import {
 } from "../lib/member-project-cloud.ts";
 
 export const TEAM_WORKSPACE_OWNER_CAPACITY_BYTES = 3 * 1024 * 1024;
-const MAX_INVITES_PER_WORKSPACE = 100;
+const MAX_PENDING_INVITES_PER_WORKSPACE = 100;
+const MAX_STORED_INVITES_PER_WORKSPACE = 5_000;
 const MAX_PROJECTS_PER_WORKSPACE = 20;
 const MEMBER_OWNER_READ_CONCURRENCY = 4;
 const ENVELOPE_SCHEMA = `CREATE TABLE IF NOT EXISTS team_workspace_envelopes (
@@ -274,7 +275,7 @@ function storedWorkspace(value: unknown, ownerIdentity: string): StoredTeamWorks
     || input.members.length < 1
     || input.members.length > 100
     || !Array.isArray(input.invites)
-    || input.invites.length > MAX_INVITES_PER_WORKSPACE
+    || input.invites.length > MAX_STORED_INVITES_PER_WORKSPACE
     || (input.projects !== undefined
       && (!Array.isArray(input.projects)
         || input.projects.length > MAX_PROJECTS_PER_WORKSPACE))
@@ -750,7 +751,13 @@ export async function createTeamWorkspaceInvite(
     if (collaboratorCount(workspace) >= input.maxCollaborators) {
       throw new TeamWorkspaceValidationError("Team collaborator entitlement limit reached.");
     }
-    if (workspace.invites.length >= MAX_INVITES_PER_WORKSPACE) {
+    workspace.invites = workspace.invites.filter(
+      (invite) => Date.parse(invite.expiresAt) > now.getTime(),
+    );
+    const pendingInviteCount = workspace.invites.filter(
+      (invite) => invite.acceptedAt === null,
+    ).length;
+    if (pendingInviteCount >= MAX_PENDING_INVITES_PER_WORKSPACE) {
       throw new TeamWorkspaceValidationError("Team workspace invite limit reached.");
     }
     const invite: StoredTeamInvite = {
@@ -780,6 +787,7 @@ export async function acceptTeamWorkspaceInvite(
     memberIdentity: string;
     consent: boolean;
     secret: string;
+    maxCollaborators?: number;
   },
   runtime: TeamStorageRuntime = {},
 ): Promise<
@@ -789,6 +797,14 @@ export async function acceptTeamWorkspaceInvite(
   requireConsent(input.consent);
   if (!validTeamIdentity(input.memberIdentity)) {
     throw new TeamWorkspaceValidationError("Team member identity is invalid.");
+  }
+  if (
+    input.maxCollaborators !== undefined
+    && (!Number.isSafeInteger(input.maxCollaborators)
+      || input.maxCollaborators < 1
+      || input.maxCollaborators > 100)
+  ) {
+    throw new TeamWorkspaceValidationError("Team collaborator entitlement is invalid.");
   }
   const now = currentTime(runtime);
   const payload = verifyTeamInviteCapability(input.capability, input.secret, now);
@@ -808,7 +824,11 @@ export async function acceptTeamWorkspaceInvite(
     const existingMember = workspace.members.some(
       (member) => member.identity === input.memberIdentity,
     );
-    if (!existingMember && collaboratorCount(workspace) >= invite.maxCollaborators) {
+    const maxCollaborators = Math.min(
+      invite.maxCollaborators,
+      input.maxCollaborators ?? invite.maxCollaborators,
+    );
+    if (!existingMember && collaboratorCount(workspace) >= maxCollaborators) {
       throw new TeamWorkspaceValidationError("Team collaborator entitlement limit reached.");
     }
     if (!existingMember) {

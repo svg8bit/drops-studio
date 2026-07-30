@@ -8,9 +8,11 @@ import {
 import {
   resolveTeamInviteSecret,
   TeamWorkspaceValidationError,
+  verifyTeamInviteCapability,
 } from "@/lib/team-workspaces";
 import {
   enforceTeamRateLimit,
+  proTeamEntitlements,
   requireTeamSameOrigin,
   teamAccount,
   teamApiError,
@@ -30,12 +32,19 @@ export async function POST(request: NextRequest) {
     const account = teamAccount(request);
     requireTeamSameOrigin(request);
     const body = await teamRequestBody(request, 8 * 1_024);
+    const capability = String(body.capability ?? "");
+    const invite = verifyTeamInviteCapability(capability, secret);
+    if (!invite) {
+      throw new TeamWorkspaceValidationError("Team invite is invalid or expired.");
+    }
+    const entitlements = await proTeamEntitlements(invite.ownerIdentity);
     await enforceTeamRateLimit(account.identity, "team-workspace-invite-accept");
     const result = await acceptTeamWorkspaceInvite({
-      capability: String(body.capability ?? ""),
+      capability,
       memberIdentity: account.identity,
       consent: body.consent === true,
       secret,
+      maxCollaborators: entitlements.collaboratorsPerWorkspace,
     });
     if (result.status === "not-found") return teamJson({ error: "Team invite not found." }, 404);
     return teamJson({

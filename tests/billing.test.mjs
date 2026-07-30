@@ -373,10 +373,14 @@ test("checkout reuses an owner mapping and sends one server-owned recurring Pric
   ]);
   assert.equal(checkoutCalls[0].mode, "subscription");
   assert.equal(checkoutCalls[0].allowPromotionCodes, false);
-  assert.match(checkoutCalls[0].idempotencyKey, /^drops-checkout-[a-f0-9]{64}$/);
-  assert.equal(
+  assert.match(
+    checkoutCalls[0].idempotencyKey,
+    /^drops-checkout-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+  );
+  assert.notEqual(
     checkoutCalls[0].idempotencyKey,
     checkoutCalls[1].idempotencyKey,
+    "each server-issued checkout attempt must receive a fresh Stripe idempotency key",
   );
 });
 

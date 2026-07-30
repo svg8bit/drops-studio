@@ -92,6 +92,7 @@ async function withLocalCloud(run) {
     NODE_ENV: process.env.NODE_ENV,
     DROPS_ACCOUNT_COOKIE_SECRET: process.env.DROPS_ACCOUNT_COOKIE_SECRET,
     DROPS_STUDIO_LOCAL_PROJECT_STORE: process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE,
+    STRIPE_PRO_PRICE_ID: process.env.STRIPE_PRO_PRICE_ID,
     VERCEL: process.env.VERCEL,
   };
   process.env.NODE_ENV = "test";
@@ -99,11 +100,13 @@ async function withLocalCloud(run) {
   process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE = "1";
   delete process.env.VERCEL;
   globalThis.__DROPS_STUDIO_LOCAL_MEMBER_PROJECTS__ = new Map();
+  globalThis.__DROPS_STUDIO_LOCAL_BILLING__ = undefined;
   globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ = new Map();
   try {
     return await run();
   } finally {
     globalThis.__DROPS_STUDIO_LOCAL_MEMBER_PROJECTS__ = undefined;
+    globalThis.__DROPS_STUDIO_LOCAL_BILLING__ = undefined;
     globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ = undefined;
     for (const [name, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[name];
@@ -280,6 +283,36 @@ test("member cloud enforces the 50-project account ceiling", async () => {
   });
 });
 
+test("member cloud accepts the verified Pro 500-project entitlement without weakening member limits", async () => {
+  await withLocalCloud(async () => {
+    const {
+      MEMBER_PROJECT_LIMIT,
+      MEMBER_PROJECT_STORAGE_LIMIT,
+      upsertMemberProject,
+    } = await import("../db/member-projects.ts");
+    const identity = "f".repeat(64);
+
+    for (let index = 0; index < MEMBER_PROJECT_LIMIT + 1; index += 1) {
+      const saved = await upsertMemberProject(
+        identity,
+        projectDraft(`pro-project-${index}`, `Pro project ${index}`),
+        0,
+        undefined,
+        MEMBER_PROJECT_STORAGE_LIMIT,
+      );
+      assert.equal(saved.status, "saved");
+    }
+
+    const memberBoundary = await upsertMemberProject(
+      identity,
+      projectDraft("member-boundary", "Member boundary"),
+      0,
+    );
+    assert.equal(memberBoundary.status, "limit");
+    assert.equal(MEMBER_PROJECT_STORAGE_LIMIT, 500);
+  });
+});
+
 test("member cloud writes one private CAS-protected Vercel Blob envelope", async () => {
   const {
     listMemberProjects,
@@ -442,6 +475,7 @@ test("member project API round-trips sanitized records and rejects stale writes"
     assert.equal(listed.status, 200);
     assert.equal(listPayload.projects.length, 1);
     assert.equal(listPayload.projects[0].spec.name, "Member Morning Alpha");
+    assert.equal(listPayload.limit, 50);
 
     const stale = await PUT(new NextRequest("https://drops.example/api/projects", {
       method: "PUT",
@@ -459,6 +493,72 @@ test("member project API round-trips sanitized records and rejects stale writes"
       body: JSON.stringify({ id: "project-cloud-1", expectedRevision: 1 }),
     }));
     assert.equal(deleted.status, 204);
+  });
+});
+
+test("member project API grants 500 projects only from a verified active Pro billing record", async () => {
+  await withLocalCloud(async () => {
+    const { GET, PUT } = await import("../app/api/projects/route.ts");
+    const {
+      MEMBER_PROJECT_LIMIT,
+      MEMBER_PROJECT_STORAGE_LIMIT,
+      upsertMemberProject,
+    } = await import("../db/member-projects.ts");
+    const {
+      applyBillingWebhookEvent,
+    } = await import("../db/billing.ts");
+    const { NextRequest } = await import("next/server.js");
+    const accountCookie = createStudioAccountCookie({
+      provider: "openrouter",
+      subject: "verified-pro-project-owner",
+    }, accountSecret);
+    const member = readStudioAccountCookie(accountCookie, accountSecret);
+    assert.ok(member);
+    process.env.STRIPE_PRO_PRICE_ID = "price_pro_projects_123456";
+
+    for (let index = 0; index < MEMBER_PROJECT_LIMIT; index += 1) {
+      const saved = await upsertMemberProject(
+        member.identity,
+        projectDraft(`existing-project-${index}`, `Existing project ${index}`),
+        0,
+      );
+      assert.equal(saved.status, "saved");
+    }
+
+    await applyBillingWebhookEvent({
+      id: "evt_pro_projects_123456",
+      type: "customer.subscription.updated",
+      mutation: "subscription",
+      createdAt: "2026-07-30T12:00:00.000Z",
+      accountIdentity: member.identity,
+      stripeCustomerId: "cus_pro_projects_123456",
+      stripeSubscriptionId: "sub_pro_projects_123456",
+      priceId: process.env.STRIPE_PRO_PRICE_ID,
+      status: "active",
+      currentPeriodEnd: "2099-08-30T12:00:00.000Z",
+      cancelAtPeriodEnd: false,
+    });
+
+    const headers = {
+      "content-type": "application/json",
+      cookie: `${STUDIO_ACCOUNT_COOKIE}=${accountCookie}`,
+      origin: "https://drops.example",
+    };
+    const listed = await GET(new NextRequest("https://drops.example/api/projects", {
+      headers: { cookie: `${STUDIO_ACCOUNT_COOKIE}=${accountCookie}` },
+    }));
+    assert.equal(listed.status, 200);
+    assert.equal((await listed.json()).limit, MEMBER_PROJECT_STORAGE_LIMIT);
+
+    const expanded = await PUT(new NextRequest("https://drops.example/api/projects", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        project: projectDraft("pro-project-51", "Verified Pro project 51"),
+        expectedRevision: 0,
+      }),
+    }));
+    assert.equal(expanded.status, 201);
   });
 });
 

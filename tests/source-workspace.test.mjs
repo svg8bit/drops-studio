@@ -20,7 +20,11 @@ registerHooks({
 
 const { compileProject } = await import("../lib/project-compiler.ts");
 const { createProjectSpec } = await import("../lib/project-factory.ts");
-const { prepareEditableRuntimeHtml, validateEditableRuntimeHtml } = await import(
+const {
+  bindPublishedRuntimeHtml,
+  prepareEditableRuntimeHtml,
+  validateEditableRuntimeHtml,
+} = await import(
   "../lib/source-workspace.ts"
 );
 
@@ -65,6 +69,54 @@ test("source workspace removes loopback origins without breaking Studio-local as
     valid: true,
     issues: [],
   });
+});
+
+test("edited runtime binding preserves edits while replacing every Studio service slug", () => {
+  const { spec, html } = project();
+  const publicSpec = {
+    ...spec,
+    slug: "public-radio-111111111111111111111111",
+    dataEndpoint: "https://drops.example/api/public-data",
+  };
+  const edited = html.replace(
+    "</body>",
+    '<aside data-user-edit="true">Keep this source edit</aside></body>',
+  );
+  const rebound = bindPublishedRuntimeHtml(edited, publicSpec);
+  const embedded = rebound.match(
+    /<script type="application\/json" id="projectSpec">([\s\S]*?)<\/script>/,
+  );
+  assert.ok(embedded);
+  assert.equal(JSON.parse(embedded[1]).slug, publicSpec.slug);
+  assert.equal(JSON.parse(embedded[1]).dataEndpoint, publicSpec.dataEndpoint);
+  assert.match(rebound, /data-user-edit="true"/);
+  assert.match(
+    rebound,
+    new RegExp(`var studioTelegramUrl="https://drops\\.example/\\?connections=1&provider=dropsbot&flow=telegram-channel&project=${publicSpec.slug}"`),
+  );
+  assert.deepEqual(validateEditableRuntimeHtml(publicSpec, rebound), {
+    valid: true,
+    issues: [],
+  });
+});
+
+test("edited runtime binding fails closed when a compiler-owned bridge value is missing", () => {
+  const { spec, html } = project();
+  const publicSpec = { ...spec, slug: "public-radio-safe" };
+  assert.throws(
+    () => bindPublishedRuntimeHtml(
+      html.replace('<script type="application/json" id="projectSpec">', "<script>"),
+      publicSpec,
+    ),
+    /exactly one generated projectSpec payload/,
+  );
+  assert.throws(
+    () => bindPublishedRuntimeHtml(
+      html.replace(/\bvar studioTelegramUrl=("(?:\\.|[^"\\])*");/, ""),
+      publicSpec,
+    ),
+    /generated Telegram handoff binding/,
+  );
 });
 
 test("source workspace blocks secrets, evaluators, loopback dependencies and removed contracts", () => {

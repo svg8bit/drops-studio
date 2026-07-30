@@ -117,6 +117,32 @@ test("OpenRouter member identity is signed, private and rejects tampering or exp
   assert.equal(resolveAccountCookieSecret({ DROPS_ACCOUNT_COOKIE_SECRET: "account-secret" }), "account-secret");
 });
 
+test("OpenRouter storage ownership survives cookie-signing secret rotation", () => {
+  const issuedAt = Math.floor(Date.parse("2026-07-29T12:00:00Z") / 1_000);
+  const firstSecret = "first-cookie-signing-secret-with-enough-entropy";
+  const rotatedSecret = "rotated-cookie-signing-secret-with-enough-entropy";
+  const input = { provider: "openrouter", subject: accountSubject, issuedAt };
+  const first = readStudioAccountCookie(
+    createStudioAccountCookie(input, firstSecret),
+    firstSecret,
+    Date.parse("2026-07-29T12:05:00Z"),
+  );
+  const rotated = readStudioAccountCookie(
+    createStudioAccountCookie(input, rotatedSecret),
+    rotatedSecret,
+    Date.parse("2026-07-29T12:05:00Z"),
+  );
+
+  assert.ok(first);
+  assert.ok(rotated);
+  assert.equal(first.identity, rotated.identity);
+  assert.notEqual(
+    createStudioAccountCookie(input, firstSecret),
+    createStudioAccountCookie(input, rotatedSecret),
+    "cookie signatures still rotate independently from durable storage ownership",
+  );
+});
+
 test("access metadata exposes only tiers that actually work", () => {
   const guest = accessMetadata({ tier: "guest", used: 1 });
 

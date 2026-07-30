@@ -95,6 +95,14 @@ export type DropsBotWebhookCreateResult =
   | { status: "created"; project: DropsBotWebhookProject }
   | { status: "exists" };
 
+export type DropsBotWebhookRotateResult =
+  | { status: "rotated"; project: DropsBotWebhookProject }
+  | { status: "not-found" };
+
+export type DropsBotWebhookRevokeResult =
+  | { status: "revoked" }
+  | { status: "not-found" };
+
 export type DropsBotWebhookAcceptResult =
   | {
       status: "accepted" | "duplicate";
@@ -358,6 +366,28 @@ async function latestD1CallbackEvidence(
   return d1CallbackEvidence(connection);
 }
 
+async function recordD1CallbackEvidence(
+  db: D1Database,
+  connectionId: string,
+  capabilityHash: string,
+  event: Pick<DropsBotWebhookEvent, "receivedAt" | "contentHash">,
+): Promise<DropsBotCallbackEvidence | null> {
+  const updated = await db.prepare(
+    `UPDATE dropsbot_webhook_connections
+    SET callback_received_at = COALESCE(callback_received_at, ?),
+    last_event_received_at = ?, last_event_content_hash = ?
+    WHERE id = ? AND capability_hash = ?`,
+  ).bind(
+    event.receivedAt,
+    event.receivedAt,
+    event.contentHash,
+    connectionId,
+    capabilityHash,
+  ).run();
+  if (Number(updated.meta?.changes ?? 0) < 1) return null;
+  return latestD1CallbackEvidence(db, connectionId);
+}
+
 function publicProject(connection: InternalConnection): DropsBotWebhookProject {
   return {
     connectionId: connection.id,
@@ -472,6 +502,38 @@ function createInState(
   return { status: "created", project: publicProject(connection) };
 }
 
+function rotateInState(
+  state: DropsBotBlobState,
+  input: {
+    ownerIdentity: string;
+    projectId: string;
+    capabilityHash: string;
+    consentedAt: string;
+  },
+): DropsBotWebhookRotateResult {
+  const connection = state.connections.find((item) =>
+    item.ownerIdentity === input.ownerIdentity && item.projectId === input.projectId);
+  if (!connection) return { status: "not-found" };
+  connection.capabilityHash = input.capabilityHash;
+  connection.consentedAt = input.consentedAt;
+  connection.callbackReceivedAt = null;
+  connection.lastEventReceivedAt = null;
+  connection.lastEventContentHash = null;
+  return { status: "rotated", project: publicProject(connection) };
+}
+
+function revokeInState(
+  state: DropsBotBlobState,
+  ownerIdentity: string,
+  projectId: string,
+): DropsBotWebhookRevokeResult {
+  const connectionIndex = state.connections.findIndex((item) =>
+    item.ownerIdentity === ownerIdentity && item.projectId === projectId);
+  if (connectionIndex < 0) return { status: "not-found" };
+  state.connections.splice(connectionIndex, 1);
+  return { status: "revoked" };
+}
+
 function acceptInState(
   state: DropsBotBlobState,
   input: {
@@ -484,6 +546,9 @@ function acceptInState(
   if (!connection || !hashesMatch(connection.capabilityHash, input.capabilityHash)) {
     return { status: "not-found" };
   }
+  connection.callbackReceivedAt ??= input.event.receivedAt;
+  connection.lastEventReceivedAt = input.event.receivedAt;
+  connection.lastEventContentHash = input.event.contentHash;
   const duplicate = connection.events.find((event) => event.contentHash === input.event.contentHash);
   if (duplicate) {
     return {
@@ -494,9 +559,6 @@ function acceptInState(
   }
   if (connection.events.length >= MAX_EVENTS_PER_CONNECTION) throw new DropsBotWebhookCapacityError();
   connection.events.push(structuredClone(input.event));
-  connection.callbackReceivedAt ??= input.event.receivedAt;
-  connection.lastEventReceivedAt = input.event.receivedAt;
-  connection.lastEventContentHash = input.event.contentHash;
   return {
     status: "accepted",
     event: structuredClone(input.event),
@@ -587,6 +649,115 @@ export async function createDropsBotWebhookConnection(
   throw new DropsBotWebhookStorageUnavailableError();
 }
 
+export async function rotateDropsBotWebhookConnection(
+  input: {
+    ownerIdentity: string;
+    projectId: string;
+    capabilityHash: string;
+    consentedAt: string;
+  },
+  storageOverride?: BlobStorage,
+): Promise<DropsBotWebhookRotateResult> {
+  validIdentity(input.ownerIdentity);
+  validProjectId(input.projectId);
+  if (!validDropsBotWebhookHash(input.capabilityHash)) {
+    throw new Error("Drops Bot webhook capability hash is invalid.");
+  }
+  if (!validTimestamp(input.consentedAt)) {
+    throw new Error("Drops Bot webhook consent timestamp is invalid.");
+  }
+  if (storageOverride) {
+    return mutateBlobState(storageOverride, (state) => rotateInState(state, input));
+  }
+  const local = localState();
+  if (local) {
+    const next = structuredClone(local);
+    const result = rotateInState(next, input);
+    if (result.status === "rotated") {
+      serializedState(next);
+      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
+    }
+    return result;
+  }
+  const db = await ensureDropsBotTables();
+  if (db) {
+    const updated = await db.prepare(
+      `UPDATE dropsbot_webhook_connections
+      SET capability_hash = ?, consented_at = ?, callback_received_at = NULL,
+      last_event_received_at = NULL, last_event_content_hash = NULL
+      WHERE owner_identity = ? AND project_id = ?`,
+    ).bind(
+      input.capabilityHash,
+      input.consentedAt,
+      input.ownerIdentity,
+      input.projectId,
+    ).run();
+    if (Number(updated.meta?.changes ?? 0) < 1) return { status: "not-found" };
+    const project = await listDropsBotWebhookProject(
+      input.ownerIdentity,
+      input.projectId,
+    );
+    if (!project) throw new DropsBotWebhookStorageUnavailableError();
+    return { status: "rotated", project };
+  }
+  if (blobAvailable()) {
+    return mutateBlobState(
+      await blobClient(),
+      (state) => rotateInState(state, input),
+    );
+  }
+  throw new DropsBotWebhookStorageUnavailableError();
+}
+
+export async function revokeDropsBotWebhookConnection(
+  ownerIdentity: string,
+  projectId: string,
+  storageOverride?: BlobStorage,
+): Promise<DropsBotWebhookRevokeResult> {
+  validIdentity(ownerIdentity);
+  validProjectId(projectId);
+  if (storageOverride) {
+    return mutateBlobState(
+      storageOverride,
+      (state) => revokeInState(state, ownerIdentity, projectId),
+    );
+  }
+  const local = localState();
+  if (local) {
+    const next = structuredClone(local);
+    const result = revokeInState(next, ownerIdentity, projectId);
+    if (result.status === "revoked") {
+      serializedState(next);
+      globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
+    }
+    return result;
+  }
+  const db = await ensureDropsBotTables();
+  if (db) {
+    const current = await db.prepare(
+      "SELECT id FROM dropsbot_webhook_connections WHERE owner_identity = ? AND project_id = ? LIMIT 1",
+    ).bind(ownerIdentity, projectId).first<{ id: string }>();
+    if (!current) return { status: "not-found" };
+    const connectionId = String(current.id);
+    await db.batch([
+      db.prepare(
+        "DELETE FROM dropsbot_webhook_events WHERE connection_id = ?",
+      ).bind(connectionId),
+      db.prepare(
+        "DELETE FROM dropsbot_webhook_connections WHERE id = ? AND owner_identity = ? AND project_id = ?",
+      ).bind(connectionId, ownerIdentity, projectId),
+    ]);
+    return { status: "revoked" };
+  }
+  if (blobAvailable()) {
+    return mutateBlobState(
+      await blobClient(),
+      (state) => revokeInState(state, ownerIdentity, projectId),
+    );
+  }
+  throw new DropsBotWebhookStorageUnavailableError();
+}
+
 export async function acceptDropsBotWebhookEvent(
   input: {
     connectionId: string;
@@ -606,7 +777,7 @@ export async function acceptDropsBotWebhookEvent(
   if (local) {
     const next = structuredClone(local);
     const result = acceptInState(next, mutation);
-    if (result.status === "accepted") {
+    if (result.status !== "not-found") {
       serializedState(next);
       globalThis.__DROPS_STUDIO_LOCAL_DROPSBOT_WEBHOOKS__ = next;
     }
@@ -625,10 +796,17 @@ export async function acceptDropsBotWebhookEvent(
       "SELECT id, content_hash, received_at, payload_json FROM dropsbot_webhook_events WHERE connection_id = ? AND content_hash = ? LIMIT 1",
     ).bind(input.connectionId, event.contentHash).first<Record<string, unknown>>();
     if (existing) {
+      const evidence = await recordD1CallbackEvidence(
+        db,
+        input.connectionId,
+        input.capabilityHash,
+        event,
+      );
+      if (!evidence) return { status: "not-found" };
       return {
         status: "duplicate",
         event: eventFromD1Row(existing),
-        callbackEvidence: await latestD1CallbackEvidence(db, input.connectionId),
+        callbackEvidence: evidence,
       };
     }
     const count = await db.prepare(
@@ -640,7 +818,11 @@ export async function acceptDropsBotWebhookEvent(
         `INSERT OR IGNORE INTO dropsbot_webhook_events
         (id, connection_id, content_hash, received_at, payload_json)
         SELECT ?, ?, ?, ?, ?
-        WHERE (SELECT COUNT(*) FROM dropsbot_webhook_events WHERE connection_id = ?) < ?`,
+        WHERE (SELECT COUNT(*) FROM dropsbot_webhook_events WHERE connection_id = ?) < ?
+        AND EXISTS (
+          SELECT 1 FROM dropsbot_webhook_connections
+          WHERE id = ? AND capability_hash = ?
+        )`,
       ).bind(
         event.id,
         input.connectionId,
@@ -649,6 +831,8 @@ export async function acceptDropsBotWebhookEvent(
         JSON.stringify(event.payload),
         input.connectionId,
         MAX_EVENTS_PER_CONNECTION,
+        input.connectionId,
+        input.capabilityHash,
       ),
       db.prepare(
         `UPDATE dropsbot_webhook_connections
@@ -656,7 +840,7 @@ export async function acceptDropsBotWebhookEvent(
           (SELECT received_at FROM dropsbot_webhook_events WHERE connection_id = ? AND content_hash = ? LIMIT 1)),
         last_event_received_at = (SELECT received_at FROM dropsbot_webhook_events WHERE connection_id = ? ORDER BY received_at DESC LIMIT 1),
         last_event_content_hash = (SELECT content_hash FROM dropsbot_webhook_events WHERE connection_id = ? ORDER BY received_at DESC LIMIT 1)
-        WHERE id = ? AND EXISTS (
+        WHERE id = ? AND capability_hash = ? AND EXISTS (
           SELECT 1 FROM dropsbot_webhook_events WHERE connection_id = ? AND content_hash = ?
         )`,
       ).bind(
@@ -665,11 +849,20 @@ export async function acceptDropsBotWebhookEvent(
         input.connectionId,
         input.connectionId,
         input.connectionId,
+        input.capabilityHash,
         input.connectionId,
         event.contentHash,
       ),
     ]);
     const accepted = Number(inserted.meta?.changes ?? 0) > 0;
+    if (!accepted) {
+      const current = await db.prepare(
+        "SELECT capability_hash FROM dropsbot_webhook_connections WHERE id = ? LIMIT 1",
+      ).bind(input.connectionId).first<{ capability_hash: string }>();
+      if (!current || !hashesMatch(String(current.capability_hash), input.capabilityHash)) {
+        return { status: "not-found" };
+      }
+    }
     const duplicate = accepted ? null : await db.prepare(
         "SELECT id, content_hash, received_at, payload_json FROM dropsbot_webhook_events WHERE connection_id = ? AND content_hash = ? LIMIT 1",
       ).bind(input.connectionId, event.contentHash).first<Record<string, unknown>>();

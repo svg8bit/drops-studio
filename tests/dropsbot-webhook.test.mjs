@@ -92,6 +92,24 @@ async function createConnection(cookie) {
   return { response, payload: await response.json() };
 }
 
+async function mutateConnection(cookie, method, consent = true) {
+  const route = await import("../app/api/dropsbot/webhooks/route.ts");
+  const { NextRequest } = await import("next/server.js");
+  const response = await route[method](new NextRequest(
+    "https://drops.example/api/dropsbot/webhooks",
+    {
+      method,
+      headers: {
+        "content-type": "application/json",
+        cookie: `${STUDIO_ACCOUNT_COOKIE}=${cookie}`,
+        origin: "https://drops.example",
+      },
+      body: JSON.stringify({ projectId, consent }),
+    },
+  ));
+  return { response, payload: await response.json() };
+}
+
 function callbackParts(callbackUrl) {
   const segments = new URL(callbackUrl).pathname.split("/").filter(Boolean);
   return {
@@ -115,6 +133,11 @@ test("Drops Bot receiver clears stale provider evidence after account expiry", a
   assert.match(unauthorizedBranch, /setEvents\(\[\]\)/);
   assert.match(unauthorizedBranch, /setConsent\(false\)/);
   assert.match(unauthorizedBranch, /setCanCreate\(false\)/);
+  assert.match(source, /Consent to rotate or revoke the Drops Bot callback/);
+  assert.match(source, /method === "PUT" \? "rotate" : "revoke"/);
+  assert.match(source, /mutateCallback\("PUT"\)/);
+  assert.match(source, /mutateCallback\("DELETE"\)/);
+  assert.match(source, /current secret URL will stop working immediately/);
 });
 
 test("Drops Bot callback capabilities store only a hash and redact credential material", async () => {
@@ -236,6 +259,69 @@ test("callback creation requires a signed project owner, same origin, and explic
     assert.equal(payload.callbackEvidence.status, "pending");
     assert.equal(payload.callbackEvidence.providerVerified, false);
     assert.equal(payload.callbackEvidence.providerSignatureVerified, false);
+  });
+});
+
+test("the signed owner explicitly rotates or revokes a callback and every old capability stops working", async () => {
+  await withLocalDropsBot(async () => {
+    const owner = signedAccount(firstSubject);
+    const foreign = signedAccount(secondSubject);
+    seedProject(owner.account.identity);
+    seedProject(foreign.account.identity);
+
+    const created = await createConnection(owner.cookie);
+    assert.equal(created.response.status, 201);
+    const original = callbackParts(created.payload.callbackUrl);
+
+    const deniedRotation = await mutateConnection(owner.cookie, "PUT", false);
+    assert.equal(deniedRotation.response.status, 400);
+    assert.equal(deniedRotation.payload.code, "DROPSBOT_CONSENT_REQUIRED");
+
+    const foreignRotation = await mutateConnection(foreign.cookie, "PUT");
+    assert.equal(foreignRotation.response.status, 404);
+
+    const rotated = await mutateConnection(owner.cookie, "PUT");
+    assert.equal(rotated.response.status, 200);
+    assert.equal(rotated.payload.connectionId, original.connectionId);
+    assert.equal(rotated.payload.callbackEvidence.status, "pending");
+    assert.equal(rotated.payload.registration.claimedConfigured, false);
+    const replacement = callbackParts(rotated.payload.callbackUrl);
+    assert.notEqual(replacement.capability, original.capability);
+
+    const callback = await import("../app/api/dropsbot/webhooks/[connectionId]/[capability]/route.ts");
+    const { NextRequest } = await import("next/server.js");
+    const oldCapability = await callback.POST(new NextRequest(created.payload.callbackUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "wallet.swap", generation: "old" }),
+    }), { params: Promise.resolve(original) });
+    assert.equal(oldCapability.status, 404);
+
+    const replacementCapability = await callback.POST(new NextRequest(rotated.payload.callbackUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "wallet.swap", generation: "replacement" }),
+    }), { params: Promise.resolve(replacement) });
+    assert.equal(replacementCapability.status, 202);
+    assert.equal((await replacementCapability.json()).callbackEvidence.status, "callback-received");
+
+    const deniedRevocation = await mutateConnection(owner.cookie, "DELETE", false);
+    assert.equal(deniedRevocation.response.status, 400);
+
+    const revoked = await mutateConnection(owner.cookie, "DELETE");
+    assert.equal(revoked.response.status, 200);
+    assert.equal(revoked.payload.revoked, true);
+
+    const revokedCapability = await callback.POST(new NextRequest(rotated.payload.callbackUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "wallet.swap", generation: "revoked" }),
+    }), { params: Promise.resolve(replacement) });
+    assert.equal(revokedCapability.status, 404);
+
+    const recreated = await createConnection(owner.cookie);
+    assert.equal(recreated.response.status, 201);
+    assert.notEqual(recreated.payload.connectionId, original.connectionId);
   });
 });
 
@@ -478,10 +564,14 @@ test("D1 duplicate callbacks report the latest stored connection evidence", asyn
             return this;
           },
           async run() {
-            return { meta: { changes: 0 } };
+            return {
+              meta: {
+                changes: /UPDATE dropsbot_webhook_connections/i.test(sql) ? 1 : 0,
+              },
+            };
           },
           async first() {
-            if (/SELECT capability_hash, last_event_received_at/i.test(sql)) {
+            if (/SELECT capability_hash(?:, last_event_received_at)?/i.test(sql)) {
               return latestConnection;
             }
             if (/SELECT id, content_hash, received_at, payload_json/i.test(sql)) {

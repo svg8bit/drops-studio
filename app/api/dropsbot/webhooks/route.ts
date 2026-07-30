@@ -6,6 +6,8 @@ import {
   dropsBotWebhookStorageConfigured,
   DropsBotWebhookCapacityError,
   DropsBotWebhookStorageUnavailableError,
+  revokeDropsBotWebhookConnection,
+  rotateDropsBotWebhookConnection,
 } from "../../../../db/dropsbot-webhooks.ts";
 import {
   listMemberProjects,
@@ -65,20 +67,20 @@ function account(request: NextRequest): StudioAccount {
 function requireSameOrigin(request: NextRequest): void {
   if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") {
     throw new DropsBotWebhookResponseError(403, {
-      error: "Cross-origin Drops Bot callback creation rejected.",
+      error: "Cross-origin Drops Bot callback mutation rejected.",
     });
   }
   const origin = request.headers.get("origin");
   if (!origin) {
     throw new DropsBotWebhookResponseError(403, {
-      error: "A same-origin Drops Bot callback request is required.",
+      error: "A same-origin Drops Bot callback mutation is required.",
     });
   }
   try {
     if (new URL(origin).origin !== request.nextUrl.origin) throw new Error();
   } catch {
     throw new DropsBotWebhookResponseError(403, {
-      error: "Cross-origin Drops Bot callback creation rejected.",
+      error: "Cross-origin Drops Bot callback mutation rejected.",
     });
   }
 }
@@ -86,7 +88,7 @@ function requireSameOrigin(request: NextRequest): void {
 async function body(request: NextRequest): Promise<Record<string, unknown>> {
   if (!hasJsonMediaType(request)) {
     throw new DropsBotWebhookResponseError(415, {
-      error: "Drops Bot callback creation requires application/json.",
+      error: "Drops Bot callback mutations require application/json.",
     });
   }
   const raw = await readDropsBotWebhookBody(
@@ -98,19 +100,19 @@ async function body(request: NextRequest): Promise<Record<string, unknown>> {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)) as unknown;
   } catch {
     throw new DropsBotWebhookResponseError(400, {
-      error: "Drops Bot callback creation requires a valid JSON body.",
+      error: "Drops Bot callback mutations require a valid JSON body.",
     });
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new DropsBotWebhookResponseError(400, {
-      error: "Drops Bot callback creation requires a JSON object.",
+      error: "Drops Bot callback mutations require a JSON object.",
     });
   }
   const input = parsed as Record<string, unknown>;
   const unsupported = Object.keys(input).filter((key) => !["projectId", "consent"].includes(key));
   if (unsupported.length) {
     throw new DropsBotWebhookResponseError(400, {
-      error: `Drops Bot callback creation contains unsupported fields: ${unsupported.join(", ")}.`,
+      error: `Drops Bot callback mutation contains unsupported fields: ${unsupported.join(", ")}.`,
     });
   }
   return input;
@@ -123,6 +125,49 @@ function projectId(value: unknown): string {
     });
   }
   return value;
+}
+
+function requireConsent(input: Record<string, unknown>, action: string): void {
+  if (input.consent !== true) {
+    throw new DropsBotWebhookResponseError(400, {
+      code: "DROPSBOT_CONSENT_REQUIRED",
+      error: `Explicit consent is required before ${action} a secret callback URL.`,
+    });
+  }
+}
+
+async function requireOwnedProject(
+  member: StudioAccount,
+  input: Record<string, unknown>,
+): Promise<string> {
+  const ownedProjectId = projectId(input.projectId);
+  const projects = await listMemberProjects(member.identity);
+  if (!projects.some((project) => project.id === ownedProjectId)) {
+    throw new DropsBotWebhookResponseError(404, {
+      error: "Signed project not found.",
+    });
+  }
+  return ownedProjectId;
+}
+
+function callbackUrl(
+  request: NextRequest,
+  connectionId: string,
+  capability: string,
+): string {
+  return new URL(
+    `/api/dropsbot/webhooks/${connectionId}/${capability}`,
+    request.nextUrl.origin,
+  ).toString();
+}
+
+function registration(note: string) {
+  return {
+    mode: "manual-in-@drops",
+    officialSurface: "https://t.me/Drops",
+    claimedConfigured: false,
+    note,
+  } as const;
 }
 
 function responseError(error: unknown): NextResponse {
@@ -155,19 +200,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       throw new DropsBotWebhookStorageUnavailableError();
     }
     const input = await body(request);
-    if (input.consent !== true) {
-      throw new DropsBotWebhookResponseError(400, {
-        code: "DROPSBOT_CONSENT_REQUIRED",
-        error: "Explicit consent is required before creating a secret callback URL.",
-      });
-    }
-    const ownedProjectId = projectId(input.projectId);
-    const projects = await listMemberProjects(member.identity);
-    if (!projects.some((project) => project.id === ownedProjectId)) {
-      throw new DropsBotWebhookResponseError(404, {
-        error: "Signed project not found.",
-      });
-    }
+    requireConsent(input, "creating");
+    const ownedProjectId = await requireOwnedProject(member, input);
 
     const createdAt = new Date().toISOString();
     const capability = createDropsBotWebhookCapability();
@@ -187,23 +221,83 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const callbackUrl = new URL(
-      `/api/dropsbot/webhooks/${connectionId}/${capability.secret}`,
-      request.nextUrl.origin,
-    ).toString();
     return json({
       connectionId,
       projectId: ownedProjectId,
-      callbackUrl,
+      callbackUrl: callbackUrl(request, connectionId, capability.secret),
       createdAt,
-      registration: {
-        mode: "manual-in-@drops",
-        officialSurface: "https://t.me/Drops",
-        claimedConfigured: false,
-        note: "Add this callback URL through the official @drops product. Drops Studio does not guess an undocumented provider endpoint or signature header.",
-      },
+      registration: registration("Add this callback URL through the official @drops product. Drops Studio does not guess an undocumented provider endpoint or signature header."),
       callbackEvidence: result.project.callbackEvidence,
     }, 201);
+  } catch (error) {
+    return responseError(error);
+  }
+}
+
+export async function PUT(request: NextRequest): Promise<NextResponse> {
+  try {
+    const member = account(request);
+    requireSameOrigin(request);
+    if (!dropsBotWebhookStorageConfigured()) {
+      throw new DropsBotWebhookStorageUnavailableError();
+    }
+    const input = await body(request);
+    requireConsent(input, "rotating");
+    const ownedProjectId = await requireOwnedProject(member, input);
+    const rotatedAt = new Date().toISOString();
+    const capability = createDropsBotWebhookCapability();
+    const result = await rotateDropsBotWebhookConnection({
+      ownerIdentity: member.identity,
+      projectId: ownedProjectId,
+      capabilityHash: capability.hash,
+      consentedAt: rotatedAt,
+    });
+    if (result.status === "not-found") {
+      throw new DropsBotWebhookResponseError(404, {
+        error: "Drops Bot callback not found for this project.",
+      });
+    }
+    return json({
+      connectionId: result.project.connectionId,
+      projectId: ownedProjectId,
+      callbackUrl: callbackUrl(
+        request,
+        result.project.connectionId,
+        capability.secret,
+      ),
+      rotatedAt,
+      registration: registration("Replace the previous URL inside the official @drops product. The previous secret stopped working when this URL was issued."),
+      callbackEvidence: result.project.callbackEvidence,
+    }, 200);
+  } catch (error) {
+    return responseError(error);
+  }
+}
+
+export async function DELETE(request: NextRequest): Promise<NextResponse> {
+  try {
+    const member = account(request);
+    requireSameOrigin(request);
+    if (!dropsBotWebhookStorageConfigured()) {
+      throw new DropsBotWebhookStorageUnavailableError();
+    }
+    const input = await body(request);
+    requireConsent(input, "revoking");
+    const ownedProjectId = await requireOwnedProject(member, input);
+    const result = await revokeDropsBotWebhookConnection(
+      member.identity,
+      ownedProjectId,
+    );
+    if (result.status === "not-found") {
+      throw new DropsBotWebhookResponseError(404, {
+        error: "Drops Bot callback not found for this project.",
+      });
+    }
+    return json({
+      revoked: true,
+      projectId: ownedProjectId,
+      revokedAt: new Date().toISOString(),
+    }, 200);
   } catch (error) {
     return responseError(error);
   }

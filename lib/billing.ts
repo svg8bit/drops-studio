@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 
 export const STRIPE_API_VERSION = "2026-07-29.dahlia" as const;
@@ -63,18 +63,21 @@ const BYOK = {
   providers: ["openrouter", "openai", "anthropic", "kimi", "custom"],
 } as const;
 
+export const MEMBER_PRIVATE_PROJECT_LIMIT = 50;
+export const PRO_PRIVATE_PROJECT_LIMIT = 500;
+
 export function billingEntitlements(tier: BillingTier): BillingEntitlements {
   const limits = tier === "pro"
     ? {
         platformDailyBuilds: 100,
-        privateProjects: 500,
+        privateProjects: PRO_PRIVATE_PROJECT_LIMIT,
         teamWorkspaces: 10,
         collaboratorsPerWorkspace: 25,
       }
     : tier === "member"
       ? {
           platformDailyBuilds: 10,
-          privateProjects: 50,
+          privateProjects: MEMBER_PRIVATE_PROJECT_LIMIT,
           teamWorkspaces: 0,
           collaboratorsPerWorkspace: 0,
         }
@@ -244,9 +247,9 @@ export async function createProCheckout(
   const session = await options.provider.createCheckoutSession({
     accountIdentity: input.accountIdentity,
     customerId: account.stripeCustomerId,
-    idempotencyKey: `drops-checkout-${createHash("sha256")
-      .update(`${input.accountIdentity}:${options.config.priceId}`, "utf8")
-      .digest("hex")}`,
+    // A checkout is a fresh, server-issued attempt. Reusing an account/Price
+    // key forever can return a completed or expired Stripe Checkout Session.
+    idempotencyKey: `drops-checkout-${randomUUID()}`,
     mode: "subscription",
     lineItems: [{ price: options.config.priceId, quantity: 1 }],
     successUrl: `${origin}${returnPath}?billing=success&session_id={CHECKOUT_SESSION_ID}`,

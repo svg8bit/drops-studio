@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   billingTierForAccount,
   stripeProPriceId,
@@ -192,8 +192,13 @@ function validAccountSubject(value: string): boolean {
   return /^[a-z0-9][a-z0-9:_-]{5,199}$/i.test(value);
 }
 
-function accountIdentity(provider: StudioAccount["provider"], subject: string, secret: string): string {
-  return createHmac("sha256", secret).update(`account:${provider}:${subject}`).digest("hex");
+function accountIdentity(provider: StudioAccount["provider"], subject: string): string {
+  // Storage ownership must survive independent cookie-signing key rotation.
+  // The provider subject is authenticated by the signed cookie before this
+  // pseudonymous, provider-scoped storage key is accepted.
+  return createHash("sha256")
+    .update(`drops-studio-account:v1:${provider}:${subject}`, "utf8")
+    .digest("hex");
 }
 
 export function createStudioAccountCookie(
@@ -231,7 +236,7 @@ export function readStudioAccountCookie(value: string, secret: string, now = Dat
     return {
       provider: parsed.p,
       subject: parsed.s,
-      identity: accountIdentity(parsed.p, parsed.s, secret),
+      identity: accountIdentity(parsed.p, parsed.s),
       issuedAt,
     };
   } catch {

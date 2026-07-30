@@ -1,11 +1,16 @@
 import { assertPublishedArtifactSafe } from "./artifact-security.ts";
 import { unexpectedRuntimeActiveContent } from "./runtime-active-content.ts";
-import { getProductReality } from "./product-reality.ts";
+import {
+  getProductReality,
+  studioTelegramConnectionUrl,
+} from "./product-reality.ts";
 import type { GeneratedProjectSpec } from "./project-types.ts";
 
 export const SOURCE_WORKSPACE_HTML_LIMIT_BYTES = 1_500_000;
 const LOOPBACK_ORIGIN =
   /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?/gi;
+const PROJECT_SPEC_MARKER = '<script type="application/json" id="projectSpec">';
+const STUDIO_TELEGRAM_URL_ASSIGNMENT = /\bvar studioTelegramUrl=("(?:\\.|[^"\\])*");/g;
 
 export interface SourceWorkspaceValidation {
   valid: boolean;
@@ -14,6 +19,77 @@ export interface SourceWorkspaceValidation {
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+function safeJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+export class PublishedRuntimeBindingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PublishedRuntimeBindingError";
+  }
+}
+
+/**
+ * Binds a manually edited generated runtime to its server-issued public slug.
+ * The bridge continues to reject messages for every other slug; only the two
+ * compiler-owned values that address Studio services are changed.
+ */
+export function bindPublishedRuntimeHtml(
+  html: string,
+  publishedSpec: GeneratedProjectSpec,
+): string {
+  const markerAt = html.indexOf(PROJECT_SPEC_MARKER);
+  if (markerAt < 0 || markerAt !== html.lastIndexOf(PROJECT_SPEC_MARKER)) {
+    throw new PublishedRuntimeBindingError(
+      "Edited source must keep exactly one generated projectSpec payload.",
+    );
+  }
+  const payloadAt = markerAt + PROJECT_SPEC_MARKER.length;
+  const payloadEnd = html.indexOf("</script>", payloadAt);
+  if (payloadEnd < 0) {
+    throw new PublishedRuntimeBindingError(
+      "Edited source has an incomplete generated projectSpec payload.",
+    );
+  }
+
+  let embeddedSpec: Record<string, unknown>;
+  try {
+    const value = JSON.parse(html.slice(payloadAt, payloadEnd)) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    embeddedSpec = value as Record<string, unknown>;
+  } catch {
+    throw new PublishedRuntimeBindingError(
+      "Edited source has an unreadable generated projectSpec payload.",
+    );
+  }
+
+  const reboundPayload = safeJson({
+    ...embeddedSpec,
+    slug: publishedSpec.slug,
+    dataEndpoint: publishedSpec.dataEndpoint,
+  });
+  let rebound = `${html.slice(0, payloadAt)}${reboundPayload}${html.slice(payloadEnd)}`;
+  const telegramAssignments = [...rebound.matchAll(STUDIO_TELEGRAM_URL_ASSIGNMENT)];
+  if (telegramAssignments.length !== 1) {
+    throw new PublishedRuntimeBindingError(
+      "Edited source must keep the generated Telegram handoff binding.",
+    );
+  }
+  const telegramUrl = safeJson(studioTelegramConnectionUrl(
+    publishedSpec.dataEndpoint,
+    publishedSpec.slug,
+  ));
+  rebound = rebound.replace(
+    STUDIO_TELEGRAM_URL_ASSIGNMENT,
+    `var studioTelegramUrl=${telegramUrl};`,
+  );
+  return rebound;
 }
 
 /**

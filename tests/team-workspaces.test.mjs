@@ -473,6 +473,153 @@ test("an accepted invite replay repairs a missing member membership pointer", as
   assert.equal(visible[0].id, workspace.id);
 });
 
+test("accepted invite receipts do not consume the pending cap and stay replayable", async () => {
+  const {
+    acceptTeamWorkspaceInvite,
+    createTeamWorkspace,
+    createTeamWorkspaceInvite,
+    listTeamWorkspacesForMember,
+  } = modules();
+  const storage = fakeBlobStorage();
+  let uuid = 200;
+  const runtime = {
+    storage,
+    now: () => now,
+    id: () => `${String(++uuid).padStart(8, "0")}-0000-4000-8000-000000000000`,
+  };
+  const workspace = await createTeamWorkspace(
+    { ownerIdentity, name: "Receipt Desk", consent: true, maxWorkspaces: 10 },
+    runtime,
+  );
+  const acceptedInvite = await createTeamWorkspaceInvite({
+    actorIdentity: ownerIdentity,
+    ownerIdentity,
+    workspaceId: workspace.id,
+    expectedRevision: 1,
+    role: "editor",
+    expiresAt: "2026-07-31T12:00:00.000Z",
+    consent: true,
+    secret: inviteSecret,
+    maxCollaborators: 25,
+  }, runtime);
+  await acceptTeamWorkspaceInvite({
+    capability: acceptedInvite.capability,
+    memberIdentity: editorIdentity,
+    consent: true,
+    secret: inviteSecret,
+  }, runtime);
+
+  const ownerPath = `drops-studio/team-workspaces/${ownerIdentity}.json`;
+  const ownerEntry = storage.entries.get(ownerPath);
+  const ownerEnvelope = JSON.parse(ownerEntry.body);
+  const receipt = ownerEnvelope.workspaces[0].invites[0];
+  for (let index = 0; index < 99; index += 1) {
+    ownerEnvelope.workspaces[0].invites.push({
+      ...receipt,
+      id: `${String(1_000 + index).padStart(8, "0")}-0000-4000-8000-000000000000`,
+      capabilityHash: (index + 1).toString(16).padStart(64, "0"),
+    });
+  }
+  storage.entries.set(ownerPath, {
+    body: JSON.stringify(ownerEnvelope),
+    etag: `${ownerEntry.etag}-accepted-receipts`,
+  });
+
+  const memberPath = `drops-studio/team-workspaces/${editorIdentity}.json`;
+  const memberEntry = storage.entries.get(memberPath);
+  const memberEnvelope = JSON.parse(memberEntry.body);
+  memberEnvelope.memberships = [];
+  memberEnvelope.revision += 1;
+  storage.entries.set(memberPath, {
+    body: JSON.stringify(memberEnvelope),
+    etag: `${memberEntry.etag}-without-pointer`,
+  });
+
+  const nextInvite = await createTeamWorkspaceInvite({
+    actorIdentity: ownerIdentity,
+    ownerIdentity,
+    workspaceId: workspace.id,
+    expectedRevision: 3,
+    role: "viewer",
+    expiresAt: "2026-07-31T12:00:00.000Z",
+    consent: true,
+    secret: inviteSecret,
+    maxCollaborators: 25,
+  }, runtime);
+  assert.equal(nextInvite.status, "created");
+  assert.equal(nextInvite.workspace.invites.filter((invite) => invite.acceptedAt === null).length, 1);
+  assert.equal(nextInvite.workspace.invites.filter((invite) => invite.acceptedAt !== null).length, 100);
+
+  const replay = await acceptTeamWorkspaceInvite({
+    capability: acceptedInvite.capability,
+    memberIdentity: editorIdentity,
+    consent: true,
+    secret: inviteSecret,
+  }, runtime);
+  assert.equal(replay.status, "already-accepted");
+  assert.equal((await listTeamWorkspacesForMember(editorIdentity, runtime)).length, 1);
+});
+
+test("expired pending invites are pruned before enforcing the pending invite cap", async () => {
+  const {
+    createTeamWorkspace,
+    createTeamWorkspaceInvite,
+  } = modules();
+  const storage = fakeBlobStorage();
+  let uuid = 400;
+  const runtime = {
+    storage,
+    now: () => now,
+    id: () => `${String(++uuid).padStart(8, "0")}-0000-4000-8000-000000000000`,
+  };
+  const workspace = await createTeamWorkspace(
+    { ownerIdentity, name: "Expiry Desk", consent: true, maxWorkspaces: 10 },
+    runtime,
+  );
+  await createTeamWorkspaceInvite({
+    actorIdentity: ownerIdentity,
+    ownerIdentity,
+    workspaceId: workspace.id,
+    expectedRevision: 1,
+    role: "viewer",
+    expiresAt: "2026-07-31T12:00:00.000Z",
+    consent: true,
+    secret: inviteSecret,
+    maxCollaborators: 25,
+  }, runtime);
+
+  const ownerPath = `drops-studio/team-workspaces/${ownerIdentity}.json`;
+  const ownerEntry = storage.entries.get(ownerPath);
+  const ownerEnvelope = JSON.parse(ownerEntry.body);
+  const pending = ownerEnvelope.workspaces[0].invites[0];
+  ownerEnvelope.workspaces[0].invites = Array.from({ length: 100 }, (_, index) => ({
+    ...pending,
+    id: `${String(2_000 + index).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    expiresAt: "2026-07-29T12:00:00.000Z",
+    capabilityHash: (index + 1).toString(16).padStart(64, "0"),
+  }));
+  storage.entries.set(ownerPath, {
+    body: JSON.stringify(ownerEnvelope),
+    etag: `${ownerEntry.etag}-expired-pending`,
+  });
+
+  const nextInvite = await createTeamWorkspaceInvite({
+    actorIdentity: ownerIdentity,
+    ownerIdentity,
+    workspaceId: workspace.id,
+    expectedRevision: 2,
+    role: "editor",
+    expiresAt: "2026-07-31T12:00:00.000Z",
+    consent: true,
+    secret: inviteSecret,
+    maxCollaborators: 25,
+  }, runtime);
+  assert.equal(nextInvite.status, "created");
+  assert.equal(nextInvite.workspace.invites.length, 1);
+  assert.equal(nextInvite.workspace.invites[0].acceptedAt, null);
+  assert.ok(Date.parse(nextInvite.workspace.invites[0].expiresAt) > now.getTime());
+});
+
 test("member workspace listing deduplicates owner reads and uses bounded parallel batches", async () => {
   const {
     acceptTeamWorkspaceInvite,
@@ -1071,6 +1218,134 @@ test("team creation endpoint fails closed without billing and durable storage", 
     assert.equal(response.status, 503);
     assert.match(body.error, /not configured|unavailable/i);
     assert.doesNotMatch(JSON.stringify(body), /secret|token|STRIPE_/i);
+  });
+});
+
+test("invite acceptance rechecks the owner's current Pro entitlement before mutation", async () => {
+  assert.ok(teamsRouteModule, "teams route must exist");
+  assert.ok(inviteRouteModule, "team invite route must exist");
+  assert.ok(acceptInviteRouteModule, "team invite acceptance route must exist");
+  const {
+    readTeamWorkspace,
+    resetLocalTeamWorkspaceStateForTests,
+  } = modules();
+  const {
+    applyBillingWebhookEvent,
+    resetLocalBillingStateForTests,
+  } = await import("../db/billing.ts");
+  const {
+    createStudioAccountCookie,
+    readStudioAccountCookie,
+    STUDIO_ACCOUNT_COOKIE,
+  } = await import("../lib/access-tier.ts");
+  const ownerCookie = createStudioAccountCookie(
+    { provider: "openrouter", subject: "invite-entitlement-owner" },
+    accountSecret,
+  );
+  const memberCookie = createStudioAccountCookie(
+    { provider: "openrouter", subject: "invite-entitlement-member" },
+    accountSecret,
+  );
+  const owner = readStudioAccountCookie(ownerCookie, accountSecret);
+  assert.ok(owner);
+  resetLocalTeamWorkspaceStateForTests();
+  resetLocalBillingStateForTests();
+  globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ = new Map();
+
+  const headers = (cookie) => ({
+    "content-type": "application/json",
+    cookie: `${STUDIO_ACCOUNT_COOKIE}=${cookie}`,
+    origin: "https://drops-studio.vercel.app",
+  });
+
+  await withEnv({
+    DROPS_ACCOUNT_COOKIE_SECRET: accountSecret,
+    DROPS_STUDIO_LOCAL_PROJECT_STORE: "1",
+    VERCEL: undefined,
+    STRIPE_PRO_PRICE_ID: "price_pro_monthly",
+    DROPS_TEAM_INVITE_SECRET: inviteSecret,
+  }, async () => {
+    await applyBillingWebhookEvent({
+      id: "evt_invite_owner_active_123",
+      type: "customer.subscription.updated",
+      mutation: "subscription",
+      createdAt: "2026-07-30T12:00:00.000Z",
+      accountIdentity: owner.identity,
+      stripeCustomerId: "cus_invite_owner_123456",
+      stripeSubscriptionId: "sub_invite_owner_123456",
+      priceId: "price_pro_monthly",
+      status: "active",
+      currentPeriodEnd: "2026-08-30T12:00:00.000Z",
+      cancelAtPeriodEnd: false,
+    });
+
+    const createdResponse = await teamsRouteModule.POST(
+      new NextRequest("https://drops-studio.vercel.app/api/teams", {
+        method: "POST",
+        headers: headers(ownerCookie),
+        body: JSON.stringify({ name: "Entitlement Desk", consent: true }),
+      }),
+    );
+    const createdBody = await createdResponse.json();
+    assert.equal(createdResponse.status, 201);
+    const workspaceId = createdBody.workspace.id;
+
+    const inviteResponse = await inviteRouteModule.POST(
+      new NextRequest(
+        `https://drops-studio.vercel.app/api/teams/${workspaceId}/invites`,
+        {
+          method: "POST",
+          headers: headers(ownerCookie),
+          body: JSON.stringify({
+            ownerIdentity: owner.identity,
+            expectedRevision: 1,
+            role: "editor",
+            expiresInHours: 24,
+            consent: true,
+          }),
+        },
+      ),
+      { params: Promise.resolve({ workspaceId }) },
+    );
+    const inviteBody = await inviteResponse.json();
+    assert.equal(inviteResponse.status, 201);
+
+    await applyBillingWebhookEvent({
+      id: "evt_invite_owner_canceled_123",
+      type: "customer.subscription.deleted",
+      mutation: "subscription",
+      createdAt: "2026-07-30T12:01:00.000Z",
+      accountIdentity: owner.identity,
+      stripeCustomerId: "cus_invite_owner_123456",
+      stripeSubscriptionId: "sub_invite_owner_123456",
+      priceId: "price_pro_monthly",
+      status: "canceled",
+      currentPeriodEnd: "2026-07-30T12:01:00.000Z",
+      cancelAtPeriodEnd: false,
+    });
+
+    const acceptedResponse = await acceptInviteRouteModule.POST(
+      new NextRequest(
+        "https://drops-studio.vercel.app/api/teams/invites/accept",
+        {
+          method: "POST",
+          headers: headers(memberCookie),
+          body: JSON.stringify({ capability: inviteBody.capability, consent: true }),
+        },
+      ),
+    );
+    const acceptedBody = await acceptedResponse.json();
+    assert.equal(acceptedResponse.status, 403);
+    assert.equal(acceptedBody.code, "PRO_REQUIRED");
+
+    const durable = await readTeamWorkspace(
+      owner.identity,
+      workspaceId,
+      owner.identity,
+    );
+    assert.equal(durable.revision, 2);
+    assert.equal(durable.members.length, 1);
+    assert.equal(durable.invites[0].acceptedAt, null);
   });
 });
 
