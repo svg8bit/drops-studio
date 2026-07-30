@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
 import { POST as verifyTelegram } from "../app/api/telegram/verify/route.ts";
-import { PRODUCT_REALITY, truthfulnessViolations } from "../lib/product-reality.ts";
+import {
+  PRODUCT_REALITY,
+  STUDIO_TELEGRAM_CONNECTION_URL,
+  studioTelegramConnectionUrl,
+  truthfulnessViolations,
+} from "../lib/product-reality.ts";
 
 const presetIds = [
   "action-engine",
@@ -42,14 +47,46 @@ test("every contract-defined forbidden claim is rejected at runtime", () => {
   assert.ok(truthfulnessViolations("smart-money-copy", "<p>Position opened</p>").length > 0);
 });
 
+test("Telegram handoffs stay on the deployment that owns the generated project", () => {
+  const expectedPath =
+    "/?connections=1&provider=dropsbot&flow=telegram-channel&project=alpha-proof";
+
+  assert.equal(
+    studioTelegramConnectionUrl(
+      "https://drops-studio-preview.example/api/public-data",
+      "alpha-proof",
+    ),
+    `https://drops-studio-preview.example${expectedPath}`,
+  );
+  assert.equal(
+    studioTelegramConnectionUrl("/api/public-data", "alpha-proof"),
+    expectedPath,
+  );
+  assert.equal(
+    studioTelegramConnectionUrl(
+      "https://user:secret@drops-studio-preview.example/api/public-data",
+      "alpha-proof",
+    ),
+    expectedPath,
+  );
+  assert.equal(
+    STUDIO_TELEGRAM_CONNECTION_URL,
+    "https://drops-studio.vercel.app/?connections=1&provider=dropsbot&flow=telegram-channel",
+  );
+});
+
 test("generated products do not claim outcomes they cannot verify", async () => {
-  const [compiler, blueprint, presets, publicData, validator, builder] = await Promise.all([
+  const [compiler, blueprint, presets, publicData, validator, builder, previewCanvas, telegramWizard, channelRoute, telegramAccount] = await Promise.all([
     readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/product-blueprint.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/presets.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/public-data/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/project-validator.ts", import.meta.url), "utf8"),
     readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/preview-canvas.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/telegram-channel-wizard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/telegram/account/create-channel/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/telegram-account.ts", import.meta.url), "utf8"),
   ]);
 
   for (const source of [compiler, blueprint, presets]) {
@@ -61,14 +98,27 @@ test("generated products do not claim outcomes they cannot verify", async () => 
   assert.doesNotMatch(publicData, /marketCap: "\$2\.35T"|marketCap: "\$463B"|marketCap: "\$91\.7B"/);
   assert.match(compiler, /PREVIEW · NOT PUBLISHED/);
   assert.match(compiler, /LOCAL SCORE/);
-  assert.match(compiler, /LOCAL DRAFT/);
+  assert.match(compiler, /PRIVATE DRAFT/);
+  assert.match(compiler, /browser session, not verified people/i);
+  assert.match(compiler, /Unreviewed listing/);
   assert.match(compiler, /Research mode/);
-  assert.match(presets, /verify delivery to an existing channel/i);
-  assert.match(presets, /private launch research board/i);
+  assert.match(presets, /connect your Telegram account.{0,120}create the real channel/is);
+  assert.match(telegramWizard, /Create the channel — not a mockup/);
+  assert.match(telegramWizard, /Create real Telegram channel/);
+  assert.match(telegramWizard, /firstPostMessageId/);
+  assert.match(channelRoute, /createTelegramChannel/);
+  assert.match(telegramAccount, /firstPostMessageId: number/);
+  assert.match(telegramAccount, /firstPostReceipt/);
+  assert.match(telegramAccount, /Telegram message #\$\{firstPostMessageId\}/);
+  assert.match(presets, /public crypto launch community/i);
   assert.match(presets, /paper scenario/i);
   assert.match(compiler, /function available\(value\)/);
   assert.match(validator, /change: null/);
-  assert.match(builder, /probability: null/);
+  assert.match(builder, /useState<"sample" \| "live">\("sample"\)/);
+  assert.match(builder, /probability: 68/);
+  assert.match(previewCanvas, /dataMode === "live" \? "Live DropsTab data" : "Sample data"/);
+  assert.match(builder, /const sandboxChecks = new Set\(\[[\s\S]*?"data-adapter"/);
+  assert.doesNotMatch(builder, /const sandboxChecks = new Set\(\[[\s\S]*?"dropstab"/);
   assert.doesNotMatch(builder, /probability: 0/);
 });
 
@@ -132,6 +182,15 @@ test("Telegram delivery verifies permissions, sends, and rejects a non-admin", a
   assert.match(compiler, /Send verified test post/);
   assert.match(compiler, /session-only/i);
   assert.match(compiler, /telegramPending/);
+  assert.match(compiler, /studioTelegramConnectionUrl\(spec\.dataEndpoint, spec\.slug\)/);
+  assert.match(compiler, /setAttribute\("role","dialog"\)/);
+  assert.match(compiler, /setAttribute\("aria-modal","true"\)/);
+  assert.match(compiler, /integrationModalKeydown/);
+  assert.match(compiler, /event\.key==="Escape"/);
+  assert.match(compiler, /MutationObserver/);
+  assert.match(compiler, /closeIntegration\(\)/);
+  assert.match(compiler, /crypto\.randomUUID/);
+  assert.match(compiler, /sessionStore\.setItem\(key,next\)/);
   assert.match(route, /rightmostTrustedAddress/);
   assert.match(route, /ifMatch: current\.blob\.etag/);
   assert.match(route, /const signal = AbortSignal\.timeout\(8_000\)/);

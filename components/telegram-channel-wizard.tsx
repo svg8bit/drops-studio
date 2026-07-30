@@ -1,5 +1,6 @@
 "use client";
 
+import "@/app/styles/drops-studio.telegram.css";
 import {
   BadgeCheck,
   Bot,
@@ -31,6 +32,7 @@ type ChannelResult = {
   botUsername: string;
   botAdded: boolean;
   firstPostSent: boolean;
+  firstPostMessageId: number;
   dmSent: boolean;
   dmStartUrl: string;
   warnings: string[];
@@ -59,11 +61,13 @@ export function TelegramChannelWizard({
   defaultTitle = "My Alpha Channel",
   defaultAbout = "Crypto intelligence powered by DropsTab and Drops Bot.",
   defaultFirstPost = "Welcome. This channel is live and ready for sourced DropsTab market posts and Drops Bot alerts.",
+  projectContext,
   onConnected,
 }: {
   defaultTitle?: string;
   defaultAbout?: string;
   defaultFirstPost?: string;
+  projectContext?: string;
   onConnected?: (connected: boolean) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("loading");
@@ -179,9 +183,16 @@ export function TelegramChannelWizard({
         body: JSON.stringify({ accountToken, requestId, title, about, username, firstPost, ...(ownBot ? { botToken } : {}) }),
       });
       const payload = await response.json() as ChannelResult & { error?: string };
-      if (!response.ok || !payload.url) throw new Error(requestError(payload, "Telegram could not create the channel."));
+      if (!response.ok || !payload.url || !Number.isSafeInteger(payload.firstPostMessageId) || payload.firstPostMessageId <= 0) {
+        throw new Error(requestError(payload, "Telegram did not return verifiable evidence for the first channel post."));
+      }
       window.sessionStorage.setItem(ACCOUNT_STORAGE_KEY, payload.accountToken);
-      window.sessionStorage.setItem("drops-studio:telegram-last-channel", JSON.stringify({ title: payload.title, url: payload.url, botUsername: payload.botUsername }));
+      window.sessionStorage.setItem("drops-studio:telegram-last-channel", JSON.stringify({
+        title: payload.title,
+        url: payload.url,
+        botUsername: payload.botUsername,
+        firstPostMessageId: payload.firstPostMessageId,
+      }));
       setAccountToken(payload.accountToken);
       setCreationRequestId("");
       setResult(payload);
@@ -207,7 +218,11 @@ export function TelegramChannelWizard({
   }
 
   return (
-    <section className="telegram-wizard" aria-label="Create a real Telegram channel">
+    <section
+      className="telegram-wizard"
+      aria-label="Create a real Telegram channel"
+      data-project-context={projectContext}
+    >
       <div className="telegram-wizard-intro">
         <span><RadioTower /></span>
         <div>
@@ -276,7 +291,7 @@ export function TelegramChannelWizard({
       {phase === "created" && result && (
         <div className="telegram-success">
           <div className="telegram-success-hero"><span><BadgeCheck /></span><div><b>CHANNEL IS LIVE</b><h3>{result.title}</h3><p>{result.username || "Private channel with shareable invite"}</p></div></div>
-          <div className="telegram-success-checks"><span><Check /> Real channel created</span><span><Check /> {result.botUsername} is admin</span><span><Check /> First post published</span><span className={result.dmSent ? "" : "pending"}>{result.dmSent ? <Check /> : <CircleAlert />} {result.dmSent ? "Result sent in DM" : "Start bot to receive future DMs"}</span></div>
+          <div className="telegram-success-checks"><span><Check /> Real channel created</span><span><Check /> {result.botUsername} is admin</span><span><Check /> First post #{result.firstPostMessageId} confirmed by Telegram</span><span className={result.dmSent ? "" : "pending"}>{result.dmSent ? <Check /> : <CircleAlert />} {result.dmSent ? "Result sent in DM" : "Start bot to receive future DMs"}</span></div>
           {result.warnings?.map((warning) => <div className="telegram-success-warning" key={warning}><CircleAlert /><span>{warning}</span></div>)}
           <div className="telegram-success-actions"><a href={result.url} target="_blank" rel="noreferrer"><ExternalLink /> Open live channel</a>{!result.dmSent && <a className="secondary" href={result.dmStartUrl} target="_blank" rel="noreferrer"><Bot /> Start bot</a>}<button type="button" onClick={() => { setCreationRequestId(""); setResult(null); setPhase("connected"); }}>Create another</button></div>
         </div>

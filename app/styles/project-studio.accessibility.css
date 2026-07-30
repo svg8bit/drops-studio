@@ -1,0 +1,91 @@
+/* Final AA contrast layer for the dense Project Studio workspace. */
+.project-studio-shell {
+  --ps-blue: #245fe5;
+  --ps-muted: #52617a;
+  --ps-danger: #c83d4d;
+}
+
+.project-studio-shell :is(
+  button,
+  [role="button"],
+  [role="combobox"],
+  [role="option"],
+  [role="switch"],
+  [role="tab"]
+) {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.project-crumbs > b.draft {
+  color: #7a4a06;
+}
+
+:where(.inspector-heading > b, .project-crumbs > b.running, .project-statusbar b) {
+  color: #087449 !important;
+}
+
+:where(
+  .studio-rail > button,
+  .design-mode-control small,
+  .design-mode-control > i,
+  .section-label,
+  .design-kits small,
+  .assistant-panel > header small,
+  .assistant-guide > span small,
+  .quick-prompts button,
+  .chat-composer footer span,
+  .assistant-foot,
+  .stage-toolbar button,
+  .browser-bar > strong,
+  .project-statusbar > span,
+  .project-statusbar small,
+  .project-statusbar .operational
+) {
+  color: #52617a !important;
+}
+
+:where(.studio-rail > button.active) {
+  color: var(--ps-blue) !important;
+}
+
+:where(.art-upload small) {
+  color: #63507e !important;
+}
+
+:where(.browser-bar > b) {
+  color: #3f6257 !important;
+}
+
+/* Portalled publish UI cannot inherit workspace custom properties. */
+:where(
+  .publish-dialog > header p,
+  .publish-dialog small,
+  .pro-hosts > p,
+  .publish-dialog > footer span
+) {
+  color: #52617a !important;
+}
+
+.publish-dialog .host-title > b {
+  color: #087449 !important;
+}
+
+.publish-dialog .cloud-publish {
+  background: #245fe5 !important;
+  color: #ffffff !important;
+}
+
+.publish-dialog .cloud-card.published .cloud-publish {
+  background: #087449 !important;
+}
+
+.project-statusbar [data-sync-status="conflict"],
+.project-statusbar [data-sync-status="error"] {
+  color: var(--ps-danger) !important;
+}
+
+.project-statusbar [data-sync-status="conflict"] svg,
+.project-statusbar [data-sync-status="error"] svg {
+  color: var(--ps-danger) !important;
+}

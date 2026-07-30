@@ -1,5 +1,13 @@
-import { NextResponse } from "next/server";
-import { DROPSTAB_SHARED_CACHE_SECONDS, fetchDropsTabCoins, type DropsTabMarketCoin } from "@/lib/dropstab-client";
+import { NextResponse } from "next/server.js";
+import {
+  DROPSTAB_MAX_ATTEMPTS,
+  DROPSTAB_SHARED_CACHE_SECONDS,
+  fetchDropsTabIntelligence,
+  type DropsTabActivitySignal,
+  type DropsTabFundingSignal,
+  type DropsTabMarketCoin,
+  type DropsTabUnlockSignal,
+} from "../../../lib/dropstab-client.ts";
 
 // Next.js segment config must be statically analyzable at build time.
 export const revalidate = 900;
@@ -12,6 +20,16 @@ const assets = [
 
 type MarketResult = {
   coins: DropsTabMarketCoin[];
+  unlocks: DropsTabUnlockSignal[];
+  funding: DropsTabFundingSignal[];
+  activities: DropsTabActivitySignal[];
+  capabilities: {
+    coins: boolean;
+    unlocks: boolean;
+    funding: boolean;
+    activities: boolean;
+  };
+  warnings: string[];
   source: string;
   provider: "dropstab" | "fallback";
   fetchedAt: string;
@@ -65,11 +83,43 @@ async function fetchMarket(dropsTabKey?: string): Promise<MarketResult> {
   marketRequest = (async () => {
     const fetchedAt = new Date().toISOString();
     const value = dropsTabKey
-      ? await fetchDropsTabCoins(dropsTabKey, { mode: "platform", pageSize: 10 })
-        .then((coins) => ({ coins, source: "DropsTab Public API · shared 15-minute cache", provider: "dropstab" as const, fetchedAt }))
-        .catch(() => fetchPublicFallbackMarket().then((coins) => ({ coins, source: "Live public fallback · connect DropsTab for full context", provider: "fallback" as const, fetchedAt })))
+      ? await fetchDropsTabIntelligence(dropsTabKey, {
+          mode: "platform",
+          // One shared, de-duplicated 15-minute snapshot powers every project.
+          // Returning the complete supported universe lets Aggregator and
+          // custom watchlist products filter/rank real rows without polling or
+          // spending a request per generated app.
+          pageSize: 100,
+        })
+        .then((intelligence) => ({
+          ...intelligence,
+          source: "DropsTab Public API · coins, unlocks, funding and activities · shared 15-minute cache",
+          provider: "dropstab" as const,
+          fetchedAt,
+        }))
+        .catch(() => fetchPublicFallbackMarket().then((coins) => ({
+          coins,
+          unlocks: [],
+          funding: [],
+          activities: [],
+          capabilities: { coins: false, unlocks: false, funding: false, activities: false },
+          warnings: ["DropsTab platform data is unavailable; public price fallback is active."],
+          source: "Live public price fallback · connect DropsTab for unlocks, funding and activities",
+          provider: "fallback" as const,
+          fetchedAt,
+        })))
       : await fetchPublicFallbackMarket()
-        .then((coins) => ({ coins, source: "Live public fallback · connect DropsTab for full context", provider: "fallback" as const, fetchedAt }));
+        .then((coins) => ({
+          coins,
+          unlocks: [],
+          funding: [],
+          activities: [],
+          capabilities: { coins: false, unlocks: false, funding: false, activities: false },
+          warnings: ["Connect a DropsTab API key for source-native market intelligence."],
+          source: "Live public price fallback · connect DropsTab for unlocks, funding and activities",
+          provider: "fallback" as const,
+          fetchedAt,
+        }));
     marketCache = { expiresAt: Date.now() + DROPSTAB_SHARED_CACHE_SECONDS * 1_000, value };
     return value;
   })().finally(() => { marketRequest = null; });
@@ -117,13 +167,26 @@ export async function GET() {
 
     return cors({
       coins: marketResult.coins,
+      unlocks: marketResult.unlocks,
+      funding: marketResult.funding,
+      activities: marketResult.activities,
       events,
       source: marketResult.source,
+      provider: marketResult.provider,
+      capabilities: marketResult.capabilities,
       data: {
         provider: marketResult.provider,
+        capabilities: marketResult.capabilities,
+        warnings: marketResult.warnings,
+        mode: marketResult.provider === "dropstab" ? "platform" : "fallback",
+        credentialOwner: marketResult.provider === "dropstab" ? "platform" : "none",
         fetchedAt: marketResult.fetchedAt,
         sharedCacheSeconds: DROPSTAB_SHARED_CACHE_SECONDS,
-        budgetPolicy: "Targets one shared DropsTab market request per warm cache window; generated apps never poll the API.",
+        sharedCache: true,
+        automaticPolling: false,
+        requestTrigger: "initial load or explicit user refresh",
+        maxAttemptsPerRequest: DROPSTAB_MAX_ATTEMPTS,
+        budgetPolicy: "At most one cached batch per 15-minute window: one required coins request plus three independent enrichment requests. In-flight calls are de-duplicated; generated apps never poll the API.",
       },
     });
   } catch (error) {

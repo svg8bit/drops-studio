@@ -1,4 +1,4 @@
-import type { PresetId } from "@/lib/presets";
+import type { PresetId } from "./presets.ts";
 
 export interface ProductIntentRoute {
   presetId: PresetId;
@@ -8,7 +8,7 @@ export interface ProductIntentRoute {
 
 const presetIds = new Set<PresetId>([
   "action-engine", "alpha-channel", "morning-alpha", "prediction-impact", "smart-money-copy", "crypto-aggregator",
-  "crypto-game", "personal-companion", "portfolio-tamagotchi", "crypto-product-hunt", "crypto-radio", "crypto-siri",
+  "crypto-game", "personal-companion", "portfolio-tamagotchi", "crypto-product-hunt", "crypto-radio", "crypto-siri", "custom-product",
 ]);
 
 export function routeProductIntent(prompt: string): ProductIntentRoute {
@@ -48,10 +48,10 @@ export function routeProductIntent(prompt: string): ProductIntentRoute {
   match(/alert|алерт|уведомлен|trigger|триггер/i, "action-engine", 12, "alert capability");
 
   const ordered = [...scores.entries()].sort((a, b) => b[1].score - a[1].score);
-  const primary = ordered[0]?.[0] ?? "action-engine";
+  const primary = ordered[0]?.[0] ?? "custom-product";
   return {
     presetId: primary,
     secondary: ordered.slice(1).filter(([, value]) => value.score >= 24).map(([id]) => id),
-    evidence: ordered[0]?.[1].evidence ?? ["general crypto action request"],
+    evidence: ordered[0]?.[1].evidence ?? ["free-form crypto product request"],
   };
 }

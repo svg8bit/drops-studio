@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeProviderModelPayload } from "@/lib/provider-models";
 
 const providers = {
   openai: { url: "https://api.openai.com/v1/models", headers: (key: string) => ({ authorization: `Bearer ${key}` }) },
@@ -26,9 +27,14 @@ export async function POST(request: NextRequest) {
   try {
     const response = await fetch(url, { headers: { ...headers, accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return NextResponse.json({ error: response.status === 401 || response.status === 403 ? "The provider rejected this key." : `Provider returned ${response.status}.` }, { status: 400 });
-    const payload = await response.json().catch(() => ({})) as { data?: Array<{ id?: string }>; models?: Array<{ id?: string }> };
-    const models = (Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : []).map((model) => model?.id).filter(Boolean).slice(0, 20);
-    return NextResponse.json({ ok: true, provider, modelCount: models.length || undefined, models });
+    const payload = await response.json().catch(() => ({}));
+    const catalog = normalizeProviderModelPayload(payload);
+    return NextResponse.json({
+      ok: true,
+      provider,
+      modelCount: catalog.totalModelCount,
+      ...catalog,
+    }, { headers: { "cache-control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "The provider could not be reached within 10 seconds." }, { status: 502 });
   }

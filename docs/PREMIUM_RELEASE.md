@@ -53,8 +53,9 @@ Every generated project opens on its own `/studio/{project-id}` route with:
 - Vercel, Cloudflare, GitHub Pages, Netlify and self-hosted export choices;
 - visible runtime, data-adapter and model status.
 
-The visual source of truth is
-[`docs/design/project-studio-spec.png`](design/project-studio-spec.png).
+The visual and interaction source of truth is the root [`DESIGN.md`](../DESIGN.md).
+It preserves the current rebuilt Studio architecture and explicitly treats the
+older `project-studio-spec.png` as historical evidence, not a rollback target.
 
 ## Public runtime
 
@@ -69,8 +70,14 @@ Published products must:
 - keep their own interactive state;
 - use live public data where an unauthenticated source exists;
 - preserve a connected DropsTab snapshot and DropsTab research links;
+- record `providerEvidence=dropstab|fallback|unverified`, with only
+  `providerEvidence=dropstab` passing the live DropsTab evidence check;
 - continue Drops Bot setup/actions through official Telegram surfaces;
 - never expose API keys or claim an unexecuted trade was executed.
+
+An honestly labelled public-price fallback may keep a web-native product
+runnable. It does not satisfy live DropsTab evidence: the quality report keeps
+that check pending until a real DropsTab response is observed.
 
 ## Generation system
 
@@ -89,15 +96,18 @@ unsafe scripts.
 4. A connected model may improve naming, copy, theme and feature configuration
    through a strictly validated JSON response.
 5. The project compiler produces a standalone HTML/CSS/JS product.
-6. Static checks plus an executed sandbox smoke gate verify category fit,
-   interaction handlers, successful market-data handoff, a safe Drops Bot
-   action probe, state, responsive rules and secret safety.
+6. Browser-executed sandbox smoke verifies category fit, interaction handlers,
+   adapter handoff, provider evidence, a safe Drops Bot action probe, state,
+   responsive rules and secret safety. Server publishing independently parses
+   the freshly compiled artifact and fails closed on any critical category,
+   runtime, truthfulness, security or approval-boundary failure.
 7. The same compiler powers Studio preview, public hosting and source export.
 
 Supported brains:
 
-- Free Auto, three platform-funded AI plans per guest/day plus unlimited local
-  category-aware compilation;
+- Free Auto, three platform-funded GPT-5.6 Sol plans per guest/day with a
+  bounded free-model failover plus unlimited local category-aware compilation;
+- signed-in members receive a separate daily GPT-5.6 Sol planning allowance;
 - OpenRouter Free (`openrouter/free`) with the user's OpenRouter key;
 - OpenAI;
 - Anthropic;
@@ -192,6 +202,11 @@ state that they export and continue to the provider. The UI must never display
 - Server publishing recompiles from the validated specification.
 - Public projects contain no provider or DropsTab credentials.
 - Keys stay session-only and are not copied into projects or ZIP files.
+- The full prompt, nested project values, published specification and compiled
+  HTML are rejected if they contain BotFather, JWT, GitHub, AWS, model/API,
+  bearer or generic credential material; error responses never echo the value.
+- ZIP generation scans every entry before download and rejects the complete
+  archive if any generated text or binary-named file contains a secret.
 - Generated runtimes are sandboxed inside Project Studio.
 - Trading buttons are planning, paper mode or official-product handoffs unless
   a future signed execution connector is explicitly added.
@@ -205,7 +220,12 @@ The premium release is complete only when automated and browser checks prove:
 - every My Projects item reopens its Project Studio;
 - Crypto Game can complete and restart a round;
 - source ZIP contains a runnable `index.html` plus deployment files;
+- source ZIP runs from a nested deployment subpath with relative game assets;
 - free publishing returns a public URL and that URL works anonymously;
+- tampered category/runtime artifacts receive a fail-closed `422` and secret
+  fixtures receive a redacted `400` before persistence;
+- browser proof preserves `dropstab` and `fallback` evidence end to end, and a
+  fallback never passes the live DropsTab provider check;
 - the public page contains no editor chrome;
 - model-enhanced generation has a verified Free and paid path;
 - desktop and mobile have no clipped primary controls or horizontal overflow;

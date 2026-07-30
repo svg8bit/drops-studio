@@ -33,10 +33,26 @@ Drops Studio does not try to win by copying a general-purpose cloud IDE. It wins
 
 This release does not claim an undocumented Drops Bot write API, unrestricted arbitrary-code execution, a managed database for every generated app, or two-way GitHub sync. Those require real provider infrastructure. The product exposes truthful guided handoffs and exports owned, runnable source instead.
 
+## Release parity matrix
+
+| Capability | Replit / v0 / Lovable / Bolt reference | Drops Studio release contract |
+| --- | --- | --- |
+| Prompt to running product | Agent/chat builds an executable app | Free Director creates a category-native standalone runtime, not a screenshot |
+| Plan before mutation | Replit Plan Mode and reviewable tasks | Plan mode returns an editable product brief; Build is a separate explicit action |
+| Visual editing | v0 Design Mode and Lovable Visual Edits | Select a live block, change copy/style/visibility, review the proposal, then Apply |
+| Recovery | Replit checkpoints and Lovable version history | Every accepted change creates a local checkpoint with Undo and restore |
+| Source ownership | Code view plus Git/GitHub export | Editable project JSON, source view and runnable ZIP; two-way Git sync is not claimed |
+| Integrations | Managed databases, AI and deployment resources | DropsTab, Drops Bot, Telegram, Polymarket and BYOK AI connections with explicit provider evidence |
+| Public launch | Free or paid hosted URL | Anonymous `/p/{slug}` public app plus external-host export paths |
+| Quality feedback | Agent self-test and deployment logs | Release score, executed runtime smoke, Playwright/Axe/visual/Lighthouse CI and console gates |
+
+The vertical advantage is not a cosmetic crypto template. A Drops Studio build
+starts with market intelligence and action primitives that a general-purpose
+builder would otherwise have to discover, model and integrate from scratch.
+
 ## Evidence sources
 
-- Replit: Build with Agent, Replit Apps, Plan vs Build, checkpoints, first app and Agent 3 documentation.
-- Lovable: quickstart, Lovable Cloud and GitHub integration documentation.
-- Bolt: intro, quickstart, Code View, GitHub integration, model and release documentation.
-- v0: Design Mode, code editing and deployment documentation.
-- Base44: quickstart, integrations, developer platform and app code documentation.
+- Replit: [Build with Agent](https://docs.replit.com/learn/build-with-agent), [Plan vs Build](https://docs.replit.com/learn/plan-vs-build-mode), [Project Editor](https://docs.replit.com/learn/projects-and-artifacts/project-editor), [checkpoints](https://docs.replit.com/references/version-control/checkpoints-and-rollbacks), and [first publish](https://docs.replit.com/build/your-first-app).
+- v0: [product overview](https://v0.dev/docs/introduction), [full-stack apps and integrations](https://v0.dev/docs/full-stack-apps), and [production deployments](https://api2.v0.dev/docs/deployments).
+- Lovable: [project workflow](https://docs.lovable.dev/introduction/getting-started), [publishing](https://docs.lovable.dev/features/publish), and [GitHub sync](https://docs.lovable.dev/integrations/github).
+- Bolt: [builder, cloud and hosting overview](https://support.bolt.new/building/intro-bolt).

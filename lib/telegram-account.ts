@@ -41,6 +41,7 @@ export type TelegramChannelResult = {
   botUsername: string;
   botAdded: boolean;
   firstPostSent: boolean;
+  firstPostMessageId: number;
   dmSent: boolean;
   dmStartUrl: string;
   warnings: string[];
@@ -50,7 +51,8 @@ export type TelegramChannelResult = {
 type StoredTelegramChannelResult = Omit<TelegramChannelResult, "accountToken">;
 
 type TelegramChannelRequestRecord = {
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "released";
+  leaseId: string;
   createdAt: number;
   expiresAt: number;
   result?: StoredTelegramChannelResult;
@@ -59,55 +61,86 @@ type TelegramChannelRequestRecord = {
 type TelegramChannelRequestClaim = {
   pathname: string;
   persistent: boolean;
+  leaseId: string;
   existing?: StoredTelegramChannelResult;
 };
+
+type TelegramRequestStorage = Pick<typeof import("@vercel/blob"), "get" | "put">;
 
 function blobIsConfigured(): boolean {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN);
 }
 
-async function readTelegramChannelRequest(pathname: string): Promise<{ record: TelegramChannelRequestRecord; etag: string } | null> {
-  const { del, get } = await import("@vercel/blob");
+async function requestStorage(override?: TelegramRequestStorage): Promise<TelegramRequestStorage> {
+  return override ?? import("@vercel/blob");
+}
+
+async function readTelegramChannelRequest(
+  pathname: string,
+  storageOverride?: TelegramRequestStorage,
+): Promise<{ record: TelegramChannelRequestRecord; etag: string } | null> {
+  const { get } = await requestStorage(storageOverride);
   const current = await get(pathname, { access: "private", useCache: false });
   if (!current || current.statusCode !== 200) return null;
   let record: TelegramChannelRequestRecord;
   try {
     record = JSON.parse(await new Response(current.stream).text()) as TelegramChannelRequestRecord;
   } catch {
-    await del(pathname).catch(() => undefined);
     return null;
   }
-  if (!record || !["pending", "completed"].includes(record.status) || !Number.isFinite(record.createdAt) || !Number.isFinite(record.expiresAt)) return null;
-  if (record.expiresAt <= Date.now()) {
-    await del(pathname).catch(() => undefined);
-    return null;
-  }
+  if (!record || !["pending", "completed", "released"].includes(record.status) || !/^[a-f0-9-]{16,64}$/i.test(record.leaseId) || !Number.isFinite(record.createdAt) || !Number.isFinite(record.expiresAt)) return null;
   if (record.status === "completed") {
     const result = record.result;
-    if (!result || !result.id || !/^https:\/\/t\.me\//i.test(result.url) || !/^@[A-Za-z0-9_]{3,}$/.test(result.botUsername)) {
-      await del(pathname).catch(() => undefined);
+    if (!result || !result.id || !/^https:\/\/t\.me\//i.test(result.url) || !/^@[A-Za-z0-9_]{3,}$/.test(result.botUsername) || !Number.isSafeInteger(result.firstPostMessageId) || result.firstPostMessageId <= 0) {
       return null;
     }
   }
   return { record, etag: current.blob.etag };
 }
 
-async function claimTelegramChannelRequest(accountId: string, requestId: string): Promise<TelegramChannelRequestClaim> {
-  if (!blobIsConfigured()) {
+function completedTelegramChannelRequest(
+  record: TelegramChannelRequestRecord,
+  now: number,
+): StoredTelegramChannelResult | undefined {
+  return record.status === "completed" && record.expiresAt > now
+    ? record.result
+    : undefined;
+}
+
+function telegramChannelRequestIsActive(
+  record: TelegramChannelRequestRecord,
+  now: number,
+): boolean {
+  return record.status === "pending"
+    && record.expiresAt > now
+    && now - record.createdAt < 2 * 60 * 1_000;
+}
+
+export async function claimTelegramChannelRequest(
+  accountId: string,
+  requestId: string,
+  storageOverride?: TelegramRequestStorage,
+): Promise<TelegramChannelRequestClaim> {
+  if (!storageOverride && !blobIsConfigured()) {
     if (process.env.VERCEL || process.env.NODE_ENV === "production") throw new Error("Secure Telegram channel creation is temporarily unavailable.");
-    return { pathname: "", persistent: false };
+    return { pathname: "", persistent: false, leaseId: crypto.randomUUID() };
   }
-  const { put } = await import("@vercel/blob");
+  const { put } = await requestStorage(storageOverride);
   const key = createHash("sha256").update(`${accountId}:${requestId}`).digest("hex").slice(0, 40);
   const pathname = `drops-studio/telegram-channel-requests/${key}.json`;
-  const current = await readTelegramChannelRequest(pathname);
-  if (current?.record.status === "completed" && current.record.result) return { pathname, persistent: true, existing: current.record.result };
-  if (current?.record.status === "pending" && Date.now() - current.record.createdAt < 2 * 60 * 1_000) {
+  const current = await readTelegramChannelRequest(pathname, storageOverride);
+  const now = Date.now();
+  const completed = current ? completedTelegramChannelRequest(current.record, now) : undefined;
+  if (current && completed) {
+    return { pathname, persistent: true, leaseId: current.record.leaseId, existing: completed };
+  }
+  if (current && telegramChannelRequestIsActive(current.record, now)) {
     throw new Error("This channel creation is already in progress. Wait a moment before retrying.");
   }
+  const leaseId = crypto.randomUUID();
   try {
     const createdAt = Date.now();
-    await put(pathname, JSON.stringify({ status: "pending", createdAt, expiresAt: createdAt + ACCOUNT_TTL_MS } satisfies TelegramChannelRequestRecord), {
+    await put(pathname, JSON.stringify({ status: "pending", leaseId, createdAt, expiresAt: createdAt + ACCOUNT_TTL_MS } satisfies TelegramChannelRequestRecord), {
       access: "private",
       addRandomSuffix: false,
       allowOverwrite: Boolean(current),
@@ -116,17 +149,34 @@ async function claimTelegramChannelRequest(accountId: string, requestId: string)
       ...(current ? { ifMatch: current.etag } : {}),
     });
   } catch {
-    const raced = await readTelegramChannelRequest(pathname);
-    if (raced?.record.status === "completed" && raced.record.result) return { pathname, persistent: true, existing: raced.record.result };
-    if (raced?.record.status === "pending") throw new Error("This channel creation is already in progress. Wait a moment before retrying.");
+    let raced: { record: TelegramChannelRequestRecord; etag: string } | null;
+    try {
+      raced = await readTelegramChannelRequest(pathname, storageOverride);
+    } catch {
+      throw new Error("Secure Telegram channel creation is temporarily unavailable.");
+    }
+    const racedNow = Date.now();
+    const racedCompleted = raced ? completedTelegramChannelRequest(raced.record, racedNow) : undefined;
+    if (raced && racedCompleted) return { pathname, persistent: true, leaseId: raced.record.leaseId, existing: racedCompleted };
+    if (raced && telegramChannelRequestIsActive(raced.record, racedNow)) {
+      throw new Error("This channel creation is already in progress. Wait a moment before retrying.");
+    }
     throw new Error("Secure Telegram channel creation is temporarily unavailable.");
   }
-  return { pathname, persistent: true };
+  return { pathname, persistent: true, leaseId };
 }
 
-async function completeTelegramChannelRequest(claim: TelegramChannelRequestClaim, result: TelegramChannelResult): Promise<void> {
+export async function completeTelegramChannelRequest(
+  claim: TelegramChannelRequestClaim,
+  result: TelegramChannelResult,
+  storageOverride?: TelegramRequestStorage,
+): Promise<void> {
   if (!claim.persistent) return;
-  const { put } = await import("@vercel/blob");
+  const { put } = await requestStorage(storageOverride);
+  const current = await readTelegramChannelRequest(claim.pathname, storageOverride);
+  if (!current || current.record.leaseId !== claim.leaseId || !["pending", "completed"].includes(current.record.status)) {
+    throw new Error("This channel creation lease was superseded by a newer request.");
+  }
   const storedResult: StoredTelegramChannelResult = {
     id: result.id,
     title: result.title,
@@ -135,24 +185,44 @@ async function completeTelegramChannelRequest(claim: TelegramChannelRequestClaim
     botUsername: result.botUsername,
     botAdded: result.botAdded,
     firstPostSent: result.firstPostSent,
+    firstPostMessageId: result.firstPostMessageId,
     dmSent: result.dmSent,
     dmStartUrl: result.dmStartUrl,
     warnings: result.warnings,
   };
   const createdAt = Date.now();
-  await put(claim.pathname, JSON.stringify({ status: "completed", createdAt, expiresAt: createdAt + ACCOUNT_TTL_MS, result: storedResult } satisfies TelegramChannelRequestRecord), {
+  await put(claim.pathname, JSON.stringify({ status: "completed", leaseId: claim.leaseId, createdAt, expiresAt: createdAt + ACCOUNT_TTL_MS, result: storedResult } satisfies TelegramChannelRequestRecord), {
     access: "private",
     addRandomSuffix: false,
     allowOverwrite: true,
     cacheControlMaxAge: 60,
     contentType: "application/json; charset=utf-8",
+    ifMatch: current.etag,
   });
 }
 
-async function releaseTelegramChannelRequest(claim: TelegramChannelRequestClaim): Promise<void> {
-  if (!claim.persistent) return;
-  const { del } = await import("@vercel/blob");
-  await del(claim.pathname);
+export async function releaseTelegramChannelRequest(
+  claim: TelegramChannelRequestClaim,
+  storageOverride?: TelegramRequestStorage,
+): Promise<boolean> {
+  if (!claim.persistent) return true;
+  const { put } = await requestStorage(storageOverride);
+  const current = await readTelegramChannelRequest(claim.pathname, storageOverride);
+  if (!current || current.record.status !== "pending" || current.record.leaseId !== claim.leaseId) return false;
+  const createdAt = Date.now();
+  try {
+    await put(claim.pathname, JSON.stringify({ status: "released", leaseId: claim.leaseId, createdAt, expiresAt: createdAt + 2 * 60 * 1_000 } satisfies TelegramChannelRequestRecord), {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      cacheControlMaxAge: 60,
+      contentType: "application/json; charset=utf-8",
+      ifMatch: current.etag,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function telegramCredentials() {
@@ -380,16 +450,17 @@ export async function createTelegramChannel(input: {
   const botToken = input.botToken?.trim() || process.env.DROPS_STUDIO_TELEGRAM_BOT_TOKEN?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || process.env.COLDMATH_TELEGRAM_BOT_TOKEN?.trim() || "";
   if (!/^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(botToken)) throw new Error("Drops Studio bot is not configured on this deployment.");
 
-  const claim = await claimTelegramChannelRequest(account.userId, input.requestId);
-  if (claim.existing) {
-    const refreshedAccount: TelegramAccountToken = { ...account, createdAt: Date.now() };
-    return { ...claim.existing, accountToken: seal(refreshedAccount) };
-  }
-
+  let claim: TelegramChannelRequestClaim | null = null;
   let client: TelegramClient | null = null;
   let channel: Api.Channel | null = null;
   let channelId = "";
   try {
+    claim = await claimTelegramChannelRequest(account.userId, input.requestId);
+    if (claim.existing) {
+      const refreshedAccount: TelegramAccountToken = { ...account, createdAt: Date.now() };
+      return { ...claim.existing, accountToken: seal(refreshedAccount) };
+    }
+
     ({ client } = await clientFromSession(account.session));
     const me = await client.getMe();
     const currentAccount = accountName(me);
@@ -437,11 +508,15 @@ export async function createTelegramChannel(input: {
       rank: "Drops Studio",
     }));
 
-    await botCall(botToken, "sendMessage", {
+    const firstPostReceipt = await botCall<{ message_id?: number }>(botToken, "sendMessage", {
       chat_id: channelId,
       text: firstPost,
       disable_web_page_preview: false,
     });
+    const firstPostMessageId = Number(firstPostReceipt.message_id);
+    if (!Number.isSafeInteger(firstPostMessageId) || firstPostMessageId <= 0) {
+      throw new Error("Telegram published the first post but did not return a verifiable message ID.");
+    }
 
     let inviteUrl = publicUsername ? `https://t.me/${publicUsername}` : "";
     if (!inviteUrl) {
@@ -460,6 +535,7 @@ export async function createTelegramChannel(input: {
       botUsername: `@${bot.username}`,
       botAdded: true,
       firstPostSent: true,
+      firstPostMessageId,
       dmSent: false,
       dmStartUrl,
       warnings,
@@ -469,7 +545,7 @@ export async function createTelegramChannel(input: {
     try {
       await botCall(botToken, "sendMessage", {
         chat_id: account.userId,
-        text: `Your Drops Studio channel is live: ${inviteUrl}\n\nBot: @${bot.username}\nFirst post: published`,
+        text: `Your Drops Studio channel is live: ${inviteUrl}\n\nBot: @${bot.username}\nFirst post: published · Telegram message #${firstPostMessageId}`,
         disable_web_page_preview: false,
       });
       result.dmSent = true;
@@ -487,9 +563,9 @@ export async function createTelegramChannel(input: {
         cleanupFailed = true;
       }
     }
-    if (!cleanupFailed) await releaseTelegramChannelRequest(claim).catch(() => undefined);
+    if (!cleanupFailed && claim) await releaseTelegramChannelRequest(claim).catch(() => undefined);
     const rawMessage = error instanceof Error ? error.message : "";
-    const known = ["Give the channel", "public username", "first channel", "not configured", "account changed", "did not return", "no public username", "unavailable", "share link", "already in progress", "temporarily unavailable"];
+    const known = ["Give the channel", "public username", "first channel", "not configured", "account changed", "did not return", "no public username", "unavailable", "share link", "already in progress", "temporarily unavailable", "verifiable message ID"];
     const message = known.some((text) => rawMessage.includes(text)) ? rawMessage : telegramError(error);
     if (cleanupFailed) throw new Error(`${message} Telegram channel ${channelId || `"${title}"`} may still exist; open Telegram and remove it before retrying.`);
     throw new Error(message);

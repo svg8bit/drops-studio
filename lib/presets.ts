@@ -1,4 +1,4 @@
-export type PresetId =
+export type RecipePresetId =
   | "action-engine"
   | "alpha-channel"
   | "morning-alpha"
@@ -11,6 +11,13 @@ export type PresetId =
   | "crypto-product-hunt"
   | "crypto-radio"
   | "crypto-siri";
+
+/**
+ * `custom-product` is the blank-canvas compiler target. It deliberately does
+ * not live in the public recipe carousel: the twelve recipes remain curated
+ * shortcuts while free-form prompts compile into this bounded foundation.
+ */
+export type PresetId = RecipePresetId | "custom-product";
 
 export type PreviewKind =
   | "engine"
@@ -83,16 +90,16 @@ export const presets: Preset[] = [
     id: "alpha-channel",
     title: "Alpha Channel Money Machine",
     shortTitle: "Alpha Channel",
-    tagline: "Build and connect a sourced Telegram alpha feed",
+    tagline: "Create and launch a sourced Telegram alpha channel",
     description:
-      "Pick a niche, sources and voice, compose sourced posts, preview the exact Telegram layout and verify delivery to an existing channel.",
+      "Pick a niche, sources and voice, then connect your Telegram account so Drops Studio can create the real channel, add the bot and publish its first sourced post.",
     category: "Creator",
     badge: "REVENUE",
     icon: "Megaphone",
     accent: "#7c4dff",
     tint: "#f2edff",
-    cta: "Build my channel setup",
-    output: "Telegram publishing setup",
+    cta: "Build and create my channel",
+    output: "Real Telegram channel builder",
     eta: "5 min",
     preview: "channel",
     fields: [
@@ -101,8 +108,8 @@ export const presets: Preset[] = [
       { id: "voice", label: "VOICE", value: "Sharp & sourced", options: ["Sharp & sourced", "Degen but honest", "Institutional", "My custom prompt"] },
       { id: "earn", label: "GOAL", value: "Free growth", options: ["Free growth", "Caller-link plan", "Paid-channel plan", "Sponsor-slot plan"] },
     ],
-    tools: ["Drops Bot setup recipe", "DropsTab context", "Telegram post composer", "Verified bot delivery"],
-    actions: ["COMPOSE", "VERIFY CHANNEL", "SEND TEST", "SHARE PREVIEW"],
+    tools: ["Telegram account connection", "DropsTab context", "Drops Bot administration", "Verified first post"],
+    actions: ["COMPOSE", "CREATE CHANNEL", "PUBLISH FIRST POST", "OPEN TELEGRAM"],
   },
   {
     id: "morning-alpha",
@@ -117,17 +124,17 @@ export const presets: Preset[] = [
     accent: "#2f6df6",
     tint: "#edf4ff",
     cta: "Build my morning brief",
-    output: "Telegram brief",
+    output: "Telegram-ready brief",
     eta: "3 min",
     preview: "brief",
     fields: [
       { id: "assets", label: "TRACK", value: "BTC, ETH, SOL", options: ["BTC, ETH, SOL", "My portfolio", "Top 20", "Custom watchlist"] },
-      { id: "time", label: "DELIVER", value: "08:00 UTC", options: ["07:00 UTC", "08:00 UTC", "09:00 UTC", "After I wake up"] },
+      { id: "time", label: "PREFERRED TIME", value: "08:00 UTC", options: ["07:00 UTC", "08:00 UTC", "09:00 UTC", "After I wake up"] },
       { id: "sections", label: "INCLUDE", value: "Moves + unlocks + funding", options: ["Moves + unlocks + funding", "Only actionable", "Full market map", "My custom sections"] },
       { id: "brain", label: "BRAIN", value: "Free Auto", options: ["Free Auto", "My OpenAI", "My Claude", "OpenRouter"] },
     ],
     tools: ["DropsTab coins", "Unlock schedules", "Funding rounds", "Telegram delivery"],
-    actions: ["OPEN IN DROPSTAB", "SET ALERT", "ADD TO WATCHLIST"],
+    actions: ["OPEN IN DROPSTAB", "CONNECT DELIVERY", "ADD TO WATCHLIST"],
   },
   {
     id: "prediction-impact",
@@ -221,7 +228,7 @@ export const presets: Preset[] = [
     eta: "5 min",
     preview: "game",
     fields: [
-      { id: "game", label: "GAME", value: "Beat the Market", options: ["Beat the Market", "Guess the Coin", "Portfolio Battle", "Unlock Dodge"] },
+      { id: "game", label: "GAME", value: "Unlock Dodge", options: ["Beat the Market", "Guess the Coin", "Portfolio Battle", "Unlock Dodge"] },
       { id: "assets", label: "ASSETS", value: "Top 20", options: ["Top 20", "Memecoins", "Solana only", "My watchlist"] },
       { id: "round", label: "ROUND", value: "24 hours", options: ["5 minutes", "1 hour", "24 hours", "7 days"] },
       { id: "social", label: "SOCIAL", value: "Leaderboard + share", options: ["Leaderboard + share", "Private challenge", "Telegram group", "No leaderboard"] },
@@ -283,26 +290,26 @@ export const presets: Preset[] = [
     id: "crypto-product-hunt",
     title: "Build Your Crypto Product Hunt",
     shortTitle: "Crypto Product Hunt",
-    tagline: "Research and organize crypto launches",
+    tagline: "Launch and discover real crypto products",
     description:
-      "A private launch research board with local drafts, search and saves, ready for DropsTab context and an optional community backend.",
+      "A public crypto launch community with searchable submissions, session-deduplicated votes, honest moderation labels and DropsTab research context.",
     category: "Community",
     badge: "DISCOVER",
     icon: "Rocket",
     accent: "#f05a35",
     tint: "#fff1ec",
-    cta: "Build my launch board",
-    output: "Private launch board",
+    cta: "Build my launch community",
+    output: "Crypto launch community",
     eta: "5 min",
     preview: "hunt",
     fields: [
       { id: "scope", label: "SCOPE", value: "New crypto products", options: ["New crypto products", "Pre-TGE projects", "Telegram apps", "AI x crypto"] },
-      { id: "rank", label: "ORGANIZE", value: "Local saves", options: ["Local saves", "Funding after connection", "Market performance", "Manual priority"] },
+      { id: "rank", label: "ORGANIZE", value: "Top votes", options: ["Top votes", "Newest", "Market context", "Manual review"] },
       { id: "context", label: "CONTEXT", value: "Market links", options: ["Market links", "Funding after connection", "Token status", "Custom notes"] },
-      { id: "submit", label: "SUBMISSIONS", value: "Private drafts", options: ["Private drafts", "Team backend later", "Invite-only later", "Public backend later"] },
+      { id: "submit", label: "SUBMISSIONS", value: "Public community", options: ["Public community", "Drops Studio projects", "Invite-only later", "Private drafts"] },
     ],
-    tools: ["DropsTab research links", "Local submissions", "Local saves", "Optional auth + database"],
-    actions: ["SAVE LOCALLY", "OPEN RESEARCH", "ADD DRAFT", "SEARCH"],
+    tools: ["DropsTab research links", "Persistent submissions", "Session-deduplicated voting", "Moderation evidence"],
+    actions: ["SUBMIT PRODUCT", "UPVOTE", "OPEN PRODUCT", "RESEARCH ON DROPSTAB"],
   },
   {
     id: "crypto-radio",
@@ -355,5 +362,39 @@ export const presets: Preset[] = [
     actions: ["ASK", "LISTEN", "PREPARE ALERT", "OPEN DROPSTAB"],
   },
 ];
+
+export const customProductPreset: Preset = {
+  id: "custom-product",
+  title: "Build a Custom Crypto Product",
+  shortTitle: "Custom Crypto App",
+  tagline: "Compose a product from safe, editable crypto primitives",
+  description:
+    "A blank-canvas crypto app assembled from a bounded screen, module and component graph. It uses DropsTab-compatible data and explicit Drops Bot handoffs without accepting executable model-authored code.",
+  category: "Blank canvas",
+  badge: "CUSTOM",
+  icon: "Blocks",
+  accent: "#316cff",
+  tint: "#eaf1ff",
+  cta: "Build my custom app",
+  output: "Modular web application",
+  eta: "5 min",
+  preview: "engine",
+  fields: [
+    { id: "purpose", label: "PURPOSE", value: "Custom crypto workflow", options: ["Custom crypto workflow", "Research workspace", "Portfolio tool", "Community utility"] },
+    { id: "audience", label: "AUDIENCE", value: "Crypto operators", options: ["Crypto operators", "Researchers", "Creators", "My community"] },
+    { id: "primary-view", label: "PRIMARY VIEW", value: "Modular workspace", options: ["Modular workspace", "Market explorer", "Research feed", "Personal dashboard"] },
+    { id: "automation", label: "AUTOMATION", value: "Drops Bot handoff", options: ["Drops Bot handoff", "Alerts after approval", "Research only", "No automation"] },
+  ],
+  tools: ["DropsTab-compatible market data", "Safe component graph", "Local application state", "Drops Bot setup handoffs"],
+  actions: ["REFRESH DATA", "SAVE LOCALLY", "OPEN DROPSTAB", "CONFIGURE DROPS BOT"],
+};
+
+export const projectPresets: readonly Preset[] = [...presets, customProductPreset];
+
+export const projectPresetIds = projectPresets.map((preset) => preset.id) as [PresetId, ...PresetId[]];
+
+export function getProjectPreset(presetId: PresetId): Preset {
+  return projectPresets.find((preset) => preset.id === presetId) ?? customProductPreset;
+}
 
 export const defaultPresetId: PresetId = "morning-alpha";

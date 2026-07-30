@@ -31,9 +31,10 @@ test("server-renders the complete Drops Studio builder", async () => {
 });
 
 test("starter preview is removed and source contains the required product surfaces", async () => {
-  const [page, component, dropstabRoute, dropstabClient, agentRoute, compiler, packageJson, studio, telegramAccount, telegramWizard] = await Promise.all([
+  const [page, component, setup, dropstabRoute, dropstabClient, agentRoute, compiler, packageJson, studio, telegramAccount, telegramWizard] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/drops-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/drops-studio-setup.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dropstab/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/dropstab-client.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/agent/plan/route.ts", import.meta.url), "utf8"),
@@ -44,12 +45,16 @@ test("starter preview is removed and source contains the required product surfac
     readFile(new URL("../components/telegram-channel-wizard.tsx", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /<DropsStudio \/>/);
+  assert.match(page, /<DropsStudio hero=\{<LandingHero \/>\} \/>/);
   assert.match(component, /providerList/);
   assert.match(component, /Connections Hub/);
   assert.match(component, /\/api\/agent\/plan/);
   assert.match(component, /OpenRouter/);
-  assert.match(agentRoute, /poolside\/laguna-s-2\.1-free/);
+  assert.match(agentRoute, /openai\/gpt-5\.6-sol/);
+  assert.match(agentRoute, /google\/gemini-3\.6-flash/);
+  assert.match(agentRoute, /inclusionai\/ling-3\.0-flash-free/);
+  assert.doesNotMatch(agentRoute, /poolside\/laguna-s-2\.1-free/);
+  assert.doesNotMatch(agentRoute, /zai\/glm-4\.6v-flash/);
   assert.match(agentRoute, /GUEST_DAILY_LIMIT/);
   assert.match(compiler, /renderAlphaNative/);
   assert.match(compiler, /renderGameNative/);
@@ -66,8 +71,16 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(compiler, /originalText/);
   assert.match(compiler, /editableOwnerKey/);
   assert.match(component, /sessionStorage/);
-  assert.match(component, /Start from a blank canvas/);
-  assert.match(component, /PROJECTS_STORAGE_KEY/);
+  assert.match(component, /DropsStudioSetup/);
+  assert.match(setup, /Start from a blank canvas/);
+  assert.match(component, /readProjectsFromStore/);
+  assert.match(component, /saveProjectSafely/);
+  assert.match(component, /marker === "account-connected"/);
+  assert.doesNotMatch(component, /telegram-setup-started/);
+  assert.equal(
+    component.match(/Array\.isArray\(payload\.coins\)/g)?.length,
+    2,
+  );
   assert.match(component, /router\.push\(`\/studio\//);
   assert.match(studio, /Publish free now/);
   assert.match(studio, /Download runnable app \+ source/);
@@ -81,8 +94,8 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(telegramAccount, /expiresAt: createdAt \+ ACCOUNT_TTL_MS/);
   assert.match(telegramAccount, /accountToken: seal\(refreshedAccount\)/);
   assert.match(telegramWizard, /creationRequestId/);
-  assert.match(dropstabRoute, /fetchDropsTabCoins\(key/);
-  assert.match(dropstabClient, /"x-dropstab-api-key": key/);
+  assert.match(dropstabRoute, /fetchDropsTabIntelligence\(key/);
+  assert.match(dropstabClient, /"x-dropstab-api-key": (?:key|apiKey)/);
   assert.match(packageJson, /"name": "drops-studio"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));

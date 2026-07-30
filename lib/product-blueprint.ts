@@ -1,7 +1,7 @@
-import { presets, type PresetId } from "@/lib/presets";
-import type { GeneratedProjectSpec, ProjectBlueprint, ProjectElementConfig, ProjectGameDirection } from "@/lib/project-types";
-import { routeProductIntent } from "@/lib/product-intent";
-export { routeProductIntent, type ProductIntentRoute } from "@/lib/product-intent";
+import { getProjectPreset, type PresetId } from "./presets.ts";
+import type { GeneratedProjectSpec, ProjectBlueprint, ProjectCustomComponent, ProjectCustomGraph, ProjectElementConfig, ProjectGameDirection } from "./project-types.ts";
+import { routeProductIntent } from "./product-intent.ts";
+export { routeProductIntent, type ProductIntentRoute } from "./product-intent.ts";
 
 export interface AgentProductPlan {
   presetId: PresetId;
@@ -13,6 +13,7 @@ export interface AgentProductPlan {
   theme?: Partial<GeneratedProjectSpec["theme"]>;
   design?: Partial<GeneratedProjectSpec["design"]>;
   experience?: Partial<GeneratedProjectSpec["experience"]>;
+  customGraph?: ProjectCustomGraph;
   gameDirection?: Partial<ProjectGameDirection>;
   elementEdit?: { elementId: string; config: ProjectElementConfig };
   model?: string;
@@ -38,6 +39,7 @@ const experienceSeeds: Record<PresetId, ExperienceSeed> = {
   "crypto-product-hunt": { archetype: "launch-board", layout: "feed", dataView: "cards", engagement: "social", audience: "Crypto builders and early adopters", assetSource: "free-vector" },
   "crypto-radio": { archetype: "audio-studio", layout: "split", dataView: "timeline", engagement: "scheduled", audience: "Listeners who prefer audio intelligence", assetSource: "free-vector" },
   "crypto-siri": { archetype: "voice-assistant", layout: "focus", dataView: "cards", engagement: "personal", audience: "Voice-first crypto users", assetSource: "free-vector" },
+  "custom-product": { archetype: "modular-crypto-app", layout: "dashboard", dataView: "mixed", engagement: "personal", audience: "Crypto product operators", assetSource: "free-vector" },
 };
 
 function createDefaultExperience(presetId: PresetId, blueprint: ProjectBlueprint): GeneratedProjectSpec["experience"] {
@@ -72,16 +74,16 @@ const seeds: Record<PresetId, BlueprintSeed> = {
     content: { headline: "Turn intelligence into a decision", subheadline: "Know why, catch when, choose what happens next.", primaryAction: "Build decision", emptyState: "Describe a market thesis to create the first decision graph." },
   },
   "alpha-channel": {
-    productType: "Telegram channel setup and publishing tool",
-    visualConcept: "A sourced signal inbox, post composer, clearly labelled Telegram preview and a verified delivery setup for an existing channel.",
-    primaryLoop: "Connect an existing channel → discover a sourced signal → enrich it with DropsTab context → approve → send a verified test post.",
-    modules: ["Signal inbox", "Post composer", "Telegram preview", "Drops Bot recipe", "Growth and monetization"],
-    screens: ["Signal inbox", "Composer", "Telegram channel", "Automation setup"],
-    interactions: ["Filter signals", "Generate sourced post", "Edit voice", "Copy Drops Bot recipe", "Preview Telegram delivery"],
+    productType: "Telegram channel creator and publishing tool",
+    visualConcept: "A sourced signal inbox, native Telegram composer and an explicit account connection flow that creates a real channel, adds the bot and verifies the first post.",
+    primaryLoop: "Connect a Telegram user account → create or select a real channel → discover a sourced signal → enrich it with DropsTab context → approve and publish through the bot.",
+    modules: ["Signal inbox", "Post composer", "Native Telegram preview", "Channel creator", "Drops Bot automation", "Growth and monetization"],
+    screens: ["Signal inbox", "Composer", "Telegram preview", "Account connection", "Live channel result"],
+    interactions: ["Filter signals", "Generate sourced post", "Edit voice", "Connect Telegram account", "Create channel", "Add bot", "Publish first post", "Open live channel"],
     dropsTabUse: ["Token pages", "Price and market-cap context", "Unlocks", "Funding and activities"],
     dropsBotUse: ["Wallet and coin alerts", "Channel delivery", "Caller links", "Telegram profiles"],
-    acceptanceChecks: ["Preview visibly looks like Telegram and is marked preview", "Every post contains a DropsTab source handoff", "A bot and channel must be verified before a test post is reported as sent"],
-    content: { headline: "Build your sourced alpha channel", subheadline: "Compose with DropsTab, then connect a real Telegram destination.", primaryAction: "Generate first post", emptyState: "Choose a niche and connect an existing Telegram channel." },
+    acceptanceChecks: ["Preview visibly looks like Telegram and is marked preview until creation succeeds", "Every post contains a DropsTab source handoff", "Only a connected Telegram user account creates the channel", "The UI reports success only after Telegram returns the channel and the bot publishes the first post"],
+    content: { headline: "Create your sourced alpha channel", subheadline: "Compose with DropsTab, then launch a real Telegram channel with Drops Bot.", primaryAction: "Create live channel", emptyState: "Choose a niche, then connect your Telegram account to create the channel." },
   },
   "morning-alpha": {
     productType: "personal daily Telegram brief",
@@ -176,16 +178,16 @@ const seeds: Record<PresetId, BlueprintSeed> = {
     content: { headline: "Keep your portfolio creature alive", subheadline: "Risk and diversification become a daily care loop.", primaryAction: "Check health", emptyState: "Enter holdings to hatch your portfolio creature." },
   },
   "crypto-product-hunt": {
-    productType: "private crypto launch tracker",
-    visualConcept: "A polished local launch research board with drafts, local votes, submissions and DropsTab context.",
-    primaryLoop: "Add a research draft → search local entries → save priorities → open DropsTab context → export or connect a backend.",
-    modules: ["Private launch board", "Local search", "Research draft", "Local saves", "Backend readiness"],
-    screens: ["Launch board", "Research draft", "Local detail", "Backend setup"],
-    interactions: ["Search", "Add draft", "Save locally", "Open research", "Review backend requirements"],
-    dropsTabUse: ["Project research links", "Optional funding endpoint", "Optional investor endpoint", "Token and market status"],
-    dropsBotUse: ["Optional launch-follow alert recipe", "Optional Telegram delivery"],
-    acceptanceChecks: ["Votes and submissions are clearly labelled local", "Project cards only expose available research context", "Public community mode requires a backend"],
-    content: { headline: "Research and organize crypto launches", subheadline: "A private launch board enriched with available market intelligence.", primaryAction: "Open launch board", emptyState: "No saved launches yet. Add your first research draft." },
+    productType: "public crypto launch community",
+    visualConcept: "A polished launch discovery community with persistent submissions, transparent browser-session votes and DropsTab research context.",
+    primaryLoop: "Discover a launch → inspect its available context → vote or follow → submit a project → return to ranked feeds.",
+    modules: ["Top launches", "Newest launches", "Project submission", "Browser-session voting", "DropsTab context"],
+    screens: ["Launch feed", "Project detail", "Submit project", "Storage setup"],
+    interactions: ["Search and filter", "Sort top or new", "Submit project", "Vote once per browser session", "Open research"],
+    dropsTabUse: ["Project research links", "Available funding context", "Available investor context", "Token and market status"],
+    dropsBotUse: ["Launch-follow alert recipe", "Telegram delivery handoff"],
+    acceptanceChecks: ["Submissions persist only when the documented cloud backend is configured", "Vote receipts are labelled browser-session votes, not verified people", "Unreviewed listings and unavailable research fields are explicit"],
+    content: { headline: "Discover and launch crypto products", subheadline: "A public community feed enriched with available DropsTab intelligence.", primaryAction: "Explore launches", emptyState: "No public launches yet. Submit the first project after storage is connected." },
   },
   "crypto-radio": {
     productType: "browser crypto audio briefing",
@@ -211,6 +213,18 @@ const seeds: Record<PresetId, BlueprintSeed> = {
     acceptanceChecks: ["Text input always works when voice is unavailable", "Rule-based versus AI answers are labelled", "Alert setup requires confirmation in Drops Bot"],
     content: { headline: "Ask crypto. Get a sourced answer.", subheadline: "A personal voice companion built on DropsTab and Drops Bot.", primaryAction: "Ask Drops", emptyState: "Ask what moved, what unlocks next or what deserves an alert." },
   },
+  "custom-product": {
+    productType: "modular crypto web application",
+    visualConcept: "A focused standalone product composed from safe local UI primitives, live DropsTab-compatible market context and explicit Drops Bot setup handoffs.",
+    primaryLoop: "Open the workspace → inspect sourced market context → use the product-specific tool → save local progress → configure an optional Drops Bot alert.",
+    modules: ["Market overview", "Product workspace", "Research context", "Saved state", "Alert setup"],
+    screens: ["Overview", "Workspace", "Automation"],
+    interactions: ["Navigate screens", "Refresh market data", "Filter and compare assets", "Save local work", "Open DropsTab research", "Configure Drops Bot"],
+    dropsTabUse: ["Market prices and performance", "Asset research handoffs", "Optional unlock, funding and activity context"],
+    dropsBotUse: ["Explicit alert recipe setup", "Telegram delivery handoff"],
+    acceptanceChecks: ["Every screen is assembled from validated components", "Stateful interactions persist locally", "No model-authored executable code is accepted", "External actions require an explicit handoff"],
+    content: { headline: "Your custom crypto product", subheadline: "A real modular app built around your workflow, DropsTab context and Drops Bot automation.", primaryAction: "Open workspace", emptyState: "Describe the workflow, audience and outcome you want to create." },
+  },
 };
 
 function detectLocale(prompt: string): ProjectBlueprint["locale"] {
@@ -219,6 +233,76 @@ function detectLocale(prompt: string): ProjectBlueprint["locale"] {
 
 function isRetroWolfPrompt(prompt: string): boolean {
   return /(?:волк|wolf)/i.test(prompt) && /(?:ссср|soviet|retro|совет|ну\s*,?\s*погоди)/i.test(prompt);
+}
+
+function customProductLabel(prompt: string): string {
+  const cleaned = prompt
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (cleaned || "Custom crypto workflow").slice(0, 100);
+}
+
+function customComponent(
+  id: string,
+  title: string,
+  description: string,
+  kind: ProjectCustomComponent["kind"],
+  dataSource: ProjectCustomComponent["dataSource"],
+  actions: ProjectCustomComponent["actions"],
+  span: ProjectCustomComponent["span"] = "half",
+): ProjectCustomComponent {
+  return { id, title, description, kind, dataSource, actions, span };
+}
+
+/**
+ * Deterministic blank-canvas foundation used when no curated recipe matches.
+ * It is intentionally an IR, not generated source code: every node maps to a
+ * compiler-owned component with a finite data and action vocabulary.
+ */
+export function createDefaultCustomGraph(prompt = ""): ProjectCustomGraph {
+  const text = prompt.toLowerCase();
+  const components: ProjectCustomComponent[] = [
+    customComponent("market-pulse", "Market pulse", "Current prices and movement from the configured market adapter.", "metric-strip", "market", ["refresh", "open-dropstab"], "full"),
+    customComponent("market-workspace", "Market workspace", "Searchable assets with local watch and comparison actions.", "market-table", "market", ["filter", "sort", "favorite", "compare", "open-dropstab"], "full"),
+    customComponent("saved-watchlist", "Saved watchlist", "A local list that persists in this browser.", "watchlist", "local", ["favorite", "open-dropstab"], "half"),
+    customComponent("research-stream", "Research stream", "Available unlock, funding and activity context; unavailable sources remain labelled.", "research-feed", /unlock|анлок|vesting|вестинг/i.test(text) ? "unlocks" : /fund|раунд|invest/i.test(text) ? "funding" : "activities", ["refresh", "open-dropstab"], "half"),
+    customComponent("alert-workflow", "Alert workflow", "Prepare a reviewable coin or event alert and continue in Drops Bot.", "alert-builder", "market", ["configure-dropsbot"], "half"),
+    customComponent("workspace-notes", "Workspace notes", "Keep product-specific notes locally without sending them to a provider.", "notes", "local", ["save-local"], "half"),
+  ];
+
+  if (/portfolio|treasury|казнач|портфел|runway|allocation/i.test(text)) {
+    components.splice(2, 0, customComponent("portfolio-model", "Portfolio model", "Edit asset weights and inspect a transparent local allocation summary.", "portfolio", "market", ["save-local", "open-dropstab"], "full"));
+  }
+  if (/compare|comparison|сравн/i.test(text)) {
+    components.splice(2, 0, customComponent("asset-comparison", "Asset comparison", "Compare selected assets against the same sourced market snapshot.", "comparison", "market", ["compare", "open-dropstab"], "full"));
+  }
+  if (/unlock|анлок|vesting|вестинг|event|событ/i.test(text)) {
+    components.splice(3, 0, customComponent("event-timeline", "Event timeline", "Review available events without inventing dates or values.", "event-timeline", "unlocks", ["refresh", "configure-dropsbot"], "full"));
+  }
+
+  const componentIds = components.map((component) => component.id);
+  const overviewIds = componentIds.filter((id) => ["market-pulse", "market-workspace", "portfolio-model", "asset-comparison"].includes(id));
+  const researchIds = componentIds.filter((id) => ["saved-watchlist", "research-stream", "event-timeline", "workspace-notes"].includes(id));
+  const automationIds = componentIds.filter((id) => ["alert-workflow", "workspace-notes", "saved-watchlist"].includes(id));
+
+  return {
+    version: 1,
+    appKind: customProductLabel(prompt),
+    initialScreenId: "overview",
+    screens: [
+      { id: "overview", title: "Overview", route: "/", layout: "grid", componentIds: overviewIds.length ? overviewIds : ["market-pulse", "market-workspace"] },
+      { id: "research", title: "Research", route: "/research", layout: "feed", componentIds: researchIds.length ? researchIds : ["research-stream", "workspace-notes"] },
+      { id: "automation", title: "Automation", route: "/automation", layout: "split", componentIds: automationIds.length ? automationIds : ["alert-workflow", "workspace-notes"] },
+    ],
+    modules: [
+      { id: "market-intelligence", title: "Market intelligence", description: "DropsTab-compatible market and research context.", componentIds: componentIds.filter((id) => ["market-pulse", "market-workspace", "asset-comparison", "event-timeline", "research-stream"].includes(id)) },
+      { id: "personal-workspace", title: "Personal workspace", description: "Browser-local inputs and saved state.", componentIds: componentIds.filter((id) => ["portfolio-model", "saved-watchlist", "workspace-notes"].includes(id)) },
+      { id: "action-handoff", title: "Action handoff", description: "Consent-based Drops Bot automation setup.", componentIds: ["alert-workflow"] },
+    ],
+    components: components.slice(0, 18),
+  };
 }
 
 export function createDefaultBlueprint(presetId: PresetId, prompt = ""): ProjectBlueprint {
@@ -285,6 +369,9 @@ export function applyAgentPlan(spec: GeneratedProjectSpec, plan: AgentProductPla
       primaryLoop: plan.experience?.primaryLoop || plan.blueprint.primaryLoop,
       modules: plan.experience?.modules?.length ? plan.experience.modules : plan.blueprint.modules,
     },
+    ...(plan.presetId === "custom-product" ? {
+      customGraph: plan.customGraph ?? spec.customGraph ?? createDefaultCustomGraph(spec.prompt),
+    } : {}),
     ...(plan.elementEdit ? {
       elements: {
         ...(spec.elements ?? {}),
@@ -353,7 +440,7 @@ function requestedSeconds(instruction: string): number | null {
 }
 
 export function fallbackAgentPlan(prompt: string, presetId = presetFromPrompt(prompt)): AgentProductPlan {
-  const preset = presets.find((item) => item.id === presetId) ?? presets[0];
+  const preset = getProjectPreset(presetId);
   const instruction = revisionInstruction(prompt);
   const currentProduct = revisionJson<{ name?: string; tagline?: string; description?: string; tools?: string[] }>(prompt, "Current product", "Current blueprint");
   const currentBlueprint = revisionJson<ProjectBlueprint>(prompt, "Current blueprint", "Current design");
@@ -423,6 +510,7 @@ export function fallbackAgentPlan(prompt: string, presetId = presetFromPrompt(pr
     ...(Object.keys(theme).length ? { theme } : {}),
     ...(Object.keys(design).length ? { design } : {}),
     experience: createDefaultExperience(preset.id, blueprint),
+    ...(preset.id === "custom-product" ? { customGraph: createDefaultCustomGraph(prompt) } : {}),
     ...(preset.id === "crypto-game" ? {
       gameDirection: { genre: "catcher", artStyle: gameArtStyle, world: retroWolf ? "retro-factory" : "cyber-arcade", mascot: retroWolf ? "retro-wolf" : "coin-crew", roundSeconds: seconds ?? 45, difficulty: "normal", sound: true, assetSource: "ai-generated", gameLoop: blueprint.primaryLoop, ...blueprint.game },
     } : {}),

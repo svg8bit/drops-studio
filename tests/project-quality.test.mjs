@@ -25,6 +25,8 @@ test("publish readiness requires a successful executed runtime smoke", () => {
   assert.ok(pending.criticalFailures.includes("runtime"));
 
   const smoke = {
+    mode: "browser",
+    dataProvider: "dropstab",
     executed: true,
     runtime: true,
     interactions: true,
@@ -42,6 +44,8 @@ test("publish readiness requires a successful executed runtime smoke", () => {
 
 test("a runtime error blocks publishing even when static markers pass", () => {
   const failed = evaluateProjectQuality(spec, html, {
+    mode: "browser",
+    dataProvider: "dropstab",
     executed: true,
     runtime: true,
     interactions: true,

@@ -11,10 +11,10 @@ export async function GET(_request: Request, context: { params: Promise<{ slug: 
     return new Response(project.html, {
       headers: {
         "content-type": "text/html; charset=utf-8",
-        "cache-control": "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
+        "cache-control": "no-store, max-age=0",
         "x-content-type-options": "nosniff",
         "referrer-policy": "strict-origin-when-cross-origin",
-        "content-security-policy": "default-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; frame-ancestors *; base-uri 'none'; form-action 'self' https://t.me https://dropstab.com https://polymarket.com",
+        "content-security-policy": "default-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; frame-ancestors 'self'; base-uri 'none'; form-action 'self' https://t.me https://dropstab.com https://polymarket.com",
       },
     });
   } catch {

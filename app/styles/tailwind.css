@@ -1,0 +1,7 @@
+@layer theme, base, components, utilities;
+
+/* Runtime islands use Tailwind utilities, but the preflight reset belongs to
+   the always-loaded product stylesheet so opening a lazy panel cannot restyle
+   the already-painted page. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);

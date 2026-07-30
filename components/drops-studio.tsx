@@ -1,37 +1,25 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
-import * as Select from "@radix-ui/react-select";
-import * as Switch from "@radix-ui/react-switch";
-import { AnimatePresence, motion } from "framer-motion";
-import Image from "next/image";
+import dynamic from "next/dynamic";
+import { DropsBrand } from "@/components/drops-brand";
 import {
   ArrowLeft,
   ArrowRight,
   AudioLines,
-  BadgeCheck,
-  Bot,
-  BrainCircuit,
   ChartNoAxesCombined,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleHelp,
-  Cloud,
-  Code2,
   Database,
   ExternalLink,
   Gamepad2,
   HeartPulse,
   KeyRound,
   LoaderCircle,
-  LockKeyhole,
   Megaphone,
   Menu,
-  Plus,
   Radio,
   Rocket,
-  Save,
   Send,
   Sparkles,
   Sun,
@@ -42,20 +30,93 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
-import { PreviewCanvas, type MarketCoin, type PredictionEvent } from "@/components/preview-canvas";
-import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
-import { compileProject } from "@/lib/project-compiler";
-import { createProjectSpec } from "@/lib/project-factory";
-import { evaluateProjectQuality } from "@/lib/project-quality";
-import { applyAgentPlan, fallbackAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
-import type { GeneratedProject, GeneratedProjectSpec, ProjectProvider } from "@/lib/project-types";
-import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
-import { validateProjectSpec } from "@/lib/project-validator";
-import { defaultPresetId, presets, type PresetId } from "@/lib/presets";
+import type {
+  MarketCoin,
+  PredictionEvent,
+} from "@/components/preview-canvas";
+import type { AgentProductPlan } from "@/lib/product-blueprint";
+import type {
+  GeneratedProject,
+  GeneratedProjectSpec,
+  ProjectProvider,
+  ProjectQualityReport,
+} from "@/lib/project-types";
+import {
+  readProjectsFromStore,
+  saveProjectSafely,
+} from "@/lib/project-store";
+import {
+  listMemberProjectsFromCloud,
+  materializeMemberProject,
+  saveMemberProjectToCloud,
+} from "@/lib/member-project-sync-client";
+import { customProductPreset, defaultPresetId, getProjectPreset, presets, type PresetId } from "@/lib/presets";
+import {
+  isModelProviderId,
+  modelProviderIds,
+  normalizeProviderModelCatalog,
+  providerModelCatalogStorageKey,
+  type ModelProviderId,
+  type ProviderModelCatalog,
+} from "@/lib/provider-models";
+import { parseStudioConnectionHandoff } from "@/lib/studio-connection-handoff";
 
-type ProviderId = "free" | "dropstab" | "dropsbot" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
+// Defer the Connections Hub and My Projects overlays until either is opened.
+const DropsStudioDialogs = dynamic(
+  () =>
+    import("@/components/drops-studio-dialogs").then(
+      (module) => module.DropsStudioDialogs,
+    ),
+  { ssr: false },
+);
+
+// The category-native preview has its own interaction and media runtime. Keep
+// it out of the prompt shell's hydration path so the server-rendered hero can
+// paint before preview code is evaluated on constrained devices.
+const PreviewCanvas = dynamic(
+  () =>
+    import("@/components/preview-canvas").then(
+      (module) => module.PreviewCanvas,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="preview-column" aria-busy="true" aria-label="Loading product preview">
+        <div className="preview-status-row">
+          <span className="preview-ready">Preparing category-native preview</span>
+        </div>
+        <div className="preview-device" />
+      </section>
+    ),
+  },
+);
+
+const DropsStudioSetup = dynamic(
+  () =>
+    import("@/components/drops-studio-setup").then(
+      (module) => module.DropsStudioSetup,
+    ),
+  { ssr: false },
+);
+
+type ProviderId =
+  | "free"
+  | "dropstab"
+  | "dropsbot"
+  | "openai"
+  | "anthropic"
+  | "openrouter"
+  | "kimi"
+  | "custom";
 type BuilderRunMode = "plan" | "build";
 type BuildActivityStatus = "queued" | "active" | "done" | "failed";
 
@@ -66,11 +127,38 @@ interface BuildActivityItem {
   status: BuildActivityStatus;
 }
 
+interface StudioAccessStatus {
+  tier?: string;
+  authenticated?: boolean;
+  platformAi?: { available?: boolean; remaining?: number | null };
+  account?: { connected?: boolean; projectSync?: boolean };
+}
+
 const initialBuildActivity: BuildActivityItem[] = [
-  { id: "intent", label: "Understand output", detail: "Category and secondary capabilities", status: "queued" },
-  { id: "blueprint", label: "Direct the product", detail: "Screens, loops, data and actions", status: "queued" },
-  { id: "runtime", label: "Compile working app", detail: "State, interactions and responsive UI", status: "queued" },
-  { id: "quality", label: "Run release checks", detail: "Category, safety, data and publish gate", status: "queued" },
+  {
+    id: "intent",
+    label: "Understand output",
+    detail: "Category and secondary capabilities",
+    status: "queued",
+  },
+  {
+    id: "blueprint",
+    label: "Direct the product",
+    detail: "Screens, loops, data and actions",
+    status: "queued",
+  },
+  {
+    id: "runtime",
+    label: "Compile working app",
+    detail: "State, interactions and responsive UI",
+    status: "queued",
+  },
+  {
+    id: "quality",
+    label: "Run release checks",
+    detail: "Category, safety, data and publish gate",
+    status: "queued",
+  },
 ];
 
 interface Provider {
@@ -84,34 +172,147 @@ interface Provider {
 }
 
 const providerList: Provider[] = [
-  { id: "free", name: "Free Auto", eyebrow: "No key", description: "Local planner plus the best available free workflow. Nothing to connect." },
-  { id: "dropstab", name: "DropsTab API", eyebrow: "Live data", description: "Use your DropsTab API key for live prices, rankings, FDV, unlocks and research data.", keyLabel: "DropsTab API key", docs: "https://api-docs.dropstab.com/" },
-  { id: "dropsbot", name: "Telegram + Drops Bot", eyebrow: "Account, bot and channels", description: "Connect your Telegram account, create a real channel, add a bot as administrator and publish the first post.", docs: "https://core.telegram.org/method/channels.createChannel" },
-  { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use your own OpenAI API project as the reasoning layer and choose any model available to that key.", keyLabel: "OpenAI API key", docs: "https://platform.openai.com/api-keys" },
-  { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Connect Claude for long-form research, editorial voice and strategy explanations.", keyLabel: "Anthropic API key", docs: "https://console.anthropic.com/settings/keys" },
-  { id: "openrouter", name: "OpenRouter Free", eyebrow: "Free + paid models", description: "Start with OpenRouter's free-model router, or enter any paid model ID available to your account.", keyLabel: "OpenRouter API key", docs: "https://openrouter.ai/keys" },
-  { id: "kimi", name: "Kimi", eyebrow: "Long context", description: "Connect Moonshot Kimi models for research-heavy crypto workflows.", keyLabel: "Moonshot API key", docs: "https://platform.moonshot.ai/console/api-keys" },
-  { id: "custom", name: "Custom API", eyebrow: "OpenAI compatible", description: "Connect any public HTTPS OpenAI-compatible chat-completions endpoint you control.", keyLabel: "Bearer token", endpoint: true },
+  {
+    id: "free",
+    name: "Free Auto",
+    eyebrow: "No key",
+    description:
+      "Local planner plus the best available free workflow. Nothing to connect.",
+  },
+  {
+    id: "dropstab",
+    name: "DropsTab API",
+    eyebrow: "Live data",
+    description:
+      "Use your DropsTab API key for live prices, rankings, FDV, unlocks and research data.",
+    keyLabel: "DropsTab API key",
+    docs: "https://api-docs.dropstab.com/",
+  },
+  {
+    id: "dropsbot",
+    name: "Telegram + Drops Bot",
+    eyebrow: "Account, bot and channels",
+    description:
+      "Connect your Telegram account, create a real channel, add a bot as administrator and publish the first post.",
+    docs: "https://core.telegram.org/method/channels.createChannel",
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    eyebrow: "Bring your key",
+    description:
+      "Use your own OpenAI API project as the reasoning layer and choose any model available to that key.",
+    keyLabel: "OpenAI API key",
+    docs: "https://platform.openai.com/api-keys",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    eyebrow: "Bring your key",
+    description:
+      "Connect Claude for long-form research, editorial voice and strategy explanations.",
+    keyLabel: "Anthropic API key",
+    docs: "https://console.anthropic.com/settings/keys",
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    eyebrow: "Your account models",
+    description:
+      "Verify your account, then choose from the model IDs OpenRouter returns for that key.",
+    keyLabel: "OpenRouter API key",
+    docs: "https://openrouter.ai/keys",
+  },
+  {
+    id: "kimi",
+    name: "Kimi",
+    eyebrow: "Long context",
+    description:
+      "Connect Moonshot Kimi models for research-heavy crypto workflows.",
+    keyLabel: "Moonshot API key",
+    docs: "https://platform.moonshot.ai/console/api-keys",
+  },
+  {
+    id: "custom",
+    name: "Custom API",
+    eyebrow: "OpenAI compatible",
+    description:
+      "Connect any public HTTPS OpenAI-compatible chat-completions endpoint you control.",
+    keyLabel: "Bearer token",
+    endpoint: true,
+  },
 ];
 
 const defaultModels: Partial<Record<ProviderId, string>> = {
-  openai: "gpt-5.2",
-  anthropic: "claude-haiku-4-5-20251001",
+  openai: "gpt-5.6-sol",
+  anthropic: "claude-sonnet-5",
   openrouter: "openrouter/free",
-  kimi: "kimi-k2.5",
+  kimi: "kimi-k3",
 };
 
+function readProviderModelCatalog(
+  provider: ModelProviderId,
+): ProviderModelCatalog | null {
+  try {
+    const raw = window.sessionStorage.getItem(
+      providerModelCatalogStorageKey(provider),
+    );
+    return raw ? normalizeProviderModelCatalog(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
 const sampleMarket: MarketCoin[] = [
-  { symbol: "BTC", name: "Bitcoin", price: "—", change: null, marketCap: "—" },
-  { symbol: "ETH", name: "Ethereum", price: "—", change: null, marketCap: "—" },
-  { symbol: "SOL", name: "Solana", price: "—", change: null, marketCap: "—" },
+  {
+    symbol: "BTC",
+    name: "Bitcoin",
+    price: "$68,432.21",
+    change: 4.21,
+    marketCap: "$1.35T",
+  },
+  {
+    symbol: "ETH",
+    name: "Ethereum",
+    price: "$3,642.18",
+    change: -0.58,
+    marketCap: "$438B",
+  },
+  {
+    symbol: "SOL",
+    name: "Solana",
+    price: "$171.35",
+    change: 2.31,
+    marketCap: "$81B",
+  },
 ];
 
 const defaultPrediction: PredictionEvent = {
-  title: "Waiting for a live crypto prediction market",
-  probability: null,
-  change: null,
+  title: "SOL ETF approval",
+  probability: 68,
+  change: 26,
 };
+
+const GAME_RUNTIME_ASSETS = [
+  "/assets/market-catcher-retro.png",
+  "/assets/market-wolf-catcher.png",
+] as const;
+
+async function warmProjectExperience(spec: GeneratedProjectSpec) {
+  if (spec.presetId !== "crypto-game") return;
+
+  await Promise.race([
+    Promise.allSettled(
+      GAME_RUNTIME_ASSETS.map((src) =>
+        fetch(src, { cache: "force-cache" }).then((response) => {
+          if (!response.ok) throw new Error(`Could not preload ${src}.`);
+          return response.blob();
+        }),
+      ),
+    ),
+    new Promise<void>((resolve) => window.setTimeout(resolve, 1_200)),
+  ]);
+}
 
 const iconMap = {
   Zap,
@@ -139,99 +340,200 @@ const customTools = [
 
 function initialValues() {
   return Object.fromEntries(
-    presets.map((preset) => [preset.id, Object.fromEntries(preset.fields.map((field) => [field.id, field.value]))]),
+    [...presets, customProductPreset].map((preset) => [
+      preset.id,
+      Object.fromEntries(preset.fields.map((field) => [field.id, field.value])),
+    ]),
   ) as Record<PresetId, Record<string, string>>;
 }
 
-function SelectControl({ value, options, onChange, ariaLabel }: { value: string; options: string[]; onChange: (value: string) => void; ariaLabel: string }) {
-  return (
-    <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger className="field-select" aria-label={ariaLabel}>
-        <Select.Value />
-        <Select.Icon><ChevronDown size={15} /></Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content className="select-content" position="popper" sideOffset={6}>
-          <Select.Viewport>
-            {options.map((option) => (
-              <Select.Item className="select-item" key={option} value={option}>
-                <Select.ItemText>{option}</Select.ItemText>
-                <Select.ItemIndicator><Check size={14} /></Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
 function Brand() {
-  return (
-    <div className="brand-lockup" aria-label="Drops Studio by DropsTab and Drops Bot">
-      <div className="brand-mark"><Image src="https://dropstab.com/images/dropstab-logo-drop-default.svg" alt="" width={27} height={27} unoptimized /></div>
-      <div><strong>Drops Studio</strong><span>by <b>DropsTab</b><i>×</i><b>Drops Bot</b></span></div>
-    </div>
-  );
+  return <DropsBrand />;
 }
 
-export function DropsStudio() {
+function useNearViewport() {
+  const [ready, setReady] = useState(false);
+  const elementRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setReady(true);
+        observer.disconnect();
+      },
+      { rootMargin: "64px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ready, elementRef };
+}
+
+export function DropsStudio({ hero }: { hero: ReactNode }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<PresetId>(defaultPresetId);
   const [valuesByPreset, setValuesByPreset] = useState(initialValues);
   const [prompt, setPrompt] = useState("");
   const [planning, setPlanning] = useState(false);
   const [customMode, setCustomMode] = useState(false);
-  const [selectedTools, setSelectedTools] = useState(["prices", "unlocks", "telegram"]);
+  const [selectedTools, setSelectedTools] = useState([
+    "prices",
+    "unlocks",
+    "telegram",
+  ]);
   const [market, setMarket] = useState(sampleMarket);
   const [dataMode, setDataMode] = useState<"sample" | "live">("sample");
   const [prediction, setPrediction] = useState(defaultPrediction);
   const [isPlaying, setIsPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const [telegramProjectSlug, setTelegramProjectSlug] = useState<string | null>(
+    null,
+  );
   const [providerId, setProviderId] = useState<ProviderId>("free");
   const [providerKey, setProviderKey] = useState("");
   const [providerModel, setProviderModel] = useState("");
+  const [modelCatalogs, setModelCatalogs] = useState<
+    Partial<Record<ModelProviderId, ProviderModelCatalog>>
+  >({});
   const [customEndpoint, setCustomEndpoint] = useState("");
   const [testingConnection, setTestingConnection] = useState(false);
-  const [connections, setConnections] = useState<Record<ProviderId, boolean>>({ free: true, dropstab: false, dropsbot: false, openai: false, anthropic: false, openrouter: false, kimi: false, custom: false });
+  const [connections, setConnections] = useState<Record<ProviderId, boolean>>({
+    free: true,
+    dropstab: false,
+    dropsbot: false,
+    openai: false,
+    anthropic: false,
+    openrouter: false,
+    kimi: false,
+    custom: false,
+  });
   const [activeBrain, setActiveBrain] = useState<ProviderId>("free");
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [projects, setProjects] = useState<GeneratedProject[]>([]);
   const [building, setBuilding] = useState(false);
   const [draftSpec, setDraftSpec] = useState<GeneratedProjectSpec | null>(null);
-  const [guestRemaining, setGuestRemaining] = useState<number | null>(3);
-  const [planLabel, setPlanLabel] = useState("Free AI ready");
-  const [runMode, setRunMode] = useState<BuilderRunMode>("build");
+  const [guestRemaining, setGuestRemaining] = useState<number | null>(null);
+  const [platformAiAvailable, setPlatformAiAvailable] = useState(false);
+  const [memberConnected, setMemberConnected] = useState(false);
+  const [projectSyncAvailable, setProjectSyncAvailable] = useState(false);
+  const [planLabel, setPlanLabel] = useState("Ready to build");
   const [buildActivity, setBuildActivity] = useState<BuildActivityItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
+  const centeredPresetRef = useRef(false);
   const guestIdRef = useRef("");
+  const setupSection = useNearViewport();
+  const previewSection = useNearViewport();
 
-  const selectedPreset = useMemo(() => presets.find((preset) => preset.id === selectedId) ?? presets[0], [selectedId]);
+  const selectedPreset = useMemo(
+    () => getProjectPreset(selectedId),
+    [selectedId],
+  );
   const values = valuesByPreset[selectedId];
-  const provider = providerList.find((item) => item.id === providerId) ?? providerList[0];
+  const provider =
+    providerList.find((item) => item.id === providerId) ?? providerList[0];
+  const providerModelCatalog = isModelProviderId(providerId)
+    ? (modelCatalogs[providerId] ?? null)
+    : null;
+  const telegramProject = useMemo(
+    () =>
+      telegramProjectSlug
+        ? (projects.find(
+            (project) =>
+              project.id === telegramProjectSlug ||
+              project.spec.slug === telegramProjectSlug,
+          ) ?? null)
+        : null,
+    [projects, telegramProjectSlug],
+  );
   const handleTelegramConnected = useCallback((connected: boolean) => {
+    if (connected) {
+      window.sessionStorage.setItem(
+        "drops-studio:dropsbot",
+        "account-connected",
+      );
+    } else {
+      window.sessionStorage.removeItem("drops-studio:dropsbot");
+    }
     setConnections((current) => ({ ...current, dropsbot: connected }));
+  }, []);
+  const applyAccessStatus = useCallback((access: StudioAccessStatus) => {
+    const signedIn = Boolean(access.authenticated && access.account?.connected);
+    const available = access.platformAi?.available === true;
+    const reportedRemaining = access.platformAi?.remaining;
+    const remaining = available && Number.isSafeInteger(reportedRemaining) && Number(reportedRemaining) >= 0
+      ? Number(reportedRemaining)
+      : null;
+    setMemberConnected(signedIn);
+    setProjectSyncAvailable(
+      Boolean(signedIn && access.account?.projectSync),
+    );
+    setPlatformAiAvailable(available);
+    setGuestRemaining(remaining);
+    setPlanLabel(
+      available
+        ? signedIn
+          ? "AI planning ready"
+          : "Free planning ready"
+        : signedIn
+          ? "Signed in · ready to build"
+          : "Ready to build offline",
+    );
+    return {
+      authenticated: signedIn,
+      available,
+      remaining,
+      projectSync: Boolean(signedIn && access.account?.projectSync),
+    };
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      let savedProjects: GeneratedProject[] = [];
-      try {
-        const parsed = JSON.parse(window.localStorage.getItem(PROJECTS_STORAGE_KEY) || "[]") as unknown;
-        if (Array.isArray(parsed)) savedProjects = parsed.filter((item): item is GeneratedProject => Boolean(item && typeof item === "object" && "spec" in item && "html" in item));
-      } catch { /* Ignore invalid local projects. */ }
+    const timer = window.setTimeout(async () => {
+      let savedProjects = readProjectsFromStore();
 
       try {
-        const legacy = JSON.parse(window.localStorage.getItem("drops-studio-projects") || "[]") as Array<{ id?: string; presetId?: PresetId; title?: string; createdAt?: string }>;
+        const legacy = JSON.parse(
+          window.localStorage.getItem("drops-studio-projects") || "[]",
+        ) as Array<{
+          id?: string;
+          presetId?: PresetId;
+          title?: string;
+          createdAt?: string;
+        }>;
+        const legacyModules = legacy.length
+          ? await Promise.all([
+              import("@/lib/project-compiler"),
+              import("@/lib/project-factory"),
+            ])
+          : null;
+        const compileLegacyProject = legacyModules?.[0].compileProject ?? null;
+        const createLegacyProjectSpec =
+          legacyModules?.[1].createProjectSpec ?? null;
         for (const draft of Array.isArray(legacy) ? legacy : []) {
-          if (!draft.id || !draft.presetId || savedProjects.some((item) => item.id === draft.id) || !presets.some((item) => item.id === draft.presetId)) continue;
-          const legacyPreset = presets.find((item) => item.id === draft.presetId) ?? presets[0];
-          const spec = createProjectSpec({
+          if (
+            !draft.id ||
+            !draft.presetId ||
+            savedProjects.some((item) => item.id === draft.id) ||
+            !presets.some((item) => item.id === draft.presetId)
+          )
+            continue;
+          if (!compileLegacyProject || !createLegacyProjectSpec) continue;
+          const legacyPreset =
+            presets.find((item) => item.id === draft.presetId) ?? presets[0];
+          const spec = createLegacyProjectSpec({
             presetId: legacyPreset.id,
-            values: Object.fromEntries(legacyPreset.fields.map((field) => [field.id, field.value])),
-            prompt: draft.title && draft.title !== legacyPreset.title ? draft.title : "",
+            values: Object.fromEntries(
+              legacyPreset.fields.map((field) => [field.id, field.value]),
+            ),
+            prompt:
+              draft.title && draft.title !== legacyPreset.title
+                ? draft.title
+                : "",
             tools: legacyPreset.tools,
             provider: "free",
             model: "Free Auto",
@@ -239,33 +541,147 @@ export function DropsStudio() {
             prediction: defaultPrediction,
             origin: window.location.origin,
           });
-          savedProjects.push({ id: draft.id, spec, html: compileProject(spec), createdAt: draft.createdAt || spec.createdAt, updatedAt: new Date().toISOString() });
+          const migratedProject: GeneratedProject = {
+            id: draft.id,
+            spec,
+            html: compileLegacyProject(spec),
+            createdAt: draft.createdAt || spec.createdAt,
+            updatedAt: new Date().toISOString(),
+          };
+          const stored = await saveProjectSafely(migratedProject, {
+            expectedUpdatedAt: null,
+          });
+          if (stored.status === "saved") savedProjects = stored.projects;
         }
-        if (savedProjects.length) window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(savedProjects));
-      } catch { /* Legacy drafts are optional. */ }
+      } catch {
+        /* Legacy drafts are optional. */
+      }
       setProjects(savedProjects);
       setConnections((current) => {
         const connected = { ...current };
         providerList.forEach((item) => {
-          if (item.id !== "free" && window.sessionStorage.getItem(`drops-studio:${item.id}`)) connected[item.id] = true;
+          const marker = window.sessionStorage.getItem(
+            `drops-studio:${item.id}`,
+          );
+          if (
+            item.id !== "free" &&
+            (item.id === "dropsbot" ? marker === "account-connected" : marker)
+          )
+            connected[item.id] = true;
         });
         return connected;
       });
-      const rememberedBrain = window.sessionStorage.getItem("drops-studio:active-brain") as ProviderId | null;
-      if (rememberedBrain && providerList.some((item) => item.id === rememberedBrain)) setActiveBrain(rememberedBrain);
-      guestIdRef.current = window.sessionStorage.getItem("drops-studio:guest-id") || crypto.randomUUID();
-      window.sessionStorage.setItem("drops-studio:guest-id", guestIdRef.current);
+      const restoredCatalogs: Partial<
+        Record<ModelProviderId, ProviderModelCatalog>
+      > = {};
+      for (const modelProvider of modelProviderIds) {
+        const catalog = readProviderModelCatalog(modelProvider);
+        if (catalog) restoredCatalogs[modelProvider] = catalog;
+      }
+      setModelCatalogs(restoredCatalogs);
+      const rememberedBrain = window.sessionStorage.getItem(
+        "drops-studio:active-brain",
+      ) as ProviderId | null;
+      if (
+        rememberedBrain &&
+        providerList.some((item) => item.id === rememberedBrain)
+      )
+        setActiveBrain(rememberedBrain);
+      guestIdRef.current =
+        window.sessionStorage.getItem("drops-studio:guest-id") ||
+        crypto.randomUUID();
+      window.sessionStorage.setItem(
+        "drops-studio:guest-id",
+        guestIdRef.current,
+      );
+      let hydratedAccess: StudioAccessStatus | null = null;
+      try {
+        const accessResponse = await fetch("/api/access", { cache: "no-store" });
+        const accessPayload = (await accessResponse.json()) as {
+          access?: StudioAccessStatus;
+        };
+        if (accessResponse.ok && accessPayload.access) {
+          hydratedAccess = accessPayload.access;
+          const accessState = applyAccessStatus(hydratedAccess);
+          if (accessState.projectSync) {
+            try {
+              const cloud = await listMemberProjectsFromCloud();
+              for (const record of cloud.projects) {
+                const local = savedProjects.find(
+                  (project) => project.id === record.id,
+                );
+                if (
+                  local &&
+                  Date.parse(local.updatedAt) >= Date.parse(record.updatedAt)
+                ) {
+                  continue;
+                }
+                const materialized = await materializeMemberProject(record);
+                const stored = await saveProjectSafely(materialized, {
+                  expectedUpdatedAt: local?.updatedAt ?? null,
+                });
+                if (stored.status === "saved") savedProjects = stored.projects;
+              }
+              setProjects(savedProjects);
+            } catch {
+              /* Browser projects remain authoritative while cloud sync is offline. */
+            }
+          }
+        }
+      } catch {
+        /* The local compiler remains available when access status is offline. */
+      }
       const params = new URLSearchParams(window.location.search);
-      if (params.get("connections") === "1") setConnectionOpen(true);
+      const handoff = parseStudioConnectionHandoff(window.location.search);
+      if (handoff.connections) {
+        const requestedProvider = providerList.find(
+          (item) => item.id === handoff.provider,
+        );
+        if (requestedProvider) setProviderId(requestedProvider.id);
+
+        if (
+          handoff.provider === "dropsbot" &&
+          handoff.flow === "telegram-channel"
+        ) {
+          setProviderId("dropsbot");
+          setTelegramProjectSlug(handoff.project);
+          const requestedProject = savedProjects.find(
+            (project) =>
+              project.id === handoff.project ||
+              project.spec.slug === handoff.project,
+          );
+          const requestedPreset =
+            requestedProject?.spec.presetId ??
+            presets.find(
+              (preset) =>
+                handoff.project === preset.id ||
+                handoff.project?.startsWith(`${preset.id}-`),
+            )?.id;
+          if (requestedPreset) setSelectedId(requestedPreset);
+          if (requestedProject) {
+            setDraftSpec(requestedProject.spec);
+            setValuesByPreset((current) => ({
+              ...current,
+              [requestedProject.spec.presetId]: requestedProject.spec.values,
+            }));
+          }
+        }
+        setConnectionOpen(true);
+      }
       if (params.get("openrouter") === "connected") {
-        setConnections((current) => ({ ...current, openrouter: true }));
-        setActiveBrain("openrouter");
-        setProviderId("openrouter");
-        setToast("OpenRouter connected. Your account is now the active AI brain.");
+        const sessionKey = window.sessionStorage.getItem("drops-studio:openrouter");
+        if (hydratedAccess?.authenticated && hydratedAccess.account?.connected && sessionKey) {
+          setConnections((current) => ({ ...current, openrouter: true }));
+          setActiveBrain("openrouter");
+          setProviderId("openrouter");
+          setToast("OpenRouter connected. Your signed-in member session and AI brain are ready.");
+        } else {
+          setToast("OpenRouter connection could not be confirmed. Connect it again from AI Connections.");
+        }
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [applyAccessStatus]);
 
   useEffect(() => {
     if (!toast) return;
@@ -273,10 +689,54 @@ export function DropsStudio() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const centerPreset = useCallback(
+    (id: PresetId, behavior: ScrollBehavior) => {
+      const carousel = carouselRef.current;
+      const card = carousel?.querySelector<HTMLElement>(`[data-preset="${id}"]`);
+      if (!carousel || !card) return;
+      const centeredLeft =
+        card.offsetLeft - (carousel.clientWidth - card.offsetWidth) / 2;
+      const maxLeft = Math.max(0, carousel.scrollWidth - carousel.clientWidth);
+      carousel.scrollTo({
+        left: Math.min(maxLeft, Math.max(0, centeredLeft)),
+        behavior,
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!centeredPresetRef.current) {
+      centeredPresetRef.current = true;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      centerPreset(selectedId, "smooth");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [centerPreset, selectedId]);
+
+  useEffect(() => {
+    let frame = 0;
+    const handleResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => centerPreset(selectedId, "auto"));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [centerPreset, selectedId]);
+
   useEffect(() => {
     if (selectedId !== "prediction-impact") return;
     fetch("/api/polymarket")
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Unavailable")))
+      .then((response) =>
+        response.ok
+          ? response.json()
+          : Promise.reject(new Error("Unavailable")),
+      )
       .then((payload: { events?: PredictionEvent[] }) => {
         if (payload.events?.[0]) setPrediction(payload.events[0]);
       })
@@ -284,16 +744,19 @@ export function DropsStudio() {
   }, [selectedId]);
 
   function choosePreset(id: PresetId) {
+    if (id === selectedId) {
+      centerPreset(id, "smooth");
+      return;
+    }
     if (id !== selectedId) setDraftSpec(null);
     setSelectedId(id);
-    window.requestAnimationFrame(() => {
-      document.querySelector(`[data-preset="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-    });
   }
 
   function shiftPreset(direction: -1 | 1) {
     const current = presets.findIndex((preset) => preset.id === selectedId);
-    choosePreset(presets[(current + direction + presets.length) % presets.length].id);
+    choosePreset(
+      presets[(current + direction + presets.length) % presets.length].id,
+    );
   }
 
   function updateField(fieldId: string, value: string) {
@@ -301,13 +764,28 @@ export function DropsStudio() {
       ...current,
       [selectedId]: { ...current[selectedId], [fieldId]: value },
     }));
-    setDraftSpec((current) => current?.presetId === selectedId
-      ? validateProjectSpec({ ...current, values: { ...current.values, [fieldId]: value } })
-      : current);
+    setDraftSpec((current) =>
+      current?.presetId === selectedId
+        ? {
+            ...current,
+            values: { ...current.values, [fieldId]: value },
+          }
+        : current,
+    );
   }
 
-  function setActivity(id: BuildActivityItem["id"], status: BuildActivityStatus, detail?: string) {
-    setBuildActivity((current) => current.map((item) => item.id === id ? { ...item, status, detail: detail ?? item.detail } : item));
+  function setActivity(
+    id: BuildActivityItem["id"],
+    status: BuildActivityStatus,
+    detail?: string,
+  ) {
+    setBuildActivity((current) =>
+      current.map((item) =>
+        item.id === id
+          ? { ...item, status, detail: detail ?? item.detail }
+          : item,
+      ),
+    );
   }
 
   async function planPrompt(): Promise<GeneratedProjectSpec | null> {
@@ -316,48 +794,103 @@ export function DropsStudio() {
       return null;
     }
     setPlanning(true);
-    setPlanLabel("AI is turning your brief into screens, logic and integrations…");
+    setPlanLabel(
+      "AI is turning your brief into screens, logic and integrations…",
+    );
     try {
+      const [blueprintModule, factoryModule, validatorModule] =
+        await Promise.all([
+          import("@/lib/product-blueprint"),
+          import("@/lib/project-factory"),
+          import("@/lib/project-validator"),
+        ]);
+      const { applyAgentPlan, fallbackAgentPlan } = blueprintModule;
+      const { createProjectSpec } = factoryModule;
+      const { validateProjectSpec } = validatorModule;
       let plan: AgentProductPlan;
       let tier = "guest";
       let remaining: number | null = guestRemaining;
       let warning = "";
-      const key = activeBrain === "free" ? "" : window.sessionStorage.getItem(`drops-studio:${activeBrain}`) ?? "";
+      const key =
+        activeBrain === "free"
+          ? ""
+          : (window.sessionStorage.getItem(`drops-studio:${activeBrain}`) ??
+            "");
 
       if (activeBrain !== "free" && !key) {
         openProvider(activeBrain);
-        throw new Error(`Connect ${providerList.find((item) => item.id === activeBrain)?.name ?? "this AI"} first.`);
+        throw new Error(
+          `Connect ${providerList.find((item) => item.id === activeBrain)?.name ?? "this AI"} first.`,
+        );
       }
 
       if (activeBrain === "custom") {
-        const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
-        const model = window.sessionStorage.getItem("drops-studio:custom-model");
-        if (!endpoint || !model) throw new Error("Custom endpoint or model is missing.");
+        const endpoint = window.sessionStorage.getItem(
+          "drops-studio:custom-endpoint",
+        );
+        const model = window.sessionStorage.getItem(
+          "drops-studio:custom-model",
+        );
+        if (!endpoint || !model)
+          throw new Error("Custom endpoint or model is missing.");
         const seed = fallbackAgentPlan(prompt.trim());
         const response = await fetch(endpoint, {
           method: "POST",
-          headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${key}`,
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
             model,
             temperature: 0.2,
             messages: [
-              { role: "system", content: "You are a product architect. Refine the supplied seed into a category-native working crypto product. Preserve the exact JSON shape and keys. Return JSON only. DropsTab is the source/data layer and Drops Bot is the alert/Telegram handoff layer. Never return a generic dashboard when the user asks for a game, channel, radio, assistant or another native experience." },
-              { role: "user", content: JSON.stringify({ request: prompt.trim(), seed }) },
+              {
+                role: "system",
+                content:
+                  "You are a product architect. Refine the supplied seed into a category-native working crypto product. Preserve the exact JSON shape and keys. Return JSON only. DropsTab is the source/data layer and Drops Bot is the alert/Telegram handoff layer. Never return a generic dashboard when the user asks for a game, channel, radio, assistant or another native experience.",
+              },
+              {
+                role: "user",
+                content: JSON.stringify({ request: prompt.trim(), seed }),
+              },
             ],
           }),
           signal: AbortSignal.timeout(60_000),
         });
-        const result = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
-        if (!response.ok) throw new Error(result.error?.message ?? `Custom model returned ${response.status}.`);
-        const parsed = JSON.parse(result.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] || "{}") as unknown;
-        const candidate = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-        const candidateBlueprint = candidate.blueprint && typeof candidate.blueprint === "object" && !Array.isArray(candidate.blueprint)
-          ? candidate.blueprint as Record<string, unknown>
-          : {};
-        const candidateContent = candidateBlueprint.content && typeof candidateBlueprint.content === "object" && !Array.isArray(candidateBlueprint.content)
-          ? candidateBlueprint.content as Record<string, unknown>
-          : {};
-        const candidatePresetId = presets.some((item) => item.id === candidate.presetId) ? candidate.presetId as PresetId : seed.presetId;
+        const result = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        };
+        if (!response.ok)
+          throw new Error(
+            result.error?.message ??
+              `Custom model returned ${response.status}.`,
+          );
+        const parsed = JSON.parse(
+          result.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] ||
+            "{}",
+        ) as unknown;
+        const candidate =
+          parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {};
+        const candidateBlueprint =
+          candidate.blueprint &&
+          typeof candidate.blueprint === "object" &&
+          !Array.isArray(candidate.blueprint)
+            ? (candidate.blueprint as Record<string, unknown>)
+            : {};
+        const candidateContent =
+          candidateBlueprint.content &&
+          typeof candidateBlueprint.content === "object" &&
+          !Array.isArray(candidateBlueprint.content)
+            ? (candidateBlueprint.content as Record<string, unknown>)
+            : {};
+        const candidatePresetId = presets.some(
+          (item) => item.id === candidate.presetId,
+        )
+          ? (candidate.presetId as PresetId)
+          : seed.presetId;
         const normalized = validateProjectSpec({
           ...candidate,
           schemaVersion: 1,
@@ -369,15 +902,36 @@ export function DropsStudio() {
           values: valuesByPreset[candidatePresetId],
           tools: candidate.tools ?? seed.tools,
           brain: { provider: "custom", model, enhanced: true },
-          theme: { ...(seed.theme ?? {}), ...(candidate.theme && typeof candidate.theme === "object" ? candidate.theme : {}) },
-          design: { ...(seed.design ?? {}), ...(candidate.design && typeof candidate.design === "object" ? candidate.design : {}) },
-          experience: { ...(seed.experience ?? {}), ...(candidate.experience && typeof candidate.experience === "object" ? candidate.experience : {}) },
+          theme: {
+            ...(seed.theme ?? {}),
+            ...(candidate.theme && typeof candidate.theme === "object"
+              ? candidate.theme
+              : {}),
+          },
+          design: {
+            ...(seed.design ?? {}),
+            ...(candidate.design && typeof candidate.design === "object"
+              ? candidate.design
+              : {}),
+          },
+          experience: {
+            ...(seed.experience ?? {}),
+            ...(candidate.experience && typeof candidate.experience === "object"
+              ? candidate.experience
+              : {}),
+          },
           blueprint: {
             ...seed.blueprint,
             ...candidateBlueprint,
             content: { ...seed.blueprint.content, ...candidateContent },
           },
-          gameDirection: { ...(seed.gameDirection ?? {}), ...(candidate.gameDirection && typeof candidate.gameDirection === "object" ? candidate.gameDirection : {}) },
+          gameDirection: {
+            ...(seed.gameDirection ?? {}),
+            ...(candidate.gameDirection &&
+            typeof candidate.gameDirection === "object"
+              ? candidate.gameDirection
+              : {}),
+          },
           market,
           prediction,
           dataEndpoint: `${window.location.origin}/api/public-data`,
@@ -400,9 +954,13 @@ export function DropsStudio() {
         tier = "byok";
         remaining = null;
       } else {
-        const headers: Record<string, string> = { "content-type": "application/json", "x-drops-guest": guestIdRef.current };
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          "x-drops-guest": guestIdRef.current,
+        };
         if (activeBrain === "openrouter") headers["x-openrouter-key"] = key;
-        else if (["openai", "anthropic", "kimi"].includes(activeBrain)) headers["x-provider-key"] = key;
+        else if (["openai", "anthropic", "kimi"].includes(activeBrain))
+          headers["x-provider-key"] = key;
         const response = await fetch("/api/agent/plan", {
           method: "POST",
           headers,
@@ -410,10 +968,28 @@ export function DropsStudio() {
             prompt: prompt.trim(),
             guestId: guestIdRef.current,
             provider: activeBrain === "free" ? undefined : activeBrain,
-            model: window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain],
+            model:
+              window.sessionStorage.getItem(
+                `drops-studio:${activeBrain}:model`,
+              ) || defaultModels[activeBrain],
           }),
         });
-        const payload = await response.json() as { plan?: AgentProductPlan; tier?: string; model?: string; remaining?: number | null; warning?: string; error?: string; code?: string };
+        const payload = (await response.json()) as {
+          plan?: AgentProductPlan;
+          tier?: string;
+          model?: string;
+          remaining?: number | null;
+          access?: {
+            authenticated?: boolean;
+            account?: { connected?: boolean };
+            platformAi?: { available?: boolean; remaining?: number | null };
+          };
+          warning?: string;
+          error?: string;
+          code?: string;
+        };
+        const accessState = payload.access ? applyAccessStatus(payload.access) : null;
+        remaining = accessState?.remaining ?? null;
         if (!response.ok || !payload.plan) {
           if (payload.code === "GUEST_LIMIT") {
             setProviderId("openrouter");
@@ -423,18 +999,21 @@ export function DropsStudio() {
         }
         plan = payload.plan;
         tier = payload.tier ?? tier;
-        remaining = payload.remaining ?? null;
         warning = payload.warning ?? "";
       }
 
-      const nextPreset = presets.find((item) => item.id === plan.presetId) ?? presets[0];
+      const nextPreset = getProjectPreset(plan.presetId);
       const nextValues = valuesByPreset[nextPreset.id];
       const base = createProjectSpec({
         presetId: nextPreset.id,
         values: nextValues,
         prompt: prompt.trim(),
         tools: plan.tools.length ? plan.tools : nextPreset.tools,
-        provider: plan.provider ?? (activeBrain === "free" ? "gateway" : activeBrain as ProjectProvider),
+        provider:
+          plan.provider ??
+          (activeBrain === "free"
+            ? "gateway"
+            : (activeBrain as ProjectProvider)),
         model: plan.model ?? defaultModels[activeBrain] ?? "Drops Free AI",
         market,
         prediction,
@@ -445,12 +1024,29 @@ export function DropsStudio() {
       setDraftSpec(spec);
       setCustomMode(true);
       setGuestRemaining(remaining);
-      const searchable = `${plan.tools.join(" ")} ${plan.blueprint.dropsTabUse.join(" ")} ${plan.blueprint.dropsBotUse.join(" ")}`.toLowerCase();
-      const recommendedTools = customTools.filter((tool) => searchable.includes(tool.id.slice(0, 5)) || searchable.includes(tool.label.split(" ")[0].toLowerCase())).map((tool) => tool.id);
-      setSelectedTools(recommendedTools.length ? recommendedTools : ["prices", "telegram"]);
-      const brainName = tier === "fallback" ? "Local product compiler" : plan.model || (tier === "guest" ? "Free AI" : "Your model");
-      setPlanLabel(`${brainName} · ${plan.blueprint.screens.length} screens · ${plan.blueprint.interactions.length} interactions`);
-      setToast(warning || `${brainName} created a real ${plan.blueprint.productType} blueprint.`);
+      const searchable =
+        `${plan.tools.join(" ")} ${plan.blueprint.dropsTabUse.join(" ")} ${plan.blueprint.dropsBotUse.join(" ")}`.toLowerCase();
+      const recommendedTools = customTools
+        .filter(
+          (tool) =>
+            searchable.includes(tool.id.slice(0, 5)) ||
+            searchable.includes(tool.label.split(" ")[0].toLowerCase()),
+        )
+        .map((tool) => tool.id);
+      setSelectedTools(
+        recommendedTools.length ? recommendedTools : ["prices", "telegram"],
+      );
+      const brainName =
+        tier === "fallback"
+          ? "Local product compiler"
+          : plan.model || (tier === "guest" ? "Free AI" : tier === "member" ? "Member Free AI" : "Your model");
+      setPlanLabel(
+        `${brainName} · ${plan.blueprint.screens.length} screens · ${plan.blueprint.interactions.length} interactions`,
+      );
+      setToast(
+        warning ||
+          `${brainName} created a real ${plan.blueprint.productType} blueprint.`,
+      );
       return spec;
     } catch (error) {
       setPlanLabel("AI planning needs attention");
@@ -461,18 +1057,35 @@ export function DropsStudio() {
     }
   }
 
-  async function runPrompt() {
+  async function runPrompt(mode: BuilderRunMode) {
     if (planning || building) return;
-    setBuildActivity(initialBuildActivity.map((item, index) => ({ ...item, status: index === 0 ? "active" : "queued" })));
+    setBuildActivity(
+      initialBuildActivity.map((item, index) => ({
+        ...item,
+        status: index === 0 ? "active" : "queued",
+      })),
+    );
     const spec = await planPrompt();
     if (!spec) {
       setActivity("intent", "failed", "The product brief needs attention");
       return;
     }
-    setActivity("intent", "done", `${spec.presetId.replace(/-/g, " ")} selected from the requested output`);
-    setActivity("blueprint", "done", `${spec.blueprint.screens.length} screens · ${spec.blueprint.interactions.length} interactions`);
-    if (runMode === "plan") {
-      setActivity("runtime", "queued", "Review the blueprint, then build when ready");
+    setActivity(
+      "intent",
+      "done",
+      `${spec.presetId.replace(/-/g, " ")} selected from the requested output`,
+    );
+    setActivity(
+      "blueprint",
+      "done",
+      `${spec.blueprint.screens.length} screens · ${spec.blueprint.interactions.length} interactions`,
+    );
+    if (mode === "plan") {
+      setActivity(
+        "runtime",
+        "queued",
+        "Review the blueprint, then build when ready",
+      );
       setActivity("quality", "queued", "Runs on the compiled product");
       return;
     }
@@ -480,22 +1093,75 @@ export function DropsStudio() {
   }
 
   function toggleTool(id: string) {
-    setSelectedTools((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    setSelectedTools((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  }
+
+  function selectProvider(id: ProviderId) {
+    setProviderId(id);
+    setProviderKey("");
+    setProviderModel(
+      window.sessionStorage.getItem(
+        id === "custom"
+          ? "drops-studio:custom-model"
+          : `drops-studio:${id}:model`,
+      ) ??
+        defaultModels[id] ??
+        "",
+    );
+    setCustomEndpoint(
+      window.sessionStorage.getItem("drops-studio:custom-endpoint") ?? "",
+    );
+    if (isModelProviderId(id)) {
+      const catalog = readProviderModelCatalog(id);
+      setModelCatalogs((current) =>
+        catalog ? { ...current, [id]: catalog } : current,
+      );
+    }
+  }
+
+  function selectProviderModel(model: string) {
+    setProviderModel(model);
+    if (!isModelProviderId(providerId) || !connections[providerId]) return;
+    const selectedModel = model.trim();
+    if (!selectedModel) {
+      window.sessionStorage.removeItem(`drops-studio:${providerId}:model`);
+      if (activeBrain === providerId) {
+        setActiveBrain("free");
+        window.sessionStorage.setItem("drops-studio:active-brain", "free");
+      }
+      return;
+    }
+    window.sessionStorage.setItem(
+      `drops-studio:${providerId}:model`,
+      selectedModel,
+    );
+    window.sessionStorage.setItem("drops-studio:active-brain", providerId);
+    setActiveBrain(providerId);
   }
 
   function openProvider(id: ProviderId) {
-    setProviderId(id);
-    setProviderKey("");
-    setProviderModel(window.sessionStorage.getItem(`drops-studio:${id}:model`) ?? defaultModels[id] ?? "");
-    setCustomEndpoint(window.sessionStorage.getItem("drops-studio:custom-endpoint") ?? "");
+    selectProvider(id);
     setConnectionOpen(true);
   }
 
   async function connectOpenRouterAccount() {
     const bytes = crypto.getRandomValues(new Uint8Array(48));
-    const verifier = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-    const challenge = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    const verifier = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(verifier),
+    );
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
     window.sessionStorage.setItem("drops-studio:openrouter:pkce", verifier);
     const callback = `${window.location.origin}/auth/openrouter`;
     const authorize = new URL("https://openrouter.ai/auth");
@@ -503,6 +1169,49 @@ export function DropsStudio() {
     authorize.searchParams.set("code_challenge", challenge);
     authorize.searchParams.set("code_challenge_method", "S256");
     window.location.assign(authorize.toString());
+  }
+
+  async function disconnectOpenRouterAccount() {
+    let response: Response;
+    try {
+      response = await fetch("/api/auth/session", { method: "DELETE" });
+    } catch {
+      setToast("Could not disconnect OpenRouter. Your current session was left unchanged.");
+      return;
+    }
+    if (!response.ok) {
+      setToast("Could not disconnect OpenRouter. Your current session was left unchanged.");
+      return;
+    }
+    for (const key of [
+      "drops-studio:openrouter",
+      "drops-studio:openrouter:model",
+      providerModelCatalogStorageKey("openrouter"),
+      "drops-studio:openrouter:pkce",
+    ]) window.sessionStorage.removeItem(key);
+    if (window.sessionStorage.getItem("drops-studio:active-brain") === "openrouter") {
+      window.sessionStorage.setItem("drops-studio:active-brain", "free");
+      setActiveBrain("free");
+    }
+    setConnections((current) => ({ ...current, openrouter: false }));
+    setModelCatalogs((current) => {
+      const next = { ...current };
+      delete next.openrouter;
+      return next;
+    });
+    setProviderId("free");
+    try {
+      const accessResponse = await fetch("/api/access", { cache: "no-store" });
+      const payload = await accessResponse.json() as { access?: StudioAccessStatus };
+      if (!accessResponse.ok || !payload.access) throw new Error("Access status unavailable.");
+      applyAccessStatus(payload.access);
+    } catch {
+      setMemberConnected(false);
+      setPlatformAiAvailable(false);
+      setGuestRemaining(null);
+      setPlanLabel("Local compiler ready");
+    }
+    setToast("OpenRouter and the signed-in member session were disconnected from this browser.");
   }
 
   async function connectProvider() {
@@ -516,21 +1225,27 @@ export function DropsStudio() {
     }
     if (providerId === "dropsbot") {
       window.open("https://t.me/Drops", "_blank", "noopener,noreferrer");
-      window.sessionStorage.setItem("drops-studio:dropsbot", "telegram-setup-started");
-      setConnections((current) => ({ ...current, dropsbot: true }));
-      setToast("Official Drops Bot opened. Finish the channel/profile setup in Telegram.");
+      setToast(
+        "Official Drops Bot opened. Finish setup there; Drops Studio marks it connected only after account verification.",
+      );
       setConnectionOpen(false);
       return;
     }
-    if (!providerKey.trim()) {
+    const connectionKey =
+      providerKey.trim() ||
+      window.sessionStorage.getItem(`drops-studio:${providerId}`)?.trim() ||
+      "";
+    if (!connectionKey) {
       setToast(`Enter your ${provider.keyLabel ?? "API key"}.`);
       return;
     }
     if (providerId === "custom") {
       try {
         const endpoint = new URL(customEndpoint.trim());
-        const blocked = /^(localhost|127\.|0\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/i;
-        if (endpoint.protocol !== "https:" || blocked.test(endpoint.hostname)) throw new Error("Invalid endpoint");
+        const blocked =
+          /^(localhost|127\.|0\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/i;
+        if (endpoint.protocol !== "https:" || blocked.test(endpoint.hostname))
+          throw new Error("Invalid endpoint");
       } catch {
         setToast("Use a public HTTPS chat-completions endpoint.");
         return;
@@ -539,44 +1254,122 @@ export function DropsStudio() {
         setToast("Enter the model ID used by this endpoint.");
         return;
       }
-      window.sessionStorage.setItem("drops-studio:custom", providerKey.trim());
-      window.sessionStorage.setItem("drops-studio:custom-endpoint", customEndpoint.trim());
-      window.sessionStorage.setItem("drops-studio:custom-model", providerModel.trim());
+      window.sessionStorage.setItem("drops-studio:custom", connectionKey);
+      window.sessionStorage.setItem(
+        "drops-studio:custom-endpoint",
+        customEndpoint.trim(),
+      );
+      window.sessionStorage.setItem(
+        "drops-studio:custom-model",
+        providerModel.trim(),
+      );
       window.sessionStorage.setItem("drops-studio:active-brain", "custom");
       setConnections((current) => ({ ...current, custom: true }));
       setActiveBrain("custom");
-      setToast("Custom API configured for this tab. It will be called directly by your browser when you plan.");
+      setToast(
+        "Custom API configured for this tab. It will be called directly by your browser when you plan.",
+      );
       setConnectionOpen(false);
       return;
     }
     setTestingConnection(true);
     try {
+      let verifiedCatalog: ProviderModelCatalog | null = null;
       if (providerId === "dropstab") {
-        const response = await fetch("/api/dropstab", { headers: { "x-dropstab-api-key": providerKey.trim() } });
+        const response = await fetch("/api/dropstab", {
+          headers: { "x-dropstab-api-key": connectionKey },
+        });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error ?? "DropsTab rejected this key.");
-        setMarket(payload.coins?.length ? payload.coins.slice(0, 3) : sampleMarket);
-        setDataMode("live");
+        if (!response.ok)
+          throw new Error(payload.error ?? "DropsTab rejected this key.");
+        const coins =
+          payload && Array.isArray(payload.coins) ? payload.coins : [];
+        setMarket(coins.length ? coins.slice(0, 3) : sampleMarket);
+        setDataMode(coins.length ? "live" : "sample");
       } else {
         const response = await fetch("/api/connections/test", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ provider: providerId, key: providerKey.trim(), endpoint: customEndpoint.trim() }),
+          body: JSON.stringify({
+            provider: providerId,
+            key: connectionKey,
+            endpoint: customEndpoint.trim(),
+          }),
         });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error ?? "Connection test failed.");
+        const payload: unknown = await response.json();
+        if (!response.ok) {
+          const providerError =
+            payload &&
+            typeof payload === "object" &&
+            "error" in payload &&
+            typeof (payload as { error?: unknown }).error === "string"
+              ? (payload as { error: string }).error
+              : "Connection test failed.";
+          throw new Error(providerError);
+        }
+        if (isModelProviderId(providerId)) {
+          verifiedCatalog = normalizeProviderModelCatalog(payload);
+          if (!verifiedCatalog)
+            throw new Error("The provider returned an invalid model catalog.");
+          setModelCatalogs((current) => ({
+            ...current,
+            [providerId]: verifiedCatalog as ProviderModelCatalog,
+          }));
+          window.sessionStorage.setItem(
+            providerModelCatalogStorageKey(providerId),
+            JSON.stringify(verifiedCatalog),
+          );
+        }
       }
-      window.sessionStorage.setItem(`drops-studio:${providerId}`, providerKey.trim());
-      if (providerModel.trim()) window.sessionStorage.setItem(`drops-studio:${providerId}:model`, providerModel.trim());
+      window.sessionStorage.setItem(
+        `drops-studio:${providerId}`,
+        connectionKey,
+      );
       setConnections((current) => ({ ...current, [providerId]: true }));
-      if (["openai", "anthropic", "openrouter", "kimi"].includes(providerId)) {
-        setActiveBrain(providerId);
-        window.sessionStorage.setItem("drops-studio:active-brain", providerId);
+      if (isModelProviderId(providerId)) {
+        const storedModel =
+          window.sessionStorage.getItem(`drops-studio:${providerId}:model`) ??
+          "";
+        const requestedModel = providerModel.trim();
+        const returnedModels = verifiedCatalog?.models ?? [];
+        const selectedModel =
+          (returnedModels.includes(storedModel) ? storedModel : "") ||
+          (returnedModels.includes(requestedModel) ? requestedModel : "") ||
+          (defaultModels[providerId] &&
+          returnedModels.includes(defaultModels[providerId] as string)
+            ? (defaultModels[providerId] as string)
+            : "") ||
+          returnedModels[0] ||
+          storedModel;
+        setProviderModel(selectedModel);
+        if (selectedModel) {
+          window.sessionStorage.setItem(
+            `drops-studio:${providerId}:model`,
+            selectedModel,
+          );
+          setActiveBrain(providerId);
+          window.sessionStorage.setItem(
+            "drops-studio:active-brain",
+            providerId,
+          );
+        } else {
+          window.sessionStorage.removeItem(
+            `drops-studio:${providerId}:model`,
+          );
+        }
+        setToast(
+          returnedModels.length
+            ? `${provider.name} verified. Choose from ${verifiedCatalog?.totalModelCount ?? returnedModels.length} provider-returned models.`
+            : `${provider.name} verified, but no model list was returned. Enter the exact model ID to continue.`,
+        );
+        return;
       }
       setToast(`${provider.name} verified and connected for this browser tab.`);
       setConnectionOpen(false);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Connection test failed.");
+      setToast(
+        error instanceof Error ? error.message : "Connection test failed.",
+      );
     } finally {
       setTestingConnection(false);
     }
@@ -586,106 +1379,248 @@ export function DropsStudio() {
     const key = window.sessionStorage.getItem("drops-studio:dropstab");
     if (!key) {
       openProvider("dropstab");
-      setToast("Connect a DropsTab API key to switch this preview to live data.");
+      setToast(
+        "Connect a DropsTab API key to switch this preview to live data.",
+      );
       return;
     }
     setToast("Refreshing live DropsTab data…");
     try {
-      const response = await fetch("/api/dropstab", { headers: { "x-dropstab-api-key": key } });
+      const response = await fetch("/api/dropstab", {
+        headers: { "x-dropstab-api-key": key },
+      });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "Could not refresh live data.");
+      if (!response.ok)
+        throw new Error(payload.error ?? "Could not refresh live data.");
+      if (!payload || !Array.isArray(payload.coins))
+        throw new Error("DropsTab returned an invalid market response.");
       setMarket(payload.coins.slice(0, 3));
       setDataMode("live");
       setToast("Live market preview refreshed.");
     } catch (error) {
       setDataMode("sample");
-      setToast(error instanceof Error ? error.message : "Could not refresh live data.");
+      setToast(
+        error instanceof Error ? error.message : "Could not refresh live data.",
+      );
     }
   }
 
   async function buildProject(specOverride?: GeneratedProjectSpec) {
     if (building) return;
     setBuilding(true);
-    const targetPreset = specOverride ? presets.find((item) => item.id === specOverride.presetId) ?? selectedPreset : selectedPreset;
-    setActivity("runtime", "active", `Compiling ${targetPreset.output.toLowerCase()}`);
+    const targetPreset = specOverride
+      ? getProjectPreset(specOverride.presetId)
+      : selectedPreset;
+    setActivity(
+      "runtime",
+      "active",
+      `Compiling ${targetPreset.output.toLowerCase()}`,
+    );
     setToast(`Compiling a real ${targetPreset.output.toLowerCase()}…`);
     try {
-      const provider = (["openai", "anthropic", "openrouter", "kimi", "custom"].includes(activeBrain) ? activeBrain : "free") as ProjectProvider;
-      const model = window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) || defaultModels[activeBrain] || "Free Auto";
-      const selectedToolLabels = selectedTools.map((id) => customTools.find((tool) => tool.id === id)?.label ?? id);
-      const hasAgentDraft = Boolean(specOverride || (draftSpec && draftSpec.presetId === selectedId && draftSpec.prompt.trim() === prompt.trim()));
+      const [{ createProjectSpec }, { validateProjectSpec }] =
+        await Promise.all([
+          import("@/lib/project-factory"),
+          import("@/lib/project-validator"),
+        ]);
+      const provider = (
+        ["openai", "anthropic", "openrouter", "kimi", "custom"].includes(
+          activeBrain,
+        )
+          ? activeBrain
+          : "free"
+      ) as ProjectProvider;
+      const model =
+        window.sessionStorage.getItem(`drops-studio:${activeBrain}:model`) ||
+        defaultModels[activeBrain] ||
+        "Free Auto";
+      const selectedToolLabels = selectedTools.map(
+        (id) => customTools.find((tool) => tool.id === id)?.label ?? id,
+      );
+      const hasAgentDraft = Boolean(
+        specOverride ||
+          (draftSpec &&
+            draftSpec.presetId === selectedId &&
+            draftSpec.prompt.trim() === prompt.trim()),
+      );
+      let serverBuildWarning = "";
       let spec = specOverride
-        ? validateProjectSpec({ ...specOverride, market, prediction, dataEndpoint: `${window.location.origin}/api/public-data` })
-        : hasAgentDraft && draftSpec
         ? validateProjectSpec({
-            ...draftSpec,
-            values,
-            tools: customMode && selectedToolLabels.length ? Array.from(new Set([...draftSpec.tools, ...selectedToolLabels])) : draftSpec.tools,
+            ...specOverride,
             market,
             prediction,
             dataEndpoint: `${window.location.origin}/api/public-data`,
           })
-        : createProjectSpec({
-            presetId: selectedId,
-            values,
-            prompt,
-            tools: customMode && selectedToolLabels.length ? selectedToolLabels : selectedPreset.tools,
-            provider,
-            model,
-            market,
-            prediction,
-            origin: window.location.origin,
-          });
+        : hasAgentDraft && draftSpec
+          ? validateProjectSpec({
+              ...draftSpec,
+              values,
+              tools:
+                customMode && selectedToolLabels.length
+                  ? Array.from(
+                      new Set([...draftSpec.tools, ...selectedToolLabels]),
+                    )
+                  : draftSpec.tools,
+              market,
+              prediction,
+              dataEndpoint: `${window.location.origin}/api/public-data`,
+            })
+          : createProjectSpec({
+              presetId: selectedId,
+              values,
+              prompt,
+              tools:
+                customMode && selectedToolLabels.length
+                  ? selectedToolLabels
+                  : selectedPreset.tools,
+              provider,
+              model,
+              market,
+              prediction,
+              origin: window.location.origin,
+            });
 
-      if (!hasAgentDraft && provider !== "free") {
-        const key = window.sessionStorage.getItem(`drops-studio:${provider}`);
-        if (key) {
-          try {
-            if (provider === "custom") {
-              const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
-              const customModel = window.sessionStorage.getItem("drops-studio:custom-model");
-              if (!endpoint || !customModel) throw new Error("Custom model configuration is incomplete.");
-              const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: customModel, temperature: 0.2, messages: [{ role: "system", content: "Return JSON only with name, tagline, description and theme. Never return code, URLs, secrets or markdown." }, { role: "user", content: JSON.stringify(spec) }] }), signal: AbortSignal.timeout(60_000) });
-              const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-              if (!response.ok) throw new Error(`Custom model returned ${response.status}.`);
-              const suggestion = JSON.parse(payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/)?.[0] || "{}") as Partial<GeneratedProjectSpec>;
-              spec = validateProjectSpec({ ...spec, ...suggestion, presetId: spec.presetId, values: spec.values, tools: spec.tools, market: spec.market, prediction: spec.prediction, brain: { provider, model: customModel, enhanced: true } });
-            } else {
-              const response = await fetch("/api/generate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, key, model, prompt: prompt || selectedPreset.description, spec }) });
-              const payload = await response.json() as { spec?: GeneratedProjectSpec; error?: string };
-              if (!response.ok || !payload.spec) throw new Error(payload.error || "Model enhancement failed.");
-              spec = payload.spec;
-            }
-          } catch (error) {
-            setToast(`${error instanceof Error ? error.message : "AI enhancement failed."} Free compiler used instead.`);
-          }
+      // Every Build action goes through the authoritative server BuildRun.
+      // The planner already produced a rich specification, so Free/Gateway and
+      // custom-endpoint plans are validated and inspected without spending a
+      // redundant model call. Connected first-party providers receive one
+      // bounded enhancement plus at most one repair attempt.
+      const buildProvider = provider === "custom" ? "free" : provider;
+      const providerKey =
+        buildProvider === "free"
+          ? ""
+          : window.sessionStorage.getItem(`drops-studio:${buildProvider}`) || "";
+      const buildResponse = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-drops-session": guestIdRef.current,
+        },
+        body: JSON.stringify({
+          provider: buildProvider,
+          ...(providerKey ? { key: providerKey } : {}),
+          model,
+          prompt: prompt || selectedPreset.description,
+          spec,
+        }),
+        signal: AbortSignal.timeout(55_000),
+      });
+      const buildPayload = (await buildResponse.json().catch(() => ({}))) as {
+        spec?: GeneratedProjectSpec;
+        quality?: ProjectQualityReport;
+        run?: { status?: string; trace?: unknown[] };
+        error?: string;
+        warning?: string;
+      };
+      if (!buildResponse.ok || !buildPayload.spec || !buildPayload.quality) {
+        throw new Error(
+          buildPayload.error ||
+            "The authoritative build runner could not validate this project.",
+        );
+      }
+      spec = validateProjectSpec(buildPayload.spec);
+      serverBuildWarning = buildPayload.warning || "";
+
+      const [{ compileProject }, { evaluateProjectQuality }] =
+        await Promise.all([
+          import("@/lib/project-compiler"),
+          import("@/lib/project-quality"),
+        ]);
+      const html = compileProject(spec);
+      setActivity(
+        "runtime",
+        "done",
+        "Standalone state, interactions and responsive runtime compiled",
+      );
+      setActivity(
+        "quality",
+        "active",
+        "Checking category fit, safety and data/action contracts",
+      );
+      // Keep the server release inspection authoritative. The browser
+      // evaluation is still computed to ensure this exact compiled artifact
+      // has not diverged before it enters Project Studio.
+      const browserQuality = evaluateProjectQuality(spec, html);
+      const quality = {
+        ...buildPayload.quality,
+        runtimeSmoke: browserQuality.runtimeSmoke,
+      };
+      const sandboxChecks = new Set([
+        "runtime",
+        "interactions",
+        "data-adapter",
+        "dropsbot",
+        "actions",
+      ]);
+      const staticFailures = quality.criticalFailures.filter(
+        (id) => !sandboxChecks.has(id),
+      );
+      if (staticFailures.length) {
+        throw new Error(
+          `Build stopped by quality gate (${quality.score}/100): ${staticFailures.join(", ")}.`,
+        );
+      }
+      setActivity(
+        "quality",
+        "done",
+        "Static contract passed · sandbox smoke continues in Studio",
+      );
+      const now = new Date().toISOString();
+      const project: GeneratedProject = {
+        id: crypto.randomUUID(),
+        spec,
+        html,
+        quality,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const studioHref = `/studio/${project.id}`;
+      const studioWarmup = Promise.allSettled([
+        Promise.resolve().then(() => router.prefetch(studioHref)),
+        warmProjectExperience(spec),
+      ]);
+      const stored = await saveProjectSafely(project, {
+        expectedUpdatedAt: null,
+      });
+      if (stored.status === "conflict") {
+        throw new Error(
+          "A project with this identity was created in another tab. Build again to keep both versions.",
+        );
+      }
+      let cloudSaved = false;
+      if (projectSyncAvailable) {
+        try {
+          await saveMemberProjectToCloud(project, 0);
+          cloudSaved = true;
+        } catch {
+          cloudSaved = false;
         }
       }
-
-      const html = compileProject(spec);
-      setActivity("runtime", "done", "Standalone state, interactions and responsive runtime compiled");
-      setActivity("quality", "active", "Checking category fit, safety and data/action contracts");
-      const quality = evaluateProjectQuality(spec, html);
-      const sandboxChecks = new Set(["runtime", "interactions", "dropstab", "dropsbot", "actions"]);
-      const staticFailures = quality.criticalFailures.filter((id) => !sandboxChecks.has(id));
-      if (staticFailures.length) {
-        throw new Error(`Build stopped by quality gate (${quality.score}/100): ${staticFailures.join(", ")}.`);
-      }
-      setActivity("quality", "done", "Static contract passed · sandbox smoke continues in Studio");
-      const now = new Date().toISOString();
-      const project: GeneratedProject = { id: crypto.randomUUID(), spec, html, quality, createdAt: now, updatedAt: now };
-      const next = [project, ...projects].slice(0, 50);
-      try {
-        window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify([project, ...projects.filter((item) => !item.spec.experience.backgroundImage).slice(0, 8)]));
-      }
+      const next = stored.projects;
       setProjects(next);
+      setToast(
+        serverBuildWarning
+          ? `${serverBuildWarning} Opening your editable live project…`
+          : cloudSaved
+            ? "Project built and saved to your account. Opening the live workspace…"
+            : projectSyncAvailable
+              ? "Project built and saved in this browser. Cloud sync will retry in Studio…"
+              : "Opening your editable live project…",
+      );
+      await studioWarmup;
       setBuilding(false);
-      router.push(`/studio/${project.id}`);
+      router.push(studioHref);
     } catch (error) {
-      setActivity("quality", "failed", error instanceof Error ? error.message : "Release checks failed");
-      setToast(error instanceof Error ? error.message : "Could not compile this project.");
+      setActivity(
+        "quality",
+        "failed",
+        error instanceof Error ? error.message : "Release checks failed",
+      );
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "Could not compile this project.",
+      );
       setBuilding(false);
     }
   }
@@ -698,13 +1633,19 @@ export function DropsStudio() {
     }
     const available = market.filter((coin) => coin.price !== "—");
     const marketCopy = available.length
-      ? available.slice(0, 3).map((coin) => coin.change === null
-        ? `${coin.name} percentage change is unavailable`
-        : `${coin.name} is ${coin.change >= 0 ? "up" : "down"} ${Math.abs(coin.change).toFixed(2)} percent`).join(". ")
+      ? available
+          .slice(0, 3)
+          .map((coin) =>
+            coin.change === null
+              ? `${coin.name} percentage change is unavailable`
+              : `${coin.name} is ${coin.change >= 0 ? "up" : "down"} ${Math.abs(coin.change).toFixed(2)} percent`,
+          )
+          .join(". ")
       : "The live market adapter has not returned data yet";
-    const copy = selectedPreset.preview === "siri"
-      ? `No portfolio is connected. Current market context: ${marketCopy}.`
-      : `Drops browser audio briefing. ${marketCopy}. Unlock and funding stories require a connected DropsTab endpoint.`;
+    const copy =
+      selectedPreset.preview === "siri"
+        ? `No portfolio is connected. Current market context: ${marketCopy}.`
+        : `Drops browser audio briefing. ${marketCopy}. Unlock and funding stories require a connected DropsTab endpoint.`;
     if ("speechSynthesis" in window) {
       const utterance = new SpeechSynthesisUtterance(copy);
       utterance.rate = 1.02;
@@ -740,153 +1681,385 @@ export function DropsStudio() {
 
   return (
     <main className="studio-shell">
-      <div className="aurora one" /><div className="aurora two" />
+      <div className="aurora one" />
+      <div className="aurora two" />
       <header className="studio-header">
         <Brand />
         <nav className={menuOpen ? "open" : ""} aria-label="Primary navigation">
-          <button type="button" onClick={() => { document.querySelector(".preset-section")?.scrollIntoView({ behavior: "smooth" }); setMenuOpen(false); }}>Templates</button>
-          <button type="button" onClick={() => { setProjectsOpen(true); setMenuOpen(false); }}>My Projects <span>{projects.length}</span></button>
-          <button type="button" onClick={() => { setConnectionOpen(true); setMenuOpen(false); }}>Connections</button>
-          <a href="https://api-docs.dropstab.com/" target="_blank" rel="noreferrer">Docs <ExternalLink size={13} /></a>
+          <button
+            type="button"
+            onClick={() => {
+              document
+                .querySelector(".preset-section")
+                ?.scrollIntoView({ behavior: "smooth" });
+              setMenuOpen(false);
+            }}
+          >
+            Templates
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setProjectsOpen(true);
+              setMenuOpen(false);
+            }}
+          >
+            My Projects <span>{projects.length}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConnectionOpen(true);
+              setMenuOpen(false);
+            }}
+          >
+            Connections
+          </button>
+          <a
+            href="https://api-docs.dropstab.com/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Docs <ExternalLink size={13} />
+          </a>
         </nav>
         <div className="header-actions">
-          <button className="api-vault-button" type="button" onClick={() => setConnectionOpen(true)}><KeyRound size={16} /> Connections</button>
-          <button className="mobile-menu" type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle menu">{menuOpen ? <X /> : <Menu />}</button>
+          <button
+            className="api-vault-button"
+            type="button"
+            onClick={() => setConnectionOpen(true)}
+          >
+            <KeyRound size={16} /> Connections
+          </button>
+          <button
+            className="mobile-menu"
+            type="button"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label="Toggle menu"
+          >
+            {menuOpen ? <X /> : <Menu />}
+          </button>
         </div>
       </header>
 
       <div className="studio-grid">
         <section className="builder-column">
-          <div className="hero-copy">
-            <span className="eyebrow"><Sparkles size={14} /> BUILD IN 5 MINUTES</span>
-            <h1>Turn a crypto idea<br />into a live project<span>.</span></h1>
-            <p>Choose a proven recipe or describe anything. Drops Studio assembles the data, triggers, AI brain and output around DropsTab + Drops Bot.</p>
-          </div>
+          {hero}
 
           <div className="prompt-frame">
             <div className="prompt-box">
               <WandSparkles size={22} />
-              <textarea value={prompt} onChange={(event) => { setPrompt(event.target.value); if (draftSpec && event.target.value.trim() !== draftSpec.prompt.trim()) setDraftSpec(null); }} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runPrompt(); }} placeholder="Describe the full product: output, users, behavior, design and data…" rows={2} aria-label="Describe your crypto project" />
-              <button type="button" onClick={() => void runPrompt()} disabled={planning || building} aria-label={runMode === "build" ? "Build a working project" : "Plan a working project"}>{planning || building ? <LoaderCircle className="spin" /> : runMode === "build" ? <Rocket /> : <Send />}</button>
+              <textarea
+                value={prompt}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  if (
+                    draftSpec &&
+                    event.target.value.trim() !== draftSpec.prompt.trim()
+                  )
+                    setDraftSpec(null);
+                }}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter")
+                    void runPrompt("build");
+                }}
+                placeholder="Describe the full product: output, users, behavior, design and data…"
+                rows={2}
+                aria-label="Describe your crypto project"
+              />
+              <button
+                className="prompt-build-button"
+                type="button"
+                onClick={() => void runPrompt("build")}
+                disabled={planning || building}
+                aria-label="Build now"
+              >
+                {planning || building ? (
+                  <LoaderCircle className="spin" />
+                ) : (
+                  <Rocket />
+                )}
+                <span>
+                  {building ? "Building…" : planning ? "Planning…" : "Build now"}
+                </span>
+              </button>
             </div>
-            <div className="prompt-runbar"><div className="run-mode" role="group" aria-label="Builder mode"><button type="button" className={runMode === "plan" ? "active" : ""} onClick={() => setRunMode("plan")}><WandSparkles /> Plan</button><button type="button" className={runMode === "build" ? "active" : ""} onClick={() => setRunMode("build")}><Rocket /> Build now</button></div><span>Requested output wins; wallet, AI and alerts become capabilities inside it.</span></div>
-            <div className="prompt-meta"><span>{planLabel}</span><span>{activeBrain === "free" ? `${guestRemaining ?? 3} free AI builds left today` : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}</span></div>
+            <div className="prompt-runbar">
+              <button
+                className="prompt-plan-button"
+                type="button"
+                onClick={() => void runPrompt("plan")}
+                disabled={planning || building}
+              >
+                <WandSparkles /> Plan
+              </button>
+              <span>
+                Your requested product comes first. Build it now, or review its
+                screens and actions.
+              </span>
+            </div>
+            <div className="prompt-meta">
+              <span>{planLabel}</span>
+              <span>
+                {activeBrain === "free"
+                  ? platformAiAvailable && guestRemaining !== null
+                    ? `${guestRemaining} ${memberConnected ? "signed-in" : "guest"} AI builds left today`
+                    : "Local build available"
+                  : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}
+              </span>
+            </div>
           </div>
 
-          {buildActivity.length > 0 && <div className="build-activity" aria-live="polite">{buildActivity.map((item) => <div className={item.status} key={item.id}><span>{item.status === "done" ? <Check /> : item.status === "active" ? <LoaderCircle className="spin" /> : item.status === "failed" ? <X /> : <i />}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div></div>)}</div>}
+          {buildActivity.length > 0 && (
+            <div className="build-activity" aria-live="polite">
+              {buildActivity.map((item) => (
+                <div className={item.status} key={item.id}>
+                  <span>
+                    {item.status === "done" ? (
+                      <Check />
+                    ) : item.status === "active" ? (
+                      <LoaderCircle className="spin" />
+                    ) : item.status === "failed" ? (
+                      <X />
+                    ) : (
+                      <i />
+                    )}
+                  </span>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <section className="preset-section" aria-labelledby="preset-title">
-            <div className="section-heading"><div><span>START WITH A RECIPE</span><h2 id="preset-title">Ideas that are worth building</h2></div><div className="carousel-controls"><button type="button" onClick={() => shiftPreset(-1)} aria-label="Previous preset"><ArrowLeft /></button><button type="button" onClick={() => shiftPreset(1)} aria-label="Next preset"><ArrowRight /></button></div></div>
+            <div className="section-heading">
+              <div>
+                <span>START WITH A RECIPE</span>
+                <h2 id="preset-title">Ideas that are worth building</h2>
+              </div>
+              <div className="carousel-controls">
+                <button
+                  type="button"
+                  onClick={() => shiftPreset(-1)}
+                  aria-label="Previous preset"
+                >
+                  <ArrowLeft />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => shiftPreset(1)}
+                  aria-label="Next preset"
+                >
+                  <ArrowRight />
+                </button>
+              </div>
+            </div>
             <div className="preset-carousel" ref={carouselRef}>
               {presets.map((preset) => {
-                const Icon = iconMap[preset.icon as keyof typeof iconMap] ?? Sparkles;
+                const Icon =
+                  iconMap[preset.icon as keyof typeof iconMap] ?? Sparkles;
                 const selected = preset.id === selectedId;
                 return (
-                  <button data-preset={preset.id} className={`preset-card ${selected ? "selected" : ""}`} style={{ "--preset-accent": preset.accent, "--preset-tint": preset.tint } as React.CSSProperties} key={preset.id} type="button" onClick={() => choosePreset(preset.id)} aria-pressed={selected}>
-                    <span className="preset-icon"><Icon size={22} /></span>
+                  <button
+                    data-preset={preset.id}
+                    className={`preset-card ${selected ? "selected" : ""}`}
+                    style={
+                      {
+                        "--preset-accent": preset.accent,
+                        "--preset-tint": preset.tint,
+                      } as React.CSSProperties
+                    }
+                    key={preset.id}
+                    type="button"
+                    onClick={() => choosePreset(preset.id)}
+                    aria-pressed={selected}
+                  >
+                    <span className="preset-icon">
+                      <Icon size={22} />
+                    </span>
                     <span className="preset-badge">{preset.badge}</span>
                     <strong>{preset.shortTitle}</strong>
                     <small>{preset.tagline}</small>
-                    <em>{preset.eta} <ChevronRight size={13} /></em>
+                    <em>
+                      {preset.eta} <ChevronRight size={13} />
+                    </em>
                   </button>
                 );
               })}
             </div>
           </section>
 
-          <AnimatePresence mode="wait">
-            <motion.section className="setup-card" key={`${selectedId}-${customMode}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22 }}>
+          {setupSection.ready ? (
+            <DropsStudioSetup
+              key={`${selectedId}-${customMode}`}
+              preset={selectedPreset}
+              draftSpec={draftSpec}
+              customMode={customMode}
+              values={values}
+              tools={customTools}
+              selectedTools={selectedTools}
+              providers={providerList.filter((item) =>
+                [
+                  "free",
+                  "openai",
+                  "anthropic",
+                  "openrouter",
+                  "kimi",
+                  "custom",
+                ].includes(item.id),
+              )}
+              connections={connections}
+              activeBrain={activeBrain}
+              dataMode={dataMode}
+              building={building}
+              onCustomModeChange={setCustomMode}
+              onUpdateField={updateField}
+              onSelectAllTools={() =>
+                setSelectedTools(customTools.map((tool) => tool.id))
+              }
+              onToggleTool={toggleTool}
+              onAddTool={() =>
+                setToast(
+                  "APIs, Telegram, AI and deployment accounts are added through Connections.",
+                )
+              }
+              onChooseProvider={(providerId) => {
+                const id = providerId as ProviderId;
+                const item = providerList.find((candidate) => candidate.id === id);
+                if (!item) return;
+                if (connections[id]) {
+                  setActiveBrain(id);
+                  window.sessionStorage.setItem(
+                    "drops-studio:active-brain",
+                    id,
+                  );
+                  setToast(`${item.name} is now the active brain.`);
+                } else openProvider(id);
+              }}
+              onRefreshMarket={refreshMarket}
+              onBuild={() => void buildProject()}
+              onBlank={() => {
+                setCustomMode(true);
+                setPrompt("");
+                setToast(
+                  "Idea mode enabled. Describe any crypto product and map it onto one of 12 extensible working foundations.",
+                );
+              }}
+            />
+          ) : (
+            <section
+              ref={setupSection.elementRef}
+              className="setup-card"
+              style={{ minHeight: "min(925px, 85vh)" }}
+              aria-busy="true"
+              aria-label="Preparing builder controls"
+            >
               <div className="setup-heading">
-                <div><span>{draftSpec ? "AI PRODUCT BLUEPRINT" : customMode ? "YOUR CUSTOM BLUEPRINT" : "SET UP THIS RECIPE"}</span><h2>{draftSpec?.name ?? selectedPreset.title}</h2><p>{draftSpec?.description ?? selectedPreset.description}</p></div>
-                <label className="custom-switch"><span>Custom mode</span><Switch.Root checked={customMode} onCheckedChange={setCustomMode}><Switch.Thumb /></Switch.Root></label>
-              </div>
-              <div className="field-grid">
-                {selectedPreset.fields.map((field) => (
-                  <label className="config-field" key={field.id}><span>{field.label}</span><SelectControl value={values[field.id] ?? field.value} options={field.options} onChange={(value) => updateField(field.id, value)} ariaLabel={field.label} /></label>
-                ))}
-              </div>
-
-              <AnimatePresence initial={false}>
-                {customMode && (
-                  <motion.div className="custom-stack" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-                    <div className="custom-stack-heading"><div><BrainCircuit size={18} /><span><strong>Recommended stack</strong><small>Toggle any capability. The blueprint stays editable.</small></span></div><button type="button" onClick={() => setSelectedTools(customTools.map((tool) => tool.id))}>Select all</button></div>
-                    <div className="tool-grid">
-                      {customTools.map((tool) => {
-                        const Icon = tool.icon;
-                        const active = selectedTools.includes(tool.id);
-                        return <button type="button" className={active ? "active" : ""} key={tool.id} onClick={() => toggleTool(tool.id)}><Icon size={16} />{tool.label}{active && <Check size={14} />}</button>;
-                      })}
-                    </div>
-                    <button className="add-custom-tool" type="button" onClick={() => setToast("APIs, Telegram, AI and deployment accounts are added through Connections.")}><Plus size={15} /> Add API, skill or custom endpoint</button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <div className="brain-row">
-                <div className="brain-label"><BrainCircuit size={18} /><div><strong>Choose the brain</strong><span>Free Auto works now. Bring your own model when you want more.</span></div></div>
-                <div className="provider-chips">
-                  {providerList.filter((item) => ["free", "openai", "anthropic", "openrouter", "kimi", "custom"].includes(item.id)).map((item) => (
-                    <button type="button" key={item.id} onClick={() => { if (connections[item.id]) { setActiveBrain(item.id); window.sessionStorage.setItem("drops-studio:active-brain", item.id); setToast(`${item.name} is now the active brain.`); } else openProvider(item.id); }} className={`${connections[item.id] ? "connected" : ""} ${activeBrain === item.id ? "active-brain" : ""}`}><span>{item.id === "free" ? <Sparkles /> : item.id === "custom" ? <Code2 /> : <Cloud />}</span>{item.name}{activeBrain === item.id ? <BadgeCheck size={13} /> : connections[item.id] && <Check size={13} />}</button>
-                  ))}
+                <div>
+                  <span>SET UP THIS RECIPE</span>
+                  <h2>{selectedPreset.title}</h2>
+                  <p>Preparing the editable data, logic and AI controls…</p>
                 </div>
               </div>
-
-              <div className="source-strip">
-                <div><BadgeCheck size={16} /><span><strong>Verified foundation</strong> · {(draftSpec?.tools ?? selectedPreset.tools).join(" · ")}</span></div>
-                <button type="button" onClick={refreshMarket}>{dataMode === "live" ? "Refresh live data" : "Connect live data"}</button>
-              </div>
-              <button className="build-button" type="button" onClick={() => void buildProject()} disabled={building}>{building ? <><LoaderCircle className="spin" size={19} />Compiling and running release checks…</> : <><Sparkles size={19} />{draftSpec ? `Build ${draftSpec.name}` : selectedPreset.cta}<ArrowRight size={18} /></>}</button>
-              <button className="blank-button" type="button" onClick={() => { setCustomMode(true); setPrompt(""); setToast("Blank canvas enabled. Describe anything or assemble the stack manually."); }}>Start from a blank canvas</button>
-            </motion.section>
-          </AnimatePresence>
+            </section>
+          )}
         </section>
 
-        <PreviewCanvas preset={selectedPreset} spec={draftSpec ?? undefined} values={values} market={market} dataMode={dataMode} prediction={prediction} isPlaying={isPlaying} onToggleAudio={toggleAudio} onAction={handlePreviewAction} />
+        {previewSection.ready ? (
+          <PreviewCanvas
+            preset={selectedPreset}
+            spec={draftSpec ?? undefined}
+            values={values}
+            market={market}
+            dataMode={dataMode}
+            prediction={prediction}
+            isPlaying={isPlaying}
+            onToggleAudio={toggleAudio}
+            onAction={handlePreviewAction}
+          />
+        ) : (
+          <section
+            ref={previewSection.elementRef}
+            className="preview-column"
+            aria-busy="true"
+            aria-label="Preparing product preview"
+          >
+            <div className="preview-status-row">
+              <span className="preview-ready">
+                Preparing category-native preview
+              </span>
+            </div>
+            <div className="preview-device" />
+          </section>
+        )}
       </div>
 
-      <footer className="studio-footer"><Brand /><p>Build on real crypto intelligence. You approve every external action.</p><div><a href="https://dropstab.com/" target="_blank" rel="noreferrer">DropsTab</a><a href="https://t.me/Drops" target="_blank" rel="noreferrer">Drops Bot</a><a href="https://api-docs.dropstab.com/" target="_blank" rel="noreferrer">API Docs</a></div></footer>
+      <footer className="studio-footer">
+        <Brand />
+        <p>
+          Build on real crypto intelligence. You approve every external action.
+        </p>
+        <div>
+          <a href="https://dropstab.com/" target="_blank" rel="noreferrer">
+            DropsTab
+          </a>
+          <a href="https://t.me/Drops" target="_blank" rel="noreferrer">
+            Drops Bot
+          </a>
+          <a
+            href="https://api-docs.dropstab.com/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            API Docs
+          </a>
+        </div>
+      </footer>
 
-      <Dialog.Root open={connectionOpen} onOpenChange={setConnectionOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="connections-dialog">
-            <div className="dialog-top"><div><Dialog.Title>Connections Hub</Dialog.Title><Dialog.Description>Connect AI, DropsTab data, Telegram accounts and bots. Sensitive credentials remain scoped to this browser session and are never compiled into public projects.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>
-            <div className="connection-layout">
-              <div className="provider-list">
-                {providerList.map((item) => <button type="button" key={item.id} className={providerId === item.id ? "active" : ""} onClick={() => { setProviderId(item.id); setProviderKey(""); setProviderModel(window.sessionStorage.getItem(`drops-studio:${item.id}:model`) ?? defaultModels[item.id] ?? ""); setCustomEndpoint(window.sessionStorage.getItem("drops-studio:custom-endpoint") ?? ""); }}><span>{item.id === "free" ? <Sparkles /> : item.id === "dropstab" ? <Database /> : item.id === "dropsbot" ? <Bot /> : item.id === "custom" ? <Code2 /> : <Cloud />}</span><div><strong>{item.name}</strong><small>{item.eyebrow}</small></div>{connections[item.id] && <Check className="provider-check" />}</button>)}
-              </div>
-              <div className={`provider-detail ${provider.id === "dropsbot" ? "telegram-provider-detail" : ""}`}>
-                {provider.id === "dropsbot" ? (
-                  <TelegramChannelWizard
-                    defaultTitle={selectedId === "morning-alpha" ? "Morning Alpha" : selectedId === "alpha-channel" ? "My Alpha Channel" : "My Drops Channel"}
-                    defaultAbout="Sourced crypto intelligence powered by DropsTab and automated with Drops Bot."
-                    defaultFirstPost="Channel created with Drops Studio. DropsTab market context and Drops Bot automation are ready to configure."
-                    onConnected={handleTelegramConnected}
-                  />
-                ) : <>
-                  <span className="detail-icon">{provider.id === "free" ? <Sparkles /> : provider.id === "dropstab" ? <Database /> : provider.id === "custom" ? <Code2 /> : <Cloud />}</span>
-                  <div className="detail-copy"><span>{provider.eyebrow}</span><h3>{provider.name}</h3><p>{provider.description}</p></div>
-                  {provider.id === "openrouter" && <div className="oauth-connect-card"><div><BadgeCheck /><span><strong>Connect account in one click</strong><small>OpenRouter creates a user-controlled key. It stays only in this browser tab.</small></span></div><button type="button" onClick={() => void connectOpenRouterAccount()}>Continue with OpenRouter <ArrowRight size={15} /></button><em>or use an existing API key below</em></div>}
-                  {provider.endpoint && <label className="key-field"><span>HTTPS chat-completions endpoint</span><input type="url" value={customEndpoint} onChange={(event) => setCustomEndpoint(event.target.value)} placeholder="https://api.example.com/v1/chat/completions" /></label>}
-                  {provider.keyLabel && <label className="key-field"><span>{provider.keyLabel}</span><div><LockKeyhole size={16} /><input type="password" autoComplete="off" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="••••••••••••••••" /></div></label>}
-                  {["openai", "anthropic", "openrouter", "kimi", "custom"].includes(provider.id) && <label className="key-field"><span>Model ID</span><input type="text" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} placeholder="Enter a model ID" /></label>}
-                  <div className="privacy-note"><LockKeyhole size={15} /><p><strong>Session-only storage.</strong> The key is never written to the project, database or local project history.{provider.id === "custom" ? " Custom requests go directly from your browser to the endpoint you choose." : ""}</p></div>
-                  <div className="provider-detail-actions">
-                    {provider.docs && <a href={provider.docs} target="_blank" rel="noreferrer">Open official docs <ExternalLink size={14} /></a>}
-                    <button type="button" onClick={connectProvider} disabled={testingConnection}>{testingConnection ? <><LoaderCircle className="spin" /> Testing…</> : provider.id === "custom" ? <>Save custom API <ArrowRight size={15} /></> : connections[provider.id] ? <>Re-test connection <BadgeCheck size={15} /></> : <>Connect & test <ArrowRight size={15} /></>}</button>
-                  </div>
-                </>}
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {(connectionOpen || projectsOpen) && (
+        <DropsStudioDialogs
+          connectionOpen={connectionOpen}
+          onConnectionOpenChange={setConnectionOpen}
+          projectsOpen={projectsOpen}
+          onProjectsOpenChange={setProjectsOpen}
+          providers={providerList}
+          provider={provider}
+          providerId={providerId}
+          connections={connections}
+          providerKey={providerKey}
+          providerModel={providerModel}
+          providerModelCatalog={providerModelCatalog}
+          customEndpoint={customEndpoint}
+          testingConnection={testingConnection}
+          selectedId={selectedId}
+          telegramProject={telegramProject}
+          telegramProjectSlug={telegramProjectSlug}
+          projects={projects}
+          onSelectProvider={selectProvider}
+          onProviderKeyChange={setProviderKey}
+          onProviderModelChange={selectProviderModel}
+          onCustomEndpointChange={setCustomEndpoint}
+          onConnectOpenRouter={() => void connectOpenRouterAccount()}
+          memberConnected={memberConnected}
+          projectSyncAvailable={projectSyncAvailable}
+          onDisconnectOpenRouter={() => void disconnectOpenRouterAccount()}
+          onConnectProvider={() => void connectProvider()}
+          onTelegramConnected={handleTelegramConnected}
+          onOpenProject={(id) => router.push(`/studio/${id}`)}
+        />
+      )}
 
-      <Dialog.Root open={projectsOpen} onOpenChange={setProjectsOpen}>
-        <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="projects-dialog"><div className="dialog-top"><div><Dialog.Title>My Projects</Dialog.Title><Dialog.Description>Working products saved in this browser. Open one to edit, run and publish it.</Dialog.Description></div><Dialog.Close className="dialog-close"><X /></Dialog.Close></div>{projects.length ? <div className="project-list">{projects.map((project) => { const projectPreset = presets.find((item) => item.id === project.spec.presetId); return <button type="button" key={project.id} onClick={() => router.push(`/studio/${project.id}`)}><span><Save size={17} /></span><div><strong>{project.spec.name}</strong><small>{projectPreset?.output ?? "Live application"} · {project.publishedUrl ? "Published" : "Ready to run"} · {new Date(project.createdAt).toLocaleDateString()}</small></div><ChevronRight /></button>; })}</div> : <div className="empty-projects"><Rocket /><strong>No projects yet</strong><p>Pick a recipe, tune the settings and compile your first working product.</p></div>}</Dialog.Content></Dialog.Portal>
-      </Dialog.Root>
-
-      <div className={`toast ${toast ? "visible" : ""}`} role="status" aria-live="polite"><CircleHelp size={17} />{toast}</div>
+      <div
+        className={`toast ${toast ? "visible" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        <CircleHelp size={17} />
+        {toast}
+      </div>
     </main>
   );
 }

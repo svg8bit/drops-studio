@@ -1,0 +1,335 @@
+/* Tablet: keep one contextual side surface and make Director reachable by tab. */
+@media (max-width: 1280px) {
+  .project-studio-layout,
+  .project-studio-layout.tab-connections {
+    grid-template-areas: "rail side canvas";
+    grid-template-columns: 62px minmax(320px, 360px) minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .project-studio-topbar {
+    padding-inline: 12px;
+  }
+
+  .workspace-actions {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .workspace-actions button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    min-width: 44px;
+    padding-inline: 10px;
+  }
+
+  .stage-toolbar button {
+    min-width: 44px;
+  }
+
+  .studio-inspector,
+  .assistant-panel {
+    grid-area: side;
+    height: auto;
+    max-height: none;
+  }
+
+  .assistant-panel .quick-prompts {
+    max-height: 148px;
+  }
+
+  .runtime-stage {
+    grid-area: canvas;
+  }
+
+  .project-studio-layout.tab-director .assistant-panel {
+    display: flex;
+  }
+
+  .project-studio-layout.tab-director .studio-inspector {
+    display: none;
+  }
+
+  .project-studio-layout:not(.tab-director) .assistant-panel {
+    display: none;
+  }
+
+  .project-studio-layout:not(.tab-director) .studio-inspector {
+    display: block;
+  }
+
+  .project-statusbar {
+    display: grid;
+  }
+}
+
+@media (min-width: 921px) and (max-width: 1280px) {
+  .project-studio-shell {
+    padding-bottom: 52px;
+  }
+
+  .project-studio-layout,
+  .project-studio-layout.tab-connections {
+    height: calc(100vh - 116px);
+    min-height: 0;
+  }
+
+  .runtime-browser {
+    min-height: 0;
+  }
+
+  .project-statusbar {
+    gap: 0;
+    grid-template-columns:
+      minmax(140px, 1fr)
+      minmax(154px, 1fr)
+      minmax(174px, 1.1fr)
+      minmax(128px, .8fr)
+      auto;
+    height: 52px;
+    padding: 4px 12px;
+  }
+
+  .project-statusbar > span,
+  .project-statusbar > span + span {
+    min-height: 44px;
+    min-width: 0;
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+}
+
+/* Mobile: actions scroll instead of disappearing; status and navigation stay persistent. */
+@media (max-width: 920px) {
+  .project-studio-shell {
+    padding-bottom: 121px;
+  }
+
+  .project-studio-topbar {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    height: auto;
+    min-height: 118px;
+    padding: 8px 10px;
+  }
+
+  .project-crumbs {
+    min-height: 44px;
+  }
+
+  .project-crumbs > i,
+  .project-crumbs > span:not(.studio-brand-mark),
+  .project-crumbs > b {
+    display: none;
+  }
+
+  .workspace-actions {
+    display: flex;
+    gap: 8px;
+    margin-inline: -2px;
+    padding: 2px 2px 6px;
+    scroll-snap-type: x proximity;
+    width: calc(100% + 4px);
+  }
+
+  .workspace-actions button,
+  .workspace-actions button:nth-child(-n + 3) {
+    display: flex;
+    min-height: 44px;
+    min-width: 44px;
+    scroll-snap-align: start;
+  }
+
+  .project-studio-layout,
+  .project-studio-layout.tab-connections {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: calc(100vh - 118px);
+  }
+
+  .studio-rail {
+    border-bottom: 1px solid var(--ps-line);
+    border-right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: row;
+    left: 0;
+    min-height: 76px;
+    order: 3;
+    overflow-x: auto;
+    padding: 6px;
+    position: fixed;
+    right: 0;
+    scrollbar-width: thin;
+    z-index: 40;
+  }
+
+  .studio-rail > button {
+    flex: 1 0 72px;
+    min-height: 52px;
+  }
+
+  .studio-rail > button.mobile-preview-tab {
+    display: flex;
+  }
+
+  .rail-foundation {
+    display: none;
+  }
+
+  .runtime-stage {
+    display: none;
+  }
+
+  .studio-inspector,
+  .assistant-panel {
+    border: 0;
+    height: auto;
+    max-height: none;
+    min-height: calc(100dvh - 239px);
+    order: 1;
+    padding-bottom: 80px;
+  }
+
+  .project-studio-layout.tab-director .assistant-panel {
+    display: flex;
+  }
+
+  .project-studio-layout.tab-director .studio-inspector {
+    display: none;
+  }
+
+  .project-studio-layout:not(.tab-director) .assistant-panel {
+    display: none;
+  }
+
+  .project-studio-layout:not(.tab-director) .studio-inspector {
+    display: block;
+  }
+
+  .project-studio-layout.tab-preview .runtime-stage {
+    display: block;
+    height: 720px;
+    min-height: calc(100dvh - 239px);
+    order: 1;
+    padding: 9px;
+  }
+
+  .project-studio-layout.tab-preview .studio-inspector,
+  .project-studio-layout.tab-preview .assistant-panel {
+    display: none;
+  }
+
+  .project-statusbar {
+    bottom: 77px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    height: 44px;
+    padding-inline: 10px;
+  }
+
+  .project-statusbar > span {
+    min-width: 0;
+    overflow: hidden;
+    padding-inline: 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .project-statusbar > span:nth-child(2),
+  .project-statusbar > span:nth-child(3) {
+    display: none;
+  }
+
+  .project-statusbar > span:nth-child(4) {
+    padding-left: 8px;
+  }
+
+  .project-statusbar .operational {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace-actions {
+    display: grid;
+    gap: 6px;
+    gap: 6px;
+    grid-template-columns: 44px 44px minmax(72px, 1fr) 44px 44px minmax(82px, 1fr);
+    margin-inline: 0;
+    overflow: visible;
+    padding: 2px 0 6px;
+    width: 100%;
+  }
+
+  .workspace-actions button {
+    min-width: 44px;
+    padding-inline: 8px;
+  }
+
+  .workspace-actions .workspace-connections-action > span,
+  .workspace-actions .publish-top > svg:last-child {
+    display: none;
+  }
+
+  .project-crumbs .drops-brand {
+    max-width: 190px;
+  }
+
+  .runtime-preview-label {
+    display: none;
+  }
+
+  .runtime-ready-label {
+    display: inline;
+  }
+
+  .stage-toolbar {
+    align-items: stretch;
+    display: grid;
+    gap: 6px;
+    height: auto;
+    margin-bottom: 8px;
+  }
+
+  .stage-toolbar > div {
+    display: grid;
+    gap: 5px;
+    width: 100%;
+  }
+
+  .stage-toolbar .device-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stage-toolbar > div:last-child {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .stage-toolbar button {
+    justify-content: center;
+    line-height: 1.2;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 5px;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .runtime-browser {
+    height: calc(100% - 102px);
+    min-height: 620px;
+  }
+
+  .browser-bar > b[data-runtime-ready="false"] {
+    color: #7d8b9f;
+  }
+
+  .browser-bar > b[data-runtime-ready="false"] i {
+    background: #94a3b8;
+    box-shadow: none;
+  }
+}

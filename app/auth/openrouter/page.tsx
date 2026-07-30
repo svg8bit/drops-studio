@@ -28,15 +28,21 @@ export default function OpenRouterCallbackPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ code, codeVerifier: verifier }),
         });
-        const payload = await response.json() as { key?: string; error?: string };
-        if (!response.ok || !payload.key) throw new Error(payload.error ?? "OpenRouter connection failed.");
+        const payload = await response.json().catch(() => ({})) as {
+          key?: string;
+          account?: { provider?: string; connected?: boolean };
+          error?: string;
+        };
+        if (!response.ok || !payload.key || !payload.account?.connected) {
+          throw new Error(payload.error ?? "OpenRouter connection failed.");
+        }
 
         window.sessionStorage.removeItem("drops-studio:openrouter:pkce");
         window.sessionStorage.setItem("drops-studio:openrouter", payload.key);
         window.sessionStorage.setItem("drops-studio:openrouter:model", "openrouter/free");
         window.sessionStorage.setItem("drops-studio:active-brain", "openrouter");
         setState("success");
-        setMessage("OpenRouter is connected. Returning to Drops Studio…");
+        setMessage("OpenRouter and your signed-in Studio member session are connected. Returning to Drops Studio…");
         window.setTimeout(() => window.location.replace("/?connections=1&openrouter=connected"), 650);
       } catch (error) {
         setState("error");

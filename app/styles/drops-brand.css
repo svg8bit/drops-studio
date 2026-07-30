@@ -1,0 +1,142 @@
+.drops-brand {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 12px;
+  min-width: 0;
+}
+
+.drops-brand-marks {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  isolation: isolate;
+  min-width: 54px;
+}
+
+.drops-brand-dropstab,
+.drops-brand-bot {
+  border: 2px solid #fff;
+  box-shadow: 0 8px 22px rgba(34, 79, 165, 0.18);
+  height: 38px;
+  width: 38px;
+}
+
+.drops-brand-dropstab {
+  align-items: center;
+  background: linear-gradient(145deg, #fff, #e9f2ff);
+  border-radius: 12px;
+  display: flex;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+}
+
+.drops-brand-dropstab img {
+  height: 25px;
+  width: auto;
+}
+
+.drops-brand-bot {
+  border-radius: 12px;
+  margin-left: -10px;
+  object-fit: cover;
+  position: relative;
+  z-index: 1;
+}
+
+.studio-header .drops-brand-marks {
+  min-width: 54px;
+}
+
+.drops-brand-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.drops-brand-copy > strong {
+  color: #07142f;
+  font-size: 20px;
+  font-weight: 760;
+  letter-spacing: -0.45px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drops-brand-partners {
+  align-items: center;
+  color: #66758d;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 5px;
+  line-height: 1.2;
+}
+
+.drops-brand-partners > span {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 680;
+  gap: 4px;
+}
+
+.drops-brand-partners img {
+  border-radius: 4px;
+  height: 14px;
+  object-fit: contain;
+  width: auto;
+}
+
+.drops-brand-partners i {
+  color: #a0aabc;
+  font-style: normal;
+}
+
+.drops-brand-compact {
+  gap: 9px;
+}
+
+.drops-brand-compact .drops-brand-marks {
+  min-width: 46px;
+}
+
+.drops-brand-compact .drops-brand-dropstab,
+.drops-brand-compact .drops-brand-bot {
+  border-radius: 10px;
+  height: 32px;
+  width: 32px;
+}
+
+.drops-brand-compact .drops-brand-dropstab img {
+  height: 21px;
+  width: auto;
+}
+
+.drops-brand-compact .drops-brand-bot {
+  margin-left: -8px;
+}
+
+.drops-brand-compact .drops-brand-copy > strong {
+  font-size: 14px;
+}
+
+@media (max-width: 520px) {
+  .studio-header .drops-brand-marks {
+    min-width: 54px;
+  }
+
+  .studio-header .drops-brand-bot {
+    display: block;
+  }
+
+  .drops-brand:not(.drops-brand-compact) .drops-brand-partners {
+    display: none;
+  }
+
+  .drops-brand-copy > strong {
+    font-size: 17px;
+  }
+}

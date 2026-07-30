@@ -1,0 +1,243 @@
+/* Workspace v2: one focused side panel plus a large live canvas, inspired by modern AI builders. */
+.project-studio-shell { padding-bottom: 36px; }
+.project-studio-topbar { height: 64px; padding: 0 20px; }
+.project-crumbs strong { font-size: 14px; }.project-crumbs > span:not(.studio-brand-mark) { font-size: 13px; }.project-crumbs > b { font-size: 12px; padding: 6px 9px; }
+.workspace-actions button { border-radius: 10px; font-size: 12px; min-height: 44px; padding: 0 13px; }.workspace-actions button svg { height: 15px; width: 15px; }
+.workspace-actions .workspace-icon-action { flex: 0 0 44px; justify-content: center; padding: 0; width: 44px; }
+.workspace-actions .workspace-icon-action > span { display: none; }
+.project-studio-layout { display: grid; grid-template-areas: "rail side canvas"; grid-template-columns: 68px 390px minmax(0,1fr); height: calc(100vh - 100px); min-height: 690px; }
+.project-studio-layout.tab-connections { grid-template-columns: 68px minmax(480px,540px) minmax(600px,1fr); }
+.studio-rail { grid-area: rail; padding: 12px 7px; }.studio-rail > button { font-size: 12px; gap: 6px; min-height: 58px; }.studio-rail > button svg { height: 20px; width: 20px; }
+.studio-rail > button.mobile-preview-tab { display: none; }
+.studio-inspector,.assistant-panel { grid-area: side; min-height: 0; }.runtime-stage { grid-area: canvas; }
+.project-studio-layout.tab-director .studio-inspector { display: none; }.project-studio-layout:not(.tab-director) .assistant-panel { display: none; }
+.studio-inspector { border-right: 1px solid var(--ps-line); container-name: studio-inspector; container-type: inline-size; padding: 24px 22px 38px; }.inspector-section { max-width: 100%; }
+.inspector-heading { margin-bottom: 16px; }.inspector-heading > span { font-size: 16px; gap: 8px; }.inspector-heading svg { height: 18px; width: 18px; }.inspector-heading > b { font-size: 12px; padding: 6px 8px; }
+.inspector-copy { font-size: 13px; line-height: 1.55; margin-bottom: 18px; }.inspector-section > label,.design-tokens label,.selected-inspector label,.logic-grid label { font-size: 12px; gap: 7px; margin-bottom: 14px; }
+.inspector-section input,.inspector-section textarea,.inspector-section select { border-radius: 10px; font-size: 13px; min-height: 42px; padding: 10px 12px; }.inspector-primary,.inspector-secondary { border-radius: 10px; font-size: 13px; min-height: 44px; }.section-label { font-size: 12px; margin: 20px 0 10px; }
+.director-pipeline > span { grid-template-columns: 27px 1fr auto; padding: 12px; }.director-pipeline i { font-size: 12px; height: 24px; width: 24px; }.director-pipeline b { font-size: 12px; }.director-pipeline small { font-size: 12px; }
+.experience-brief,.game-brief,.blueprint-inspector { border-radius: 14px; padding: 14px; }.experience-brief > span,.game-brief > span,.blueprint-inspector > span { font-size: 12px; }.experience-brief dt,.game-brief dt,.blueprint-inspector dt { font-size: 12px; }.experience-brief dd,.game-brief dd,.blueprint-inspector dd { font-size: 12px; }.experience-brief p,.game-brief p,.blueprint-inspector > p { font-size: 12px; }.experience-brief > div:last-child i { font-size: 12px; }
+.design-mode-control { border-radius: 12px; grid-template-columns: 34px 1fr auto; padding: 12px; }.design-mode-control > svg { height: 19px; width: 19px; }.design-mode-control strong { font-size: 12px; }.design-mode-control small { font-size: 12px; }.design-mode-control > i { font-size: 12px; }
+.design-kits { gap: 9px; }.design-kits > button { border-radius: 12px; grid-template-columns: 76px 1fr auto; padding: 9px; }.kit-preview { height: 44px; }.design-kits strong { font-size: 12px; }.design-kits small { font-size: 12px; line-height: 1.35; }
+.foundation-card,.brain-card { border-radius: 12px; grid-template-columns: 42px 1fr auto; padding: 12px; }.foundation-card > span,.brain-card > span { height: 40px; }.foundation-card strong,.brain-card strong { font-size: 12px; }.foundation-card small,.brain-card small { font-size: 12px; }.foundation-card > b,.brain-card > b { font-size: 12px; }
+.data-budget { padding: 12px; }.data-budget strong { font-size: 12px; }.data-budget span { font-size: 12px; }.data-budget > b { font-size: 12px; }.asset-list > div { padding: 11px; }.asset-list strong { font-size: 12px; }.asset-list small,.asset-list b { font-size: 12px; }.safety-note { padding: 12px; }.safety-note strong { font-size: 12px; }.safety-note small { font-size: 12px; }
+.module-editor > div { grid-template-columns: 16px minmax(0,1fr) repeat(3,44px); padding: 7px 8px; }.module-editor input { font-size: 12px; min-height: 44px; }.module-editor button { font-size: 12px; height: 44px; min-height: 44px; min-width: 44px; }.module-editor .module-add { grid-template-columns: 16px minmax(0,1fr) 44px; }
+.tool-stack > span { font-size: 12px; }.tool-stack > div,.ai-capabilities span { font-size: 12px; }.upgrade-card { border-radius: 13px; padding: 14px; }.upgrade-card strong { font-size: 13px; }.upgrade-card p { font-size: 12px; }.upgrade-card span { font-size: 12px; }
+.file-tree span,.file-tree button { font-size: 12px; padding: 12px; }.file-tree b { font-size: 12px; }.git-card { border-radius: 13px; padding: 14px; }.git-card strong { font-size: 12px; }.git-card small { font-size: 12px; }.git-card p { font-size: 12px; }.git-card button { font-size: 12px; min-height: 40px; }
+.quality-hero { padding: 14px; }.quality-hero strong { font-size: 13px; }.quality-hero small { font-size: 12px; }.quality-list > div { padding: 11px; }.quality-list strong { font-size: 12px; }.quality-list small { font-size: 12px; }.quality-list b { font-size: 12px; }
+.checkpoint-list { gap: 9px; }.checkpoint-list > button { padding: 12px; }.checkpoint-list strong { font-size: 12px; }.checkpoint-list small { font-size: 12px; }.checkpoint-list > button > b { font-size: 12px; }
+.runtime-stage { background: #eef2f8; overflow: auto; padding: 13px 16px 16px; }.stage-toolbar { height: 44px; margin-bottom: 10px; }.stage-toolbar button { font-size: 12px; min-height: 44px; padding: 0 10px; }.stage-toolbar svg { height: 14px; width: 14px; }
+.runtime-browser { height: calc(100% - 54px); min-height: 600px; }.browser-bar { height: 38px; }.browser-bar > strong { font-size: 12px; min-width: 180px; }.browser-bar > b { font-size: 12px; }.runtime-browser iframe { height: calc(100% - 38px); }
+.assistant-panel { overflow: hidden; }.assistant-panel > header,.chat-context,.quick-prompts,.chat-composer,.assistant-foot { flex-shrink: 0; }.assistant-panel > header { min-height: 72px; padding: 14px 16px; }.assistant-panel > header strong { font-size: 15px; }.assistant-panel > header small { font-size: 12px; }.director-avatar { height: 40px; width: 40px; }
+.chat-context { font-size: 12px; padding: 10px 14px; }.conversation { padding: 18px 16px; }.assistant-guide { border-radius: 14px; gap: 9px; padding: 15px; }.assistant-guide > strong { font-size: 14px; }.assistant-guide > p { font-size: 12px; }.assistant-guide > span { grid-template-columns: 28px 1fr; padding: 9px; }.assistant-guide > span b { font-size: 12px; }.assistant-guide > span small { font-size: 12px; }
+.conversation article > span { font-size: 12px; }.conversation article > p { border-radius: 5px 14px 14px 14px; font-size: 13px; line-height: 1.55; padding: 12px 13px; }.proposal-card > header { padding: 12px; }.proposal-card > header strong { font-size: 12px; }.proposal-card li { font-size: 12px; }.proposal-card > div button { font-size: 12px; min-height: 36px; }.quick-prompts { padding: 10px 12px 6px; }.quick-prompts button { font-size: 12px; min-height: 32px; padding: 6px 10px; }.chat-composer { border-radius: 14px; margin: 8px 12px 10px; }.chat-composer textarea { font-size: 13px; min-height: 92px; padding: 13px; }.chat-composer footer span { font-size: 12px; }.assistant-foot { font-size: 12px; padding-bottom: 11px; }
+.project-statusbar { height: 36px; padding: 0 16px; }.project-statusbar > span,.project-statusbar strong { font-size: 12px; }.project-statusbar b { font-size: 12px; }
+.connection-summary-grid { display: grid; gap: 9px; margin-bottom: 20px; }.connection-summary-grid > button { align-items: center; background: #fff; border: 1px solid #dce5f1; border-radius: 13px; color: #45617e; display: grid; gap: 10px; grid-template-columns: 36px 1fr 18px; padding: 11px; text-align: left; }.connection-summary-grid > button:hover { background: #f5f8ff; border-color: #a8c0ef; }.connection-summary-grid > button > svg:first-child { color: var(--ps-blue); height: 19px; width: 19px; }.connection-summary-grid > button > svg:last-child { height: 15px; width: 15px; }.connection-summary-grid strong { color: #1a2b46; display: block; font-size: 12px; }.connection-summary-grid small { color: #7c8a9e; display: block; font-size: 12px; line-height: 1.4; margin-top: 3px; }
+.connections-inspector .telegram-wizard { margin-top: 4px; }.connections-inspector .telegram-wizard-intro { padding: 16px; }.connections-inspector .telegram-wizard-intro h3 { font-size: 18px; }.connections-inspector .telegram-wizard-intro p { font-size: 12px; }.connections-inspector .telegram-form-grid,.connections-inspector .telegram-bot-choice,.connections-inspector .telegram-success-checks { grid-template-columns: 1fr; }
+.connections-inspector .telegram-auth-card,.connections-inspector .telegram-channel-builder,.connections-inspector .telegram-success { padding: 16px; }
+.element-inspector { background: #fff; border-color: #a9c4f7; border-radius: 14px; box-shadow: 0 12px 30px rgba(38,75,137,.1); padding: 14px; }
+.element-inspector-head { align-items: start; display: grid!important; gap: 3px 8px!important; grid-template-columns: 1fr auto; margin-bottom: 14px!important; }
+.element-inspector-head > span,.element-inspector-head > strong { grid-column: 1; }.element-inspector-head > span { font-size: 12px!important; text-transform: uppercase; }.element-inspector-head > strong { font-size: 13px!important; line-height: 1.35; }.element-inspector-head > button { align-self: center; background: #f3f6fb; border: 1px solid #dce4ef; border-radius: 8px; color: #61748e; font-size: 12px; grid-column: 2; grid-row: 1 / span 2; min-height: 32px; padding: 0 10px; }
+.element-inspector > label { color: #546983; display: grid; font-size: 12px; font-weight: 720; gap: 6px; margin-bottom: 12px; }.element-inspector textarea { line-height: 1.45; resize: vertical; }
+.element-image-upload { align-items: center; background: #f5f8ff; border: 1px dashed #a8c1f0; border-radius: 11px; cursor: pointer; grid-template-columns: 28px 1fr!important; padding: 10px; position: relative; }.element-image-upload > svg { color: var(--ps-blue); height: 19px; width: 19px; }.element-image-upload span { display: grid; gap: 2px; }.element-image-upload strong { color: #263d5c; font-size: 12px; }.element-image-upload small { color: #74859b; font-size: 12px; line-height: 1.35; }.element-image-upload input { inset: 0; opacity: 0; position: absolute; }
+.element-control-grid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }.element-control-grid label { color: #667891; display: grid; font-size: 12px; font-weight: 700; gap: 5px; margin: 0; min-width: 0; }.element-control-grid input,.element-control-grid select { min-height: 44px; padding: 8px 9px; }
+.element-control-grid label:has(.element-color) { grid-column: 1 / -1; }
+.element-color { align-items: center; background: #f8faff; border: 1px solid #dce5f1; border-radius: 10px; display: grid; gap: 8px; grid-template-columns: 44px minmax(0,1fr) 44px; min-height: 54px; min-width: 0; overflow: hidden; padding: 4px; width: 100%; }.element-color:not(:has(button)) { grid-template-columns: 44px minmax(0,1fr); }.element-color input { border: 0!important; border-radius: 7px; height: 44px!important; min-height: 44px!important; min-width: 44px!important; padding: 0!important; width: 44px!important; }.element-color b { color: #596b82; font-size: 12px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.element-color button { align-items: center; background: #eef3fb; border: 0; border-radius: 8px; color: #52617a; display: flex; font-size: 18px; height: 44px; justify-content: center; padding: 0; width: 44px; }
+.element-inspector .toggle-line { background: #f5f8fd; border: 1px solid #e0e7f1; border-radius: 9px; margin: 12px 0; padding: 9px 10px; }.element-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }.element-actions button { align-items: center; background: white; border: 1px solid #ccd8e8; border-radius: 9px; color: #47617f; display: flex; font-size: 12px; font-weight: 750; gap: 6px; justify-content: center; min-height: 40px; }.element-actions button:first-child { background: var(--ps-blue); border-color: var(--ps-blue); color: white; }.element-actions svg { height: 14px; width: 14px; }
+
+@container studio-inspector (max-width: 280px) {
+  .element-control-grid,
+  .logic-grid,
+  .element-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .element-inspector-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .element-inspector-head > button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    min-height: 44px;
+  }
+}
+
+/*
+ * Current Project Studio contract.
+ * Keep the rebuilt rail + inspector + live canvas + Director architecture.
+ * Publish remains a contextual dialog; this layout never adds a publish column.
+ */
+@media (min-width: 1600px) {
+  .project-studio-layout,
+  .project-studio-layout.tab-connections {
+    grid-template-areas: "rail inspector canvas director";
+    grid-template-columns:
+      68px
+      minmax(300px, 340px)
+      minmax(680px, 1fr)
+      minmax(340px, 400px);
+  }
+
+  .studio-rail {
+    grid-area: rail;
+  }
+
+  .studio-inspector,
+  .project-studio-layout.tab-director .studio-inspector {
+    display: block;
+    grid-area: inspector;
+  }
+
+  .runtime-stage {
+    grid-area: canvas;
+  }
+
+  .assistant-panel,
+  .project-studio-layout:not(.tab-director) .assistant-panel {
+    display: flex;
+    grid-area: director;
+  }
+}
+
+@media (min-width: 1760px) {
+  .project-studio-layout,
+  .project-studio-layout.tab-connections {
+    grid-template-columns:
+      72px
+      minmax(320px, 380px)
+      minmax(680px, 1fr)
+      minmax(360px, 400px);
+  }
+}
+
+/* Controls and labels are readable without relying on a global emergency override. */
+.project-studio-shell :is(
+  button,
+  input:not([type="hidden"]),
+  select,
+  textarea,
+  [role="button"],
+  [role="combobox"],
+  [role="option"],
+  [role="switch"],
+  [role="tab"]
+) {
+  font-size: 14px;
+}
+
+.project-studio-shell label,
+.project-studio-shell :is(
+  .inspector-section > label,
+  .design-tokens label,
+  .selected-inspector label,
+  .logic-grid label,
+  .element-inspector > label,
+  .element-control-grid label
+) {
+  font-size: 14px;
+}
+
+/* Ordinary product and conversation copy stays at the body scale. */
+.project-studio-shell p,
+.project-studio-shell .inspector-copy,
+.project-studio-shell .conversation article > p {
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+/* Dense explanatory copy may use 14px; 12px remains metadata/helper-only. */
+.project-studio-shell :is(
+  .game-brief p,
+  .experience-brief p,
+  .blueprint-inspector > p,
+  .upgrade-card p,
+  .git-card p,
+  .connections-inspector .telegram-wizard-intro p
+) {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.project-studio-shell :is(
+  .project-crumbs strong,
+  .studio-rail > button,
+  .inspector-heading > span,
+  .director-pipeline b,
+  .experience-brief dd,
+  .game-brief dd,
+  .blueprint-inspector dd,
+  .design-mode-control strong,
+  .design-kits strong,
+  .foundation-card strong,
+  .brain-card strong,
+  .data-budget strong,
+  .data-budget span,
+  .asset-list strong,
+  .tool-stack > div,
+  .ai-capabilities span,
+  .upgrade-card strong,
+  .file-tree span,
+  .file-tree button,
+  .git-card strong,
+  .quality-hero strong,
+  .quality-list strong,
+  .checkpoint-list strong,
+  .assistant-panel > header strong,
+  .chat-context,
+  .assistant-guide > strong,
+  .assistant-guide > span b,
+  .proposal-card > header strong,
+  .proposal-card li,
+  .connection-summary-grid strong,
+  .element-inspector-head > strong,
+  .element-inspector > label,
+  .element-control-grid label
+) {
+  font-size: 14px;
+}
+
+.project-studio-shell .assistant-panel > header strong,
+.project-studio-shell .assistant-guide > strong {
+  font-size: 16px;
+}
+
+@media (min-width: 921px) {
+  .project-studio-shell .quick-prompts {
+    display: grid;
+    grid-template-columns: 1fr;
+    max-height: 196px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .project-studio-shell .quick-prompts button {
+    align-items: center;
+    display: flex;
+    justify-content: flex-start;
+    text-align: left;
+    white-space: normal;
+  }
+}
+
+/* This legacy rule used !important, so neutralize it explicitly at the policy floor. */
+.project-studio-shell .element-inspector-head > strong {
+  font-size: 14px !important;
+}
+
+:where(.source-dialog, .publish-dialog) p {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.project-statusbar {
+  display: grid;
+}
+
+.project-statusbar:focus-visible {
+  outline: 3px solid var(--ps-focus);
+  outline-offset: -3px;
+}

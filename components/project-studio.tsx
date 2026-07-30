@@ -3,7 +3,6 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- Vinext's next/link shim currently duplicates React during browser navigation; plain anchors preserve a working route transition. */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import Image from "next/image";
 import {
   ArrowDown,
   ArrowLeft,
@@ -42,6 +41,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Redo2,
   Undo2,
   UploadCloud,
   WandSparkles,
@@ -51,12 +51,32 @@ import {
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { compileProject } from "@/lib/project-compiler";
+import { applyPresetFieldValue } from "@/lib/project-factory";
+import {
+  commitProjectCheckpoint,
+  redoProjectCheckpoint,
+  undoProjectCheckpoint,
+} from "@/lib/project-history";
 import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
-import { createFreeDirectorProposal, createFreeElementDirectorProposal, DESIGN_DIRECTIONS, type DirectorProposal } from "@/lib/project-director";
+import { DropsBrand } from "@/components/drops-brand";
+import {
+  createFreeDirectorProposal,
+  createFreeElementDirectorProposal,
+  DESIGN_DIRECTIONS,
+  type DirectorProposal,
+} from "@/lib/project-director";
 import { createProjectArchive } from "@/lib/project-export";
 import { applyAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import { evaluateProjectQuality } from "@/lib/project-quality";
+import {
+  mergePublicationState,
+  publishMutationForProject,
+} from "@/lib/publish-lifecycle";
 import { getProductReality } from "@/lib/product-reality";
+import {
+  readProjectsFromStore,
+  saveProjectSafely,
+} from "@/lib/project-store";
 import type {
   GeneratedProject,
   GeneratedProjectSpec,
@@ -67,31 +87,59 @@ import type {
   ProjectProvider,
   ProjectRuntimeSmokeResult,
 } from "@/lib/project-types";
-import { PROJECTS_STORAGE_KEY } from "@/lib/project-types";
 import { validateProjectSpec } from "@/lib/project-validator";
-import { presets } from "@/lib/presets";
+import { getProjectPreset } from "@/lib/presets";
+import {
+  listMemberProjectsFromCloud,
+  materializeMemberProject,
+  MemberProjectSyncError,
+  saveMemberProjectToCloud,
+} from "@/lib/member-project-sync-client";
+import {
+  prepareEditableRuntimeHtml,
+  validateEditableRuntimeHtml,
+} from "@/lib/source-workspace";
 
-type InspectorTab = "director" | "design" | "data" | "logic" | "connections" | "quality" | "code" | "history";
+type InspectorTab =
+  | "project"
+  | "preview"
+  | "director"
+  | "design"
+  | "data"
+  | "logic"
+  | "connections"
+  | "quality"
+  | "code"
+  | "history";
 type HostingProvider = "vercel" | "cloudflare" | "netlify" | "github";
 type DeviceMode = "desktop" | "mobile";
 type SourceFile = "index.html" | "project.json" | "quality-report.json";
+type ProjectSyncStatus =
+  | "loading"
+  | "local"
+  | "saving"
+  | "synced"
+  | "conflict"
+  | "error";
 
-type SelectedCanvasItem = {
-  id: string;
-  label: string;
-  kind: "block";
-} | {
-  id: string;
-  label: string;
-  kind: "element";
-  tag: string;
-  text: string;
-  textEditable: boolean;
-  imageEditable: boolean;
-  imageSrc: string;
-  styles: Required<Omit<ProjectElementConfig, "text" | "imageSrc">>;
-  overrides: ProjectElementConfig;
-};
+type SelectedCanvasItem =
+  | {
+      id: string;
+      label: string;
+      kind: "block";
+    }
+  | {
+      id: string;
+      label: string;
+      kind: "element";
+      tag: string;
+      text: string;
+      textEditable: boolean;
+      imageEditable: boolean;
+      imageSrc: string;
+      styles: Required<Omit<ProjectElementConfig, "text" | "imageSrc">>;
+      overrides: ProjectElementConfig;
+    };
 
 const modelLabels: Record<ProjectProvider, string> = {
   free: "Free Director",
@@ -110,28 +158,151 @@ const hostLinks: Record<HostingProvider, string> = {
   github: "https://github.com/new",
 };
 
-const kitTokens: Record<ProjectDesignKit, { accent: string; surface: string; style: GeneratedProjectSpec["theme"]["style"]; font: GeneratedProjectSpec["design"]["font"]; radius: number }> = {
-  "drops-precision": { accent: "#316cff", surface: "#071326", style: "precision", font: "inter", radius: 16 },
-  "neon-arena": { accent: "#ee4f9b", surface: "#080d26", style: "cosmic", font: "space-grotesk", radius: 22 },
-  "mascot-pop": { accent: "#ff5dac", surface: "#11102d", style: "playful", font: "space-grotesk", radius: 26 },
-  "glass-signal": { accent: "#31c9ff", surface: "#06162c", style: "cosmic", font: "inter", radius: 20 },
-  "editorial-alpha": { accent: "#3877ff", surface: "#11172a", style: "editorial", font: "inter", radius: 14 },
-  "terminal-pro": { accent: "#19c98f", surface: "#050b14", style: "precision", font: "ibm-plex", radius: 5 },
+function studioRequestHeaders(): Record<string, string> {
+  let session = window.sessionStorage.getItem("drops-studio:guest-id") || "";
+  if (!session) {
+    session = crypto.randomUUID();
+    window.sessionStorage.setItem("drops-studio:guest-id", session);
+  }
+  return {
+    "content-type": "application/json",
+    "x-drops-session": session,
+  };
+}
+
+const kitTokens: Record<
+  ProjectDesignKit,
+  {
+    accent: string;
+    surface: string;
+    style: GeneratedProjectSpec["theme"]["style"];
+    font: GeneratedProjectSpec["design"]["font"];
+    radius: number;
+  }
+> = {
+  "drops-precision": {
+    accent: "#316cff",
+    surface: "#071326",
+    style: "precision",
+    font: "inter",
+    radius: 16,
+  },
+  "neon-arena": {
+    accent: "#ee4f9b",
+    surface: "#080d26",
+    style: "cosmic",
+    font: "space-grotesk",
+    radius: 22,
+  },
+  "mascot-pop": {
+    accent: "#ff5dac",
+    surface: "#11102d",
+    style: "playful",
+    font: "space-grotesk",
+    radius: 26,
+  },
+  "glass-signal": {
+    accent: "#31c9ff",
+    surface: "#06162c",
+    style: "cosmic",
+    font: "inter",
+    radius: 20,
+  },
+  "editorial-alpha": {
+    accent: "#3877ff",
+    surface: "#11172a",
+    style: "editorial",
+    font: "inter",
+    radius: 14,
+  },
+  "terminal-pro": {
+    accent: "#19c98f",
+    surface: "#050b14",
+    style: "precision",
+    font: "ibm-plex",
+    radius: 5,
+  },
 };
 
 const categoryPrompts: Record<GeneratedProjectSpec["presetId"], string[]> = {
-  "action-engine": ["Turn this into a compact operator cockpit", "Make the trigger graph the spotlight", "Use a risk-first terminal design", "Add stronger decision audit hierarchy"],
-  "alpha-channel": ["Make this feel like a premium creator studio", "Spotlight the sourced post composer", "Use an editorial Telegram preview", "Make verified channel setup clearer"],
-  "morning-alpha": ["Make the brief premium and compact", "Use an editorial daily layout", "Spotlight today’s decision card", "Turn catalysts into a timeline"],
-  "prediction-impact": ["Make the event-to-token map the hero", "Use a professional impact terminal", "Turn related assets into a graph", "Make reversal actions clearer"],
-  "smart-money-copy": ["Use a risk-first strategy monitor", "Spotlight the local paper ledger", "Make wallet-feed setup explicit", "Use a compact terminal design"],
-  "crypto-aggregator": ["Use a dense sortable market table", "Make search and filters the hero", "Add a glass market explorer feel", "Spotlight the watchlist workflow"],
-  "crypto-game": ["Make it a cartoon game with coin mascots", "Create a neon arcade version", "Set round timer to 12 seconds", "Spotlight the local challenge score"],
-  "personal-companion": ["Make recommendations feel more personal", "Use a friendly discovery feed", "Spotlight the taste graph", "Make explanations more editorial"],
-  "portfolio-tamagotchi": ["Make the creature world more playful", "Spotlight explainable portfolio health", "Use a cute mascot design", "Make holdings input clearer"],
-  "crypto-product-hunt": ["Make this a premium private launch board", "Spotlight the add-draft flow", "Show what public mode still requires", "Turn verified project context into cards"],
-  "crypto-radio": ["Make this feel like a real browser audio studio", "Spotlight the speech player", "Use an editorial audio rundown", "Make voice support clearer"],
-  "crypto-siri": ["Make the voice orb cinematic", "Use a focused assistant layout", "Spotlight sourced answer cards", "Make alert handoff more obvious"],
+  "action-engine": [
+    "Turn this into a compact operator cockpit",
+    "Make the trigger graph the spotlight",
+    "Use a risk-first terminal design",
+    "Add stronger decision audit hierarchy",
+  ],
+  "alpha-channel": [
+    "Make this feel like a premium creator studio",
+    "Spotlight the sourced post composer",
+    "Use an editorial Telegram preview",
+    "Make verified channel setup clearer",
+  ],
+  "morning-alpha": [
+    "Make the brief premium and compact",
+    "Use an editorial daily layout",
+    "Spotlight today’s decision card",
+    "Turn catalysts into a timeline",
+  ],
+  "prediction-impact": [
+    "Make the event-to-token map the hero",
+    "Use a professional impact terminal",
+    "Turn related assets into a graph",
+    "Make reversal actions clearer",
+  ],
+  "smart-money-copy": [
+    "Use a risk-first strategy monitor",
+    "Spotlight the local paper ledger",
+    "Make wallet-feed setup explicit",
+    "Use a compact terminal design",
+  ],
+  "crypto-aggregator": [
+    "Use a dense sortable market table",
+    "Make search and filters the hero",
+    "Add a glass market explorer feel",
+    "Spotlight the watchlist workflow",
+  ],
+  "crypto-game": [
+    "Make it a cartoon game with coin mascots",
+    "Create a neon arcade version",
+    "Set round timer to 12 seconds",
+    "Spotlight the local challenge score",
+  ],
+  "personal-companion": [
+    "Make recommendations feel more personal",
+    "Use a friendly discovery feed",
+    "Spotlight the taste graph",
+    "Make explanations more editorial",
+  ],
+  "portfolio-tamagotchi": [
+    "Make the creature world more playful",
+    "Spotlight explainable portfolio health",
+    "Use a cute mascot design",
+    "Make holdings input clearer",
+  ],
+  "crypto-product-hunt": [
+    "Make this a premium private launch board",
+    "Spotlight the add-draft flow",
+    "Show what public mode still requires",
+    "Turn verified project context into cards",
+  ],
+  "crypto-radio": [
+    "Make this feel like a real browser audio studio",
+    "Spotlight the speech player",
+    "Use an editorial audio rundown",
+    "Make voice support clearer",
+  ],
+  "crypto-siri": [
+    "Make the voice orb cinematic",
+    "Use a focused assistant layout",
+    "Spotlight sourced answer cards",
+    "Make alert handoff more obvious",
+  ],
+  "custom-product": [
+    "Reorganize this into a clearer modular workspace",
+    "Make the primary workflow the visual focus",
+    "Add a sourced comparison screen",
+    "Make the Drops Bot handoff more explicit",
+  ],
 };
 
 function nowId(prefix: string): string {
@@ -142,16 +313,31 @@ function colorInputValue(value: string, fallback = "#ffffff"): string {
   if (/^#[0-9a-f]{6}$/i.test(value)) return value;
   const channels = value.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
   if (!channels) return fallback;
-  return `#${channels.slice(1, 4).map((channel) => Math.max(0, Math.min(255, Number(channel))).toString(16).padStart(2, "0")).join("")}`;
+  return `#${channels
+    .slice(1, 4)
+    .map((channel) =>
+      Math.max(0, Math.min(255, Number(channel)))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
 }
 
-function normalizeRuntimeSmoke(value: unknown): ProjectRuntimeSmokeResult | null {
+function normalizeRuntimeSmoke(
+  value: unknown,
+): ProjectRuntimeSmokeResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
   const errors = Array.isArray(input.errors)
     ? input.errors.map((item) => String(item).slice(0, 160)).slice(0, 5)
     : [];
+  const provider = String(input.dataProvider || "").trim().toLowerCase();
   return {
+    mode: input.mode === "server-artifact" ? "server-artifact" : "browser",
+    dataProvider:
+      provider === "dropstab" || provider === "fallback"
+        ? provider
+        : "unverified",
     executed: input.executed === true,
     runtime: input.runtime === true,
     interactions: input.interactions === true,
@@ -159,37 +345,11 @@ function normalizeRuntimeSmoke(value: unknown): ProjectRuntimeSmokeResult | null
     dropsbot: input.dropsbot === true,
     actions: input.actions === true,
     errors,
-    checkedAt: typeof input.checkedAt === "string" ? input.checkedAt.slice(0, 40) : new Date().toISOString(),
+    checkedAt:
+      typeof input.checkedAt === "string"
+        ? input.checkedAt.slice(0, 40)
+        : new Date().toISOString(),
   };
-}
-
-function readProjects(): GeneratedProject[] {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(PROJECTS_STORAGE_KEY) || "[]") as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is GeneratedProject => Boolean(item && typeof item === "object" && "spec" in item && "html" in item)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveProject(project: GeneratedProject): void {
-  const projects = readProjects();
-  const next = [project, ...projects.filter((item) => item.id !== project.id)].slice(0, 50);
-  try {
-    window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // Artwork and restore points can approach a browser's localStorage quota.
-    // Always preserve the current working project, then keep lightweight recents.
-    const compact = {
-      ...project,
-      checkpoints: project.checkpoints?.slice(-6),
-      conversation: project.conversation?.slice(-20),
-    };
-    const lightweight = projects
-      .filter((item) => item.id !== project.id && !item.spec.experience.backgroundImage)
-      .slice(0, 8);
-    window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify([compact, ...lightweight]));
-  }
 }
 
 function downloadBlob(filename: string, blob: Blob): void {
@@ -199,7 +359,9 @@ function downloadBlob(filename: string, blob: Blob): void {
   anchor.download = filename;
   document.body.appendChild(anchor);
   anchor.click();
-  anchor.remove();
+  // Keep the detached download target alive through the next task. Chromium
+  // can otherwise cancel larger Blob downloads before it has consumed the URL.
+  window.setTimeout(() => anchor.remove(), 0);
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
@@ -207,13 +369,19 @@ function blobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Artwork could not be read."));
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Artwork could not be encoded."));
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("Artwork could not be encoded."));
     reader.readAsDataURL(blob);
   });
 }
 
 async function prepareArtwork(file: File): Promise<string> {
-  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 8_000_000) {
+  if (
+    !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
+    file.size > 8_000_000
+  ) {
     throw new Error("Use a PNG, JPG or WebP under 8 MB.");
   }
   let candidate: Blob = file;
@@ -223,23 +391,32 @@ async function prepareArtwork(file: File): Promise<string> {
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    canvas
+      .getContext("2d")
+      ?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
     for (const quality of [0.82, 0.68, 0.54]) {
-      const optimized = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+      const optimized = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/webp", quality),
+      );
       if (optimized && optimized.size < candidate.size) candidate = optimized;
       if (candidate.size <= 240_000) break;
     }
   } catch {
     // Keep the original when the browser cannot decode the image locally.
   }
-  if (candidate.size > 240_000) throw new Error("This artwork stays too large after optimization. Try a smaller image.");
+  if (candidate.size > 240_000)
+    throw new Error(
+      "This artwork stays too large after optimization. Try a smaller image.",
+    );
   return blobAsDataUrl(candidate);
 }
 
 function directorModelContext(spec: GeneratedProjectSpec) {
   const experience = { ...spec.experience, backgroundImage: undefined };
-  const gameDirection = spec.gameDirection ? { ...spec.gameDirection, backgroundImage: undefined } : undefined;
+  const gameDirection = spec.gameDirection
+    ? { ...spec.gameDirection, backgroundImage: undefined }
+    : undefined;
   return {
     presetId: spec.presetId,
     name: spec.name,
@@ -256,18 +433,34 @@ function directorModelContext(spec: GeneratedProjectSpec) {
 }
 
 async function projectArchive(project: GeneratedProject): Promise<Uint8Array> {
-  const quality = project.quality ?? evaluateProjectQuality(project.spec, project.html);
-  let gameAsset: Uint8Array | undefined;
-  let gameSprite: Uint8Array | undefined;
-  if (project.spec.presetId === "crypto-game") {
-    const [backgroundResponse, spriteResponse] = await Promise.all([
-      fetch("/assets/market-catcher-retro.png"),
-      fetch("/assets/market-wolf-catcher.png"),
-    ]);
-    if (backgroundResponse.ok) gameAsset = new Uint8Array(await backgroundResponse.arrayBuffer());
-    if (spriteResponse.ok) gameSprite = new Uint8Array(await spriteResponse.arrayBuffer());
-  }
-  return createProjectArchive(project, quality, gameAsset, gameSprite);
+  const quality =
+    project.quality ?? evaluateProjectQuality(project.spec, project.html);
+  const fetchRequiredAsset = async (assetPath: string) => {
+    const response = await fetch(assetPath);
+    if (!response.ok) {
+      throw new Error(`Could not load required export asset ${assetPath}.`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  };
+  const [dropstabMarkSvg, dropsBotAvatarJpeg] = await Promise.all([
+    fetchRequiredAsset("/brand/dropstab-mark.svg"),
+    fetchRequiredAsset("/brand/drops-bot-avatar.jpg"),
+  ]);
+  // The current compiler embeds every category renderer before selecting the active one.
+  // Load the known shared runtime assets and let the exporter include only references that
+  // actually survive into the portable artifact. This keeps ZIP closure fail-closed.
+  const game = await Promise.all([
+    fetchRequiredAsset("/assets/market-catcher-retro.png"),
+    fetchRequiredAsset("/assets/market-wolf-catcher.png"),
+  ]).then(([marketCatcherBackgroundPng, marketWolfSpritePng]) => ({
+    marketCatcherBackgroundPng,
+    marketWolfSpritePng,
+  }));
+
+  return createProjectArchive(project, quality, {
+    brand: { dropstabMarkSvg, dropsBotAvatarJpeg },
+    game,
+  });
 }
 
 function assistantWelcome(spec: GeneratedProjectSpec): ProjectChatMessage {
@@ -282,53 +475,258 @@ function assistantWelcome(spec: GeneratedProjectSpec): ProjectChatMessage {
   };
 }
 
+const QUIET_SPEC_COMMIT_DELAY_MS = 400;
+
+type PendingSpecCommit = {
+  projectId: string;
+  spec: GeneratedProjectSpec;
+};
+
 export function ProjectStudio() {
   const params = useParams<{ id: string }>();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const sourceReturnFocusRef = useRef<HTMLElement | null>(null);
+  const publishReturnFocusRef = useRef<HTMLElement | null>(null);
+  const projectRef = useRef<GeneratedProject | null>(null);
+  const committedProjectRef = useRef<GeneratedProject | null>(null);
+  const pendingSpecRef = useRef<PendingSpecCommit | null>(null);
+  const quietCommitTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const cloudSyncAvailableRef = useRef(false);
+  const cloudRevisionRef = useRef<number | null>(null);
   const [project, setProject] = useState<GeneratedProject | null>(null);
+  const [runtimeProject, setRuntimeProject] =
+    useState<GeneratedProject | null>(null);
+  const [runtimeRevision, setRuntimeRevision] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<InspectorTab>("director");
+  const [tab, setTab] = useState<InspectorTab>("project");
   const [device, setDevice] = useState<DeviceMode>("desktop");
   const [designMode, setDesignMode] = useState(false);
-  const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(null);
+  const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(
+    null,
+  );
   const [chatInput, setChatInput] = useState("");
   const [directing, setDirecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState("");
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceFile, setSourceFile] = useState<SourceFile>("index.html");
   const [sourceDraft, setSourceDraft] = useState("");
+  const [sourceIssues, setSourceIssues] = useState<string[]>([]);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [newModule, setNewModule] = useState("");
-  const [previewGameAssets, setPreviewGameAssets] = useState({ background: "", sprite: "" });
-  const [runtimeSmoke, setRuntimeSmoke] = useState<ProjectRuntimeSmokeResult | null>(null);
+  const [previewGameAssets, setPreviewGameAssets] = useState({
+    background: "",
+    sprite: "",
+  });
+  const [runtimeSmoke, setRuntimeSmoke] =
+    useState<ProjectRuntimeSmokeResult | null>(null);
+  const [projectSyncStatus, setProjectSyncStatus] =
+    useState<ProjectSyncStatus>("loading");
+
+  const persistProject = useCallback(
+    async (
+      next: GeneratedProject,
+      expectedUpdatedAt: string | null,
+    ): Promise<boolean> => {
+      const save = async () => {
+        try {
+          const result = await saveProjectSafely(next, { expectedUpdatedAt });
+          if (result.status === "conflict") {
+            setProjectSyncStatus("conflict");
+            setToast(
+              "Another tab saved a newer browser version. Reload before applying this change.",
+            );
+            return false;
+          }
+        } catch {
+          setProjectSyncStatus("error");
+          setToast(
+            "This project could not be saved locally. Free browser storage, then retry.",
+          );
+          return false;
+        }
+
+        if (!cloudSyncAvailableRef.current) {
+          setProjectSyncStatus("local");
+          return true;
+        }
+
+        if (next.sourceEditedAt) {
+          setProjectSyncStatus("local");
+          return true;
+        }
+
+        setProjectSyncStatus("saving");
+        try {
+          const record = await saveMemberProjectToCloud(
+            next,
+            cloudRevisionRef.current ?? 0,
+          );
+          cloudRevisionRef.current = record.revision;
+          setProjectSyncStatus("synced");
+        } catch (error) {
+          if (
+            error instanceof MemberProjectSyncError &&
+            error.code === "PROJECT_REVISION_CONFLICT"
+          ) {
+            if (error.current) cloudRevisionRef.current = error.current.revision;
+            setProjectSyncStatus("conflict");
+            setToast(
+              "This project changed in another signed-in session. Your browser copy is safe; reload to review the cloud version.",
+            );
+          } else {
+            setProjectSyncStatus("local");
+            setToast(
+              "Saved in this browser. Cloud sync is temporarily unavailable and will retry after your next edit.",
+            );
+          }
+        }
+        return true;
+      };
+
+      const queued = saveQueueRef.current.then(save, save);
+      saveQueueRef.current = queued.then(
+        () => true,
+        () => false,
+      );
+      return queued;
+    },
+    [],
+  );
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const found = readProjects().find((item) => item.id === params.id) ?? null;
+    let cancelled = false;
+    const loadWorkspace = async () => {
+      let found =
+        readProjectsFromStore().find((item) => item.id === params.id) ?? null;
+      try {
+        const accessResponse = await fetch("/api/access", {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        const accessPayload = (await accessResponse.json()) as {
+          access?: {
+            authenticated?: boolean;
+            account?: { connected?: boolean; projectSync?: boolean };
+          };
+        };
+        const cloudAvailable = Boolean(
+          accessResponse.ok &&
+          accessPayload.access?.authenticated &&
+          accessPayload.access.account?.connected &&
+          accessPayload.access.account.projectSync,
+        );
+        cloudSyncAvailableRef.current = cloudAvailable;
+        if (cloudAvailable) {
+          const cloud = await listMemberProjectsFromCloud();
+          const record = cloud.projects.find((item) => item.id === params.id);
+          if (record) {
+            cloudRevisionRef.current = record.revision;
+            if (
+              !found ||
+              Date.parse(record.updatedAt) > Date.parse(found.updatedAt)
+            ) {
+              const materialized = await materializeMemberProject(record);
+              const stored = await saveProjectSafely(materialized, {
+                expectedUpdatedAt: found?.updatedAt ?? null,
+              });
+              if (stored.status === "saved") found = materialized;
+            }
+            setProjectSyncStatus("synced");
+          } else {
+            cloudRevisionRef.current = 0;
+            setProjectSyncStatus(found ? "local" : "synced");
+          }
+        } else {
+          setProjectSyncStatus("local");
+        }
+      } catch {
+        cloudSyncAvailableRef.current = false;
+        setProjectSyncStatus("local");
+      }
+      if (cancelled) return;
       if (found) {
         const spec = validateProjectSpec(found.spec);
-        const checkpoint: ProjectCheckpoint = { id: nowId("checkpoint"), label: "Working baseline", createdAt: new Date().toISOString(), source: "system", spec };
-        const html = compileProject(spec);
+        const checkpoint: ProjectCheckpoint = {
+          id: nowId("checkpoint"),
+          label: "Working baseline",
+          createdAt: new Date().toISOString(),
+          source: "system",
+          spec,
+        };
+        const compiledHtml = compileProject(spec);
+        const storedSourceIsValid = Boolean(
+          found.sourceEditedAt &&
+            validateEditableRuntimeHtml(spec, found.html).valid,
+        );
+        const html = storedSourceIsValid ? found.html : compiledHtml;
         const migrated: GeneratedProject = {
           ...found,
           spec,
           html,
+          sourceEditedAt: storedSourceIsValid
+            ? found.sourceEditedAt
+            : undefined,
           quality: evaluateProjectQuality(spec, html),
-          checkpoints: found.checkpoints?.length ? found.checkpoints.map((item) => ({ ...item, spec: validateProjectSpec(item.spec) })).slice(-12) : [checkpoint],
-          conversation: found.conversation?.length ? found.conversation : [assistantWelcome(spec)],
+          checkpoints: found.checkpoints?.length
+            ? found.checkpoints
+                .map((item) => ({
+                  ...item,
+                  spec: validateProjectSpec(item.spec),
+                }))
+                .slice(-12)
+            : [checkpoint],
+          futureCheckpoints: (found.futureCheckpoints ?? [])
+            .map((item) => ({
+              ...item,
+              spec: validateProjectSpec(item.spec),
+            }))
+            .slice(0, 12),
+          conversation: found.conversation?.length
+            ? found.conversation
+            : [assistantWelcome(spec)],
         };
-        saveProject(migrated);
+        void saveProjectSafely(migrated, {
+          expectedUpdatedAt: found.updatedAt,
+        }).catch(() => {
+          setProjectSyncStatus("error");
+          setToast(
+            "The migrated browser project could not be saved. Reload before making more changes.",
+          );
+        });
+        projectRef.current = migrated;
+        committedProjectRef.current = migrated;
+        pendingSpecRef.current = null;
         setRuntimeSmoke(null);
         setProject(migrated);
-        setDirty(Boolean(migrated.publishedUrl && migrated.publishedAt !== migrated.updatedAt));
+        setRuntimeProject(migrated);
+        setRuntimeRevision((revision) => revision + 1);
+        setDirty(
+          Boolean(
+            migrated.publishedUrl &&
+              migrated.publishedAt !== migrated.updatedAt,
+          ),
+        );
+      }
+      if (!found) {
+        projectRef.current = null;
+        committedProjectRef.current = null;
+        pendingSpecRef.current = null;
+        setRuntimeProject(null);
       }
       setLoaded(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
+    };
+    const timer = window.setTimeout(() => void loadWorkspace(), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [params.id]);
 
   useEffect(() => {
@@ -338,36 +736,151 @@ export function ProjectStudio() {
   }, [toast]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const chatEnd = chatEndRef.current;
+    const conversation = chatEnd?.closest<HTMLElement>(".conversation");
+    if (!chatEnd || !conversation) return;
+
+    if (directing || (project?.conversation?.length ?? 0) > 1) {
+      conversation.scrollTo({
+        top: conversation.scrollHeight,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    conversation.scrollTop = 0;
   }, [project?.conversation, directing]);
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
-      if (!event.data || !event.source || event.source !== iframeRef.current?.contentWindow) return;
+      if (
+        !event.data ||
+        !event.source ||
+        event.source !== iframeRef.current?.contentWindow
+      )
+        return;
       if (event.data.type === "drops-studio-runtime-smoke") {
         const smoke = normalizeRuntimeSmoke(event.data.result);
         if (!smoke) return;
+        const committed = committedProjectRef.current;
+        if (
+          !committed ||
+          String(event.data.slug || "") !== committed.spec.slug
+        )
+          return;
         setRuntimeSmoke(smoke);
-        setProject((current) => {
-          if (!current || String(event.data.slug || "") !== current.spec.slug) return current;
-          const quality = evaluateProjectQuality(current.spec, current.html, smoke);
+        const quality = evaluateProjectQuality(
+          committed.spec,
+          committed.html,
+          smoke,
+        );
+        const nextCommitted = { ...committed, quality };
+        committedProjectRef.current = nextCommitted;
+        setRuntimeProject(nextCommitted);
+        const current = projectRef.current;
+        if (current && !pendingSpecRef.current) {
           const next = { ...current, quality };
-          saveProject(next);
-          return next;
-        });
+          projectRef.current = next;
+          void persistProject(next, current.updatedAt);
+          setProject(next);
+        }
         return;
       }
       if (event.data.type === "drops-studio-data-request") {
-        void fetch("/api/public-data", { headers: { accept: "application/json" } })
+        void fetch("/api/public-data", {
+          headers: { accept: "application/json" },
+        })
           .then((response) => response.json())
-          .then((payload) => (event.source as Window).postMessage({ type: "drops-studio-data-response", payload }, "*"))
-          .catch(() => (event.source as Window).postMessage({ type: "drops-studio-data-response", payload: { source: "Saved DropsTab-compatible snapshot" } }, "*"));
+          .then((payload) =>
+            (event.source as Window).postMessage(
+              { type: "drops-studio-data-response", payload },
+              "*",
+            ),
+          )
+          .catch(() =>
+            (event.source as Window).postMessage(
+              {
+                type: "drops-studio-data-response",
+                payload: { source: "Saved DropsTab-compatible snapshot" },
+              },
+              "*",
+            ),
+          );
+      }
+      if (event.data.type === "drops-studio-product-hunt-request") {
+        const source = event.source as Window;
+        const requestId = String(event.data.requestId || "");
+        const action = String(event.data.action || "");
+        const payload =
+          event.data.payload && typeof event.data.payload === "object"
+            ? event.data.payload
+            : {};
+        const respond = (ok: boolean, responsePayload: unknown) =>
+          source.postMessage(
+            {
+              type: "drops-studio-product-hunt-response",
+              requestId,
+              ok,
+              payload: responsePayload,
+            },
+            "*",
+          );
+        void (async () => {
+          if (!requestId || !["list", "submit", "vote"].includes(action)) {
+            respond(false, { error: "Invalid community request." });
+            return;
+          }
+          let endpoint = "/api/product-hunt/launches";
+          const init: RequestInit = {
+            credentials: "same-origin",
+            headers: { accept: "application/json" },
+          };
+          if (action === "list") {
+            const sort = payload.sort === "new" ? "new" : "top";
+            endpoint += `?sort=${sort}&limit=24`;
+          } else if (action === "submit") {
+            init.method = "POST";
+            init.headers = {
+              accept: "application/json",
+              "content-type": "application/json",
+            };
+            init.body = JSON.stringify(payload.submission ?? {});
+          } else {
+            endpoint += `/${encodeURIComponent(String(payload.id || ""))}/vote`;
+            init.method = "POST";
+          }
+          const response = await fetch(endpoint, init);
+          const responsePayload = await response
+            .json()
+            .catch(() => ({ error: "Community service returned an unreadable response." }));
+          respond(response.ok, responsePayload);
+        })().catch((error) =>
+          respond(false, {
+            error:
+              error instanceof Error
+                ? error.message
+                : "Community service is unavailable.",
+          }),
+        );
+        return;
       }
       if (event.data.type === "drops-studio-block-selected") {
-        setSelectedBlock({ id: String(event.data.blockId || "application"), label: String(event.data.label || event.data.blockId || "Application"), kind: "block" });
+        setSelectedBlock({
+          id: String(event.data.blockId || "application"),
+          label: String(
+            event.data.label || event.data.blockId || "Application",
+          ),
+          kind: "block",
+        });
         setTab("design");
       }
-      if (["drops-studio-element-selected", "drops-studio-element-inline-edit"].includes(event.data.type) && event.data.styles) {
+      if (
+        [
+          "drops-studio-element-selected",
+          "drops-studio-element-inline-edit",
+        ].includes(event.data.type) &&
+        event.data.styles
+      ) {
         setSelectedBlock({
           id: String(event.data.elementId || "element"),
           label: String(event.data.label || event.data.elementId || "Element"),
@@ -378,18 +891,24 @@ export function ProjectStudio() {
           imageEditable: event.data.imageEditable === true,
           imageSrc: String(event.data.imageSrc || ""),
           styles: event.data.styles,
-          overrides: event.data.overrides && typeof event.data.overrides === "object" ? event.data.overrides : {},
+          overrides:
+            event.data.overrides && typeof event.data.overrides === "object"
+              ? event.data.overrides
+              : {},
         });
         setTab("design");
       }
     }
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [persistProject]);
 
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*");
-  }, [designMode, project?.updatedAt]);
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "drops-studio-design-mode", enabled: designMode },
+      "*",
+    );
+  }, [designMode, runtimeRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,95 +920,251 @@ export function ProjectStudio() {
       fetch("/assets/market-wolf-catcher.png"),
     ])
       .then(async ([backgroundResponse, spriteResponse]) => {
-        if (!backgroundResponse.ok || !spriteResponse.ok) throw new Error("Game artwork unavailable.");
-        const [backgroundBlob, spriteBlob] = await Promise.all([backgroundResponse.blob(), spriteResponse.blob()]);
-        const toDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(blob);
-        });
-        const [background, sprite] = await Promise.all([toDataUrl(backgroundBlob), toDataUrl(spriteBlob)]);
+        if (!backgroundResponse.ok || !spriteResponse.ok)
+          throw new Error("Game artwork unavailable.");
+        const [backgroundBlob, spriteBlob] = await Promise.all([
+          backgroundResponse.blob(),
+          spriteResponse.blob(),
+        ]);
+        const toDataUrl = (blob: Blob) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+        const [background, sprite] = await Promise.all([
+          toDataUrl(backgroundBlob),
+          toDataUrl(spriteBlob),
+        ]);
         if (cancelled) return;
         setPreviewGameAssets({ background, sprite });
       })
-      .catch(() => { if (!cancelled) setPreviewGameAssets({ background: "", sprite: "" }); });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) setPreviewGameAssets({ background: "", sprite: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [project?.spec.presetId]);
 
-  const preset = presets.find((item) => item.id === project?.spec.presetId);
+  const preset = getProjectPreset(project?.spec.presetId ?? "custom-product");
   const runtimeHtml = useMemo(() => {
-    if (!project) return "";
-    if (project.spec.presetId !== "crypto-game") return project.html;
-    const transparentPixel = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-    return project.html
-      .replaceAll('src="/assets/market-catcher-retro.png"', `src="${previewGameAssets.background || transparentPixel}"`)
-      .replaceAll('src="/assets/market-wolf-catcher.png"', `src="${previewGameAssets.sprite || transparentPixel}"`);
-  }, [previewGameAssets, project]);
-  const qualityReport = useMemo(() => project ? evaluateProjectQuality(project.spec, project.html, runtimeSmoke) : null, [project, runtimeSmoke]);
+    if (!runtimeProject) return "";
+    if (runtimeProject.spec.presetId !== "crypto-game")
+      return runtimeProject.html;
+    const transparentPixel =
+      "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+    return runtimeProject.html
+      .replaceAll(
+        'src="/assets/market-catcher-retro.png"',
+        `src="${previewGameAssets.background || transparentPixel}"`,
+      )
+      .replaceAll(
+        'src="/assets/market-wolf-catcher.png"',
+        `src="${previewGameAssets.sprite || transparentPixel}"`,
+      );
+  }, [previewGameAssets, runtimeProject]);
+  const qualityReport = useMemo(
+    () =>
+      runtimeProject
+        ? evaluateProjectQuality(
+            runtimeProject.spec,
+            runtimeProject.html,
+            runtimeSmoke,
+          )
+        : null,
+    [runtimeProject, runtimeSmoke],
+  );
+  const runtimeReady = Boolean(
+    runtimeSmoke?.executed && runtimeSmoke.runtime,
+  );
   const activeProvider = useMemo(() => {
     if (!project) return "free" as ProjectProvider;
-    return (window.sessionStorage?.getItem("drops-studio:active-brain") || project.spec.brain.provider || "free") as ProjectProvider;
+    return (window.sessionStorage?.getItem("drops-studio:active-brain") ||
+      project.spec.brain.provider ||
+      "free") as ProjectProvider;
   }, [project]);
 
-  const replaceProject = useCallback((next: GeneratedProject) => {
+  const replaceProject = useCallback(
+    (next: GeneratedProject) => {
+      const current = projectRef.current;
+      if (quietCommitTimerRef.current !== null) {
+        window.clearTimeout(quietCommitTimerRef.current);
+        quietCommitTimerRef.current = null;
+      }
+      pendingSpecRef.current = null;
+      projectRef.current = next;
+      committedProjectRef.current = next;
+      setRuntimeSmoke(null);
+      void persistProject(next, current?.updatedAt ?? null);
+      setProject(next);
+      setRuntimeProject(next);
+      setRuntimeRevision((revision) => revision + 1);
+      setDirty(true);
+    },
+    [persistProject],
+  );
+
+  const persistPendingSpec = useCallback(() => {
+    if (quietCommitTimerRef.current !== null) {
+      window.clearTimeout(quietCommitTimerRef.current);
+      quietCommitTimerRef.current = null;
+    }
+    const pending = pendingSpecRef.current;
+    const current = projectRef.current;
+    if (!pending || !current || pending.projectId !== current.id) return null;
+    pendingSpecRef.current = null;
+    const next = commitProjectCheckpoint(current, {
+      id: nowId("checkpoint"),
+      label: "Edited project settings",
+      createdAt: new Date().toISOString(),
+      source: "manual",
+      spec: validateProjectSpec(pending.spec),
+    }).project;
+    projectRef.current = next;
+    committedProjectRef.current = next;
+    void persistProject(next, current.updatedAt);
+    return next;
+  }, [persistProject]);
+
+  const commitPendingSpec = useCallback(() => {
+    const next = persistPendingSpec();
+    if (!next) return null;
     setRuntimeSmoke(null);
-    saveProject(next);
     setProject(next);
-    setDirty(true);
-  }, []);
+    setRuntimeProject(next);
+    setRuntimeRevision((revision) => revision + 1);
+    return next;
+  }, [persistPendingSpec]);
 
-  const updateSpecQuiet = useCallback((update: (spec: GeneratedProjectSpec) => GeneratedProjectSpec) => {
-    setRuntimeSmoke(null);
-    setProject((current) => {
-      if (!current) return current;
-      const spec = validateProjectSpec(update(current.spec));
-      const html = compileProject(spec);
-      const next = { ...current, spec, html, quality: evaluateProjectQuality(spec, html), updatedAt: new Date().toISOString() };
-      saveProject(next);
-      return next;
-    });
-    setDirty(true);
-  }, []);
+  const updateSpecQuiet = useCallback(
+    (update: (spec: GeneratedProjectSpec) => GeneratedProjectSpec) => {
+      const current = projectRef.current;
+      if (!current) return;
+      const baseSpec =
+        pendingSpecRef.current?.projectId === current.id
+          ? pendingSpecRef.current.spec
+          : current.spec;
+      const spec = update(baseSpec);
+      const draft = { ...current, spec };
+      pendingSpecRef.current = { projectId: current.id, spec };
+      projectRef.current = draft;
+      setProject(draft);
+      setDirty(true);
+      if (quietCommitTimerRef.current !== null)
+        window.clearTimeout(quietCommitTimerRef.current);
+      quietCommitTimerRef.current = window.setTimeout(
+        commitPendingSpec,
+        QUIET_SPEC_COMMIT_DELAY_MS,
+      );
+    },
+    [commitPendingSpec],
+  );
 
-  function commitSpec(specInput: GeneratedProjectSpec, label: string, source: ProjectCheckpoint["source"] = "manual", conversation?: ProjectChatMessage[]) {
-    if (!project) return;
-    const spec = validateProjectSpec(specInput);
-    const html = compileProject(spec);
-    const checkpoint: ProjectCheckpoint = { id: nowId("checkpoint"), label, createdAt: new Date().toISOString(), source, spec };
-    replaceProject({
-      ...project,
-      spec,
-      html,
-      quality: evaluateProjectQuality(spec, html),
-      updatedAt: checkpoint.createdAt,
-      checkpoints: [...(project.checkpoints ?? []), checkpoint].slice(-12),
-      conversation: conversation ?? project.conversation,
-    });
+  useEffect(() => {
+    const flushBeforeUnload = () => {
+      persistPendingSpec();
+    };
+    window.addEventListener("beforeunload", flushBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", flushBeforeUnload);
+      persistPendingSpec();
+    };
+  }, [persistPendingSpec]);
+
+  function commitSpec(
+    specInput: GeneratedProjectSpec,
+    label: string,
+    source: ProjectCheckpoint["source"] = "manual",
+    conversation?: ProjectChatMessage[],
+  ) {
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject) return;
+    const checkpoint: ProjectCheckpoint = {
+      id: nowId("checkpoint"),
+      label,
+      createdAt: new Date().toISOString(),
+      source,
+      spec: validateProjectSpec(specInput),
+    };
+    const transition = commitProjectCheckpoint(
+      {
+        ...currentProject,
+        conversation: conversation ?? currentProject.conversation,
+      },
+      checkpoint,
+    );
+    replaceProject(transition.project);
   }
 
   function applyKit(kit: ProjectDesignKit) {
     if (!project) return;
     const token = kitTokens[kit];
-    commitSpec(validateProjectSpec({
-      ...project.spec,
-      theme: { ...project.spec.theme, accent: token.accent, surface: token.surface, style: token.style },
-      design: { ...project.spec.design, kit, font: token.font, radius: token.radius, motion: kit === "neon-arena" || kit === "mascot-pop" ? "expressive" : "smooth" },
-      gameDirection: project.spec.gameDirection ? {
-        ...project.spec.gameDirection,
-        artStyle: kit === "mascot-pop" ? "comic" : kit === "neon-arena" ? "3d-toy" : project.spec.gameDirection.artStyle,
-      } : undefined,
-    }), `Applied ${DESIGN_DIRECTIONS.find((item) => item.id === kit)?.name ?? kit}`, "design");
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        theme: {
+          ...project.spec.theme,
+          accent: token.accent,
+          surface: token.surface,
+          style: token.style,
+        },
+        design: {
+          ...project.spec.design,
+          kit,
+          font: token.font,
+          radius: token.radius,
+          motion:
+            kit === "neon-arena" || kit === "mascot-pop"
+              ? "expressive"
+              : "smooth",
+        },
+        gameDirection: project.spec.gameDirection
+          ? {
+              ...project.spec.gameDirection,
+              artStyle:
+                kit === "mascot-pop"
+                  ? "comic"
+                  : kit === "neon-arena"
+                    ? "3d-toy"
+                    : project.spec.gameDirection.artStyle,
+            }
+          : undefined,
+      }),
+      `Applied ${DESIGN_DIRECTIONS.find((item) => item.id === kit)?.name ?? kit}`,
+      "design",
+    );
     setToast("Design direction applied — checkpoint created");
   }
 
-  function updateSelectedBlock(update: { visible?: boolean; variant?: "default" | "compact" | "wide" | "spotlight" }) {
+  function updateSelectedBlock(update: {
+    visible?: boolean;
+    variant?: "default" | "compact" | "wide" | "spotlight";
+  }) {
     if (!project || !selectedBlock || selectedBlock.kind !== "block") return;
-    const current = project.spec.blocks[selectedBlock.id] ?? { visible: true, variant: "default" as const };
-    commitSpec(validateProjectSpec({ ...project.spec, blocks: { ...project.spec.blocks, [selectedBlock.id]: { ...current, ...update } } }), `Edited ${selectedBlock.label}`, "design");
+    const current = project.spec.blocks[selectedBlock.id] ?? {
+      visible: true,
+      variant: "default" as const,
+    };
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        blocks: {
+          ...project.spec.blocks,
+          [selectedBlock.id]: { ...current, ...update },
+        },
+      }),
+      `Edited ${selectedBlock.label}`,
+      "design",
+    );
   }
 
-  function previewSelectedElement(update: { text?: string; imageSrc?: string; styles?: Partial<Omit<ProjectElementConfig, "text" | "imageSrc">> }) {
+  function previewSelectedElement(update: {
+    text?: string;
+    imageSrc?: string;
+    styles?: Partial<Omit<ProjectElementConfig, "text" | "imageSrc">>;
+  }) {
     if (!selectedBlock || selectedBlock.kind !== "element") return;
     const overrides: ProjectElementConfig = {
       ...selectedBlock.overrides,
@@ -505,30 +1180,48 @@ export function ProjectStudio() {
       overrides,
     };
     setSelectedBlock(next);
-    iframeRef.current?.contentWindow?.postMessage({
-      type: "drops-studio-element-preview",
-      elementId: next.id,
-      config: overrides,
-    }, "*");
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        type: "drops-studio-element-preview",
+        elementId: next.id,
+        config: overrides,
+      },
+      "*",
+    );
   }
 
   async function previewElementImage(file?: File) {
-    if (!selectedBlock || selectedBlock.kind !== "element" || !selectedBlock.imageEditable || !file) return;
+    if (
+      !selectedBlock ||
+      selectedBlock.kind !== "element" ||
+      !selectedBlock.imageEditable ||
+      !file
+    )
+      return;
     try {
       setToast("Optimizing the selected image…");
       previewSelectedElement({ imageSrc: await prepareArtwork(file) });
       setToast("Image replaced in preview — save a version when ready");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Image could not be applied.");
+      setToast(
+        error instanceof Error ? error.message : "Image could not be applied.",
+      );
     }
   }
 
   function commitSelectedElement() {
     if (!project || !selectedBlock || selectedBlock.kind !== "element") return;
-    commitSpec(validateProjectSpec({
-      ...project.spec,
-      elements: { ...(project.spec.elements ?? {}), [selectedBlock.id]: selectedBlock.overrides },
-    }), `Edited ${selectedBlock.label}`, "design");
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        elements: {
+          ...(project.spec.elements ?? {}),
+          [selectedBlock.id]: selectedBlock.overrides,
+        },
+      }),
+      `Edited ${selectedBlock.label}`,
+      "design",
+    );
     setToast(`${selectedBlock.label} saved as a reversible version`);
   }
 
@@ -536,107 +1229,273 @@ export function ProjectStudio() {
     if (!project || !selectedBlock || selectedBlock.kind !== "element") return;
     const nextElements = { ...(project.spec.elements ?? {}) };
     delete nextElements[selectedBlock.id];
-    commitSpec(validateProjectSpec({ ...project.spec, elements: nextElements }), `Reset ${selectedBlock.label}`, "design");
+    commitSpec(
+      validateProjectSpec({ ...project.spec, elements: nextElements }),
+      `Reset ${selectedBlock.label}`,
+      "design",
+    );
     setSelectedBlock(null);
     setToast("Element reset to the generated design");
   }
 
   function undo() {
-    if (!project || (project.checkpoints?.length ?? 0) < 2) {
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    const transition = undoProjectCheckpoint(
+      currentProject,
+      new Date().toISOString(),
+    );
+    if (!transition) {
       setToast("No earlier checkpoint yet");
       return;
     }
-    const checkpoints = [...(project.checkpoints ?? [])];
-    checkpoints.pop();
-    const previous = checkpoints[checkpoints.length - 1];
-    const html = compileProject(previous.spec);
-    const next = { ...project, spec: previous.spec, html, quality: evaluateProjectQuality(previous.spec, html), updatedAt: new Date().toISOString(), checkpoints };
-    replaceProject(next);
-    setToast(`Restored: ${previous.label}`);
+    const previous = transition.project.checkpoints?.at(-1);
+    replaceProject(transition.project);
+    setToast(`Restored: ${previous?.label ?? "earlier checkpoint"}`);
+  }
+
+  function redo() {
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    const transition = redoProjectCheckpoint(
+      currentProject,
+      new Date().toISOString(),
+    );
+    if (!transition) {
+      setToast("No later checkpoint yet");
+      return;
+    }
+    const restored = transition.project.checkpoints?.at(-1);
+    replaceProject(transition.project);
+    setToast(`Redone: ${restored?.label ?? "next checkpoint"}`);
+  }
+
+  function restoreCheckpoint(checkpoint: ProjectCheckpoint) {
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    const transition = commitProjectCheckpoint(currentProject, {
+      id: nowId("checkpoint"),
+      label: `Restored ${checkpoint.label}`,
+      createdAt: new Date().toISOString(),
+      source: "manual",
+      spec: checkpoint.spec,
+      ...(checkpoint.runtimeHtml
+        ? { runtimeHtml: checkpoint.runtimeHtml }
+        : {}),
+    });
+    replaceProject(transition.project);
+    setToast(`Restored: ${checkpoint.label}`);
   }
 
   async function sendDirectorPrompt(raw?: string) {
-    if (!project || directing) return;
+    const activeProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!activeProject || directing) return;
     const instruction = (raw ?? chatInput).trim();
     if (!instruction) return;
     setChatInput("");
     setDirecting(true);
-    const userMessage: ProjectChatMessage = { id: nowId("user"), role: "user", content: instruction, createdAt: new Date().toISOString() };
-    const baseConversation = [...(project.conversation ?? []), userMessage];
-    setProject({ ...project, conversation: baseConversation });
+    const userMessage: ProjectChatMessage = {
+      id: nowId("user"),
+      role: "user",
+      content: instruction,
+      createdAt: new Date().toISOString(),
+    };
+    const baseConversation = [
+      ...(activeProject.conversation ?? []),
+      userMessage,
+    ];
+    const conversationDraft = {
+      ...activeProject,
+      conversation: baseConversation,
+    };
+    projectRef.current = conversationDraft;
+    setProject(conversationDraft);
     try {
       let proposal: DirectorProposal;
       const provider = activeProvider;
-      const key = provider === "free" ? null : window.sessionStorage.getItem(`drops-studio:${provider}`);
+      const key =
+        provider === "free"
+          ? null
+          : window.sessionStorage.getItem(`drops-studio:${provider}`);
       if (provider === "custom" && key) {
-        const endpoint = window.sessionStorage.getItem("drops-studio:custom-endpoint");
-        const model = window.sessionStorage.getItem("drops-studio:custom-model");
-        if (!endpoint || !model) throw new Error("Custom OpenAI-compatible connection is incomplete.");
+        const endpoint = window.sessionStorage.getItem(
+          "drops-studio:custom-endpoint",
+        );
+        const model = window.sessionStorage.getItem(
+          "drops-studio:custom-model",
+        );
+        if (!endpoint || !model)
+          throw new Error("Custom OpenAI-compatible connection is incomplete.");
         const response = await fetch(endpoint, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-          body: JSON.stringify({ model, temperature: 0.2, max_tokens: 900, messages: [
-            { role: "system", content: "Return JSON only. You may improve name, tagline, description, theme, design, experience, gameDirection and elements. When selectedCanvas is an element, edit only its exact id inside elements unless the user explicitly asks for a whole-product change. Preserve the preset and DropsTab/Drops Bot foundations. Never return code, URLs or API keys." },
-            { role: "user", content: JSON.stringify({ instruction, selectedCanvas: selectedBlock, product: directorModelContext(project.spec) }) },
-          ] }),
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.2,
+            max_tokens: 900,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Return JSON only. You may improve name, tagline, description, theme, design, experience, gameDirection and elements. When selectedCanvas is an element, edit only its exact id inside elements unless the user explicitly asks for a whole-product change. Preserve the preset and DropsTab/Drops Bot foundations. Never return code, URLs or API keys.",
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  instruction,
+                  selectedCanvas: selectedBlock,
+                  product: directorModelContext(activeProject.spec),
+                }),
+              },
+            ],
+          }),
         });
-        const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
-        if (!response.ok) throw new Error(payload.error?.message || `Custom provider returned ${response.status}.`);
+        const payload = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        };
+        if (!response.ok)
+          throw new Error(
+            payload.error?.message ||
+              `Custom provider returned ${response.status}.`,
+          );
         const text = payload.choices?.[0]?.message?.content || "{}";
-        const suggestion = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}") as Partial<GeneratedProjectSpec>;
+        const suggestion = JSON.parse(
+          text.match(/\{[\s\S]*\}/)?.[0] || "{}",
+        ) as Partial<GeneratedProjectSpec>;
         const customSpec = validateProjectSpec({
-          ...project.spec,
-          name: suggestion.name ?? project.spec.name,
-          tagline: suggestion.tagline ?? project.spec.tagline,
-          description: suggestion.description ?? project.spec.description,
-          theme: { ...project.spec.theme, ...(suggestion.theme ?? {}) },
-          design: { ...project.spec.design, ...(suggestion.design ?? {}) },
-          experience: { ...project.spec.experience, ...(suggestion.experience ?? {}) },
-          elements: { ...(project.spec.elements ?? {}), ...(suggestion.elements ?? {}) },
-          gameDirection: project.spec.gameDirection ? { ...project.spec.gameDirection, ...(suggestion.gameDirection ?? {}) } : undefined,
+          ...activeProject.spec,
+          name: suggestion.name ?? activeProject.spec.name,
+          tagline: suggestion.tagline ?? activeProject.spec.tagline,
+          description:
+            suggestion.description ?? activeProject.spec.description,
+          theme: {
+            ...activeProject.spec.theme,
+            ...(suggestion.theme ?? {}),
+          },
+          design: {
+            ...activeProject.spec.design,
+            ...(suggestion.design ?? {}),
+          },
+          experience: {
+            ...activeProject.spec.experience,
+            ...(suggestion.experience ?? {}),
+          },
+          elements: {
+            ...(activeProject.spec.elements ?? {}),
+            ...(suggestion.elements ?? {}),
+          },
+          gameDirection: activeProject.spec.gameDirection
+            ? {
+                ...activeProject.spec.gameDirection,
+                ...(suggestion.gameDirection ?? {}),
+              }
+            : undefined,
           brain: { provider: "custom", model, enhanced: true },
         });
-        if (selectedBlock?.kind === "element" && !suggestion.elements?.[selectedBlock.id]) {
-          const focused = createFreeElementDirectorProposal(project.spec, instruction, selectedBlock);
-          proposal = { ...focused, label: `${model} · focused element guard`, summary: [...focused.summary, "Kept the edit isolated because the connected model returned no valid element override."] };
+        if (
+          selectedBlock?.kind === "element" &&
+          !suggestion.elements?.[selectedBlock.id]
+        ) {
+          const focused = createFreeElementDirectorProposal(
+            activeProject.spec,
+            instruction,
+            selectedBlock,
+          );
+          proposal = {
+            ...focused,
+            label: `${model} · focused element guard`,
+            summary: [
+              ...focused.summary,
+              "Kept the edit isolated because the connected model returned no valid element override.",
+            ],
+          };
         } else {
-          proposal = { label: `${model} proposal`, summary: ["Applied the requested direction through your custom model.", "Preserved the validated crypto product contract."], affected: ["Product brief", "Experience", "Design"], spec: customSpec };
+          proposal = {
+            label: `${model} proposal`,
+            summary: [
+              "Applied the requested direction through your custom model.",
+              "Preserved the validated crypto product contract.",
+            ],
+            affected: ["Product brief", "Experience", "Design"],
+            spec: customSpec,
+          };
         }
       } else {
-        const model = window.sessionStorage.getItem(`drops-studio:${provider}:model`) || project.spec.brain.model;
-        const headers: Record<string, string> = { "content-type": "application/json" };
+        const model =
+          window.sessionStorage.getItem(`drops-studio:${provider}:model`) ||
+          activeProject.spec.brain.model;
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+        };
         if (provider === "openrouter" && key) headers["x-openrouter-key"] = key;
-        else if (["openai", "anthropic", "kimi"].includes(provider) && key) headers["x-provider-key"] = key;
+        else if (["openai", "anthropic", "kimi"].includes(provider) && key)
+          headers["x-provider-key"] = key;
         const response = await fetch("/api/agent/plan", {
           method: "POST",
           headers,
           body: JSON.stringify({
-            provider: provider === "free" || provider === "gateway" ? undefined : provider,
+            provider:
+              provider === "free" || provider === "gateway"
+                ? undefined
+                : provider,
             model,
             guestId: window.sessionStorage.getItem("drops-studio:guest-id"),
-            prompt: `Revise the existing product without changing its category (${project.spec.presetId}).\nUser change: ${instruction}\nSelected canvas item: ${JSON.stringify(selectedBlock ?? { kind: "product", label: "whole product" })}.\nIf the selected item kind is element, use its exact id in elementEdit and return only the requested focused style/copy change there while preserving the rest of the product.\nCurrent product: ${JSON.stringify({ name: project.spec.name, tagline: project.spec.tagline, description: project.spec.description, tools: project.spec.tools })}\nCurrent blueprint: ${JSON.stringify(project.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: project.spec.theme, design: project.spec.design, experience: project.spec.experience, gameDirection: project.spec.gameDirection, elements: project.spec.elements })}`,
+            prompt: `Revise the existing product without changing its category (${activeProject.spec.presetId}).\nUser change: ${instruction}\nSelected canvas item: ${JSON.stringify(selectedBlock ?? { kind: "product", label: "whole product" })}.\nIf the selected item kind is element, use its exact id in elementEdit and return only the requested focused style/copy change there while preserving the rest of the product.\nCurrent product: ${JSON.stringify({ name: activeProject.spec.name, tagline: activeProject.spec.tagline, description: activeProject.spec.description, tools: activeProject.spec.tools })}\nCurrent blueprint: ${JSON.stringify(activeProject.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: activeProject.spec.theme, design: activeProject.spec.design, experience: activeProject.spec.experience, gameDirection: activeProject.spec.gameDirection, elements: activeProject.spec.elements })}`,
           }),
         });
-        const payload = await response.json() as { plan?: AgentProductPlan; error?: string; model?: string; warning?: string };
-        if (!response.ok || !payload.plan) throw new Error(payload.error || "AI Director failed.");
-        const aiPlan: AgentProductPlan = { ...payload.plan, presetId: project.spec.presetId };
+        const payload = (await response.json()) as {
+          plan?: AgentProductPlan;
+          error?: string;
+          model?: string;
+          warning?: string;
+        };
+        if (!response.ok || !payload.plan)
+          throw new Error(payload.error || "AI Director failed.");
+        const aiPlan: AgentProductPlan = {
+          ...payload.plan,
+          presetId: activeProject.spec.presetId,
+        };
         if (selectedBlock?.kind === "element" && !aiPlan.elementEdit) {
-          const focused = createFreeElementDirectorProposal(project.spec, instruction, selectedBlock);
+          const focused = createFreeElementDirectorProposal(
+            activeProject.spec,
+            instruction,
+            selectedBlock,
+          );
           proposal = {
             ...focused,
             label: `${payload.model || modelLabels[provider]} · focused element edit`,
-            summary: [...focused.summary, payload.warning || "The selected element stayed isolated from the rest of the product."],
+            summary: [
+              ...focused.summary,
+              payload.warning ||
+                "The selected element stayed isolated from the rest of the product.",
+            ],
           };
         } else {
-          const revised = validateProjectSpec(applyAgentPlan(project.spec, aiPlan));
+          const revised = validateProjectSpec(
+            applyAgentPlan(activeProject.spec, aiPlan),
+          );
           proposal = {
             label: `${payload.model || aiPlan.model || modelLabels[provider]} change set`,
             summary: [
               `Rebuilt ${selectedBlock?.label ?? "the product direction"} from the full instruction.`,
               `${aiPlan.blueprint.screens.length} native screens · ${aiPlan.blueprint.interactions.length} working interactions.`,
-              aiPlan.blueprint.revisionNotes?.[0] || payload.warning || "DropsTab evidence and Drops Bot action boundaries remain explicit.",
+              aiPlan.blueprint.revisionNotes?.[0] ||
+                payload.warning ||
+                "DropsTab evidence and Drops Bot action boundaries remain explicit.",
             ],
-            affected: [selectedBlock?.label ?? "Product blueprint", "Runtime", "Design system"],
+            affected: [
+              selectedBlock?.label ?? "Product blueprint",
+              "Runtime",
+              "Design system",
+            ],
             spec: revised,
           };
         }
@@ -646,22 +1505,52 @@ export function ProjectStudio() {
         role: "assistant",
         content: `I prepared a safe change set for ${proposal.affected.join(", ").toLowerCase()}. Review it before applying.`,
         createdAt: new Date().toISOString(),
-        proposal: { label: proposal.label, summary: proposal.summary, spec: proposal.spec },
+        proposal: {
+          label: proposal.label,
+          summary: proposal.summary,
+          spec: proposal.spec,
+        },
       };
-      const next = { ...project, conversation: [...baseConversation, assistant], updatedAt: new Date().toISOString() };
-      saveProject(next);
+      const currentProject = projectRef.current ?? activeProject;
+      const next = {
+        ...currentProject,
+        conversation: [...baseConversation, assistant],
+        updatedAt: new Date().toISOString(),
+      };
+      void persistProject(next, currentProject.updatedAt);
+      projectRef.current = next;
       setProject(next);
     } catch (error) {
-      const fallback = selectedBlock?.kind === "element"
-        ? createFreeElementDirectorProposal(project.spec, instruction, selectedBlock)
-        : createFreeDirectorProposal(project.spec, instruction, selectedBlock?.id);
+      const fallback =
+        selectedBlock?.kind === "element"
+          ? createFreeElementDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock,
+            )
+          : createFreeDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock?.id,
+            );
       const assistant: ProjectChatMessage = {
-        id: nowId("assistant"), role: "assistant", createdAt: new Date().toISOString(),
+        id: nowId("assistant"),
+        role: "assistant",
+        createdAt: new Date().toISOString(),
         content: `${error instanceof Error ? error.message : "The connected model is unavailable."} I prepared the same request with Free Director instead.`,
-        proposal: { label: "Free Director fallback", summary: fallback.summary, spec: fallback.spec },
+        proposal: {
+          label: "Free Director fallback",
+          summary: fallback.summary,
+          spec: fallback.spec,
+        },
       };
-      const next = { ...project, conversation: [...baseConversation, assistant] };
-      saveProject(next);
+      const currentProject = projectRef.current ?? activeProject;
+      const next = {
+        ...currentProject,
+        conversation: [...baseConversation, assistant],
+      };
+      void persistProject(next, currentProject.updatedAt);
+      projectRef.current = next;
       setProject(next);
     } finally {
       setDirecting(false);
@@ -670,15 +1559,40 @@ export function ProjectStudio() {
 
   function applyChatProposal(message: ProjectChatMessage) {
     if (!project || !message.proposal) return;
-    const conversation = (project.conversation ?? []).map((item) => item.id === message.id ? { ...item, proposal: undefined, content: `${item.content} Applied as a new checkpoint.` } : item);
-    commitSpec(message.proposal.spec, message.proposal.label, "director", conversation);
+    const conversation = (project.conversation ?? []).map((item) =>
+      item.id === message.id
+        ? {
+            ...item,
+            proposal: undefined,
+            content: `${item.content} Applied as a new checkpoint.`,
+          }
+        : item,
+    );
+    commitSpec(
+      message.proposal.spec,
+      message.proposal.label,
+      "director",
+      conversation,
+    );
     setToast("Proposal applied — Undo is available");
   }
 
   function dismissProposal(message: ProjectChatMessage) {
     if (!project) return;
-    const next = { ...project, conversation: (project.conversation ?? []).map((item) => item.id === message.id ? { ...item, proposal: undefined, content: `${item.content} Proposal dismissed.` } : item) };
-    saveProject(next);
+    const next = {
+      ...project,
+      conversation: (project.conversation ?? []).map((item) =>
+        item.id === message.id
+          ? {
+              ...item,
+              proposal: undefined,
+              content: `${item.content} Proposal dismissed.`,
+            }
+          : item,
+      ),
+    };
+    void persistProject(next, project.updatedAt);
+    projectRef.current = next;
     setProject(next);
   }
 
@@ -688,82 +1602,272 @@ export function ProjectStudio() {
       setToast("Optimizing artwork for preview and publishing…");
       const image = await prepareArtwork(file);
       const gameDirection = project.spec.gameDirection
-        ? { ...project.spec.gameDirection, backgroundImage: undefined, assetSource: "uploaded" as const }
+        ? {
+            ...project.spec.gameDirection,
+            backgroundImage: undefined,
+            assetSource: "uploaded" as const,
+          }
         : undefined;
-      commitSpec(validateProjectSpec({
-        ...project.spec,
-        experience: { ...project.spec.experience, backgroundImage: image, assetSource: "uploaded" },
-        ...(gameDirection ? { gameDirection } : {}),
-      }), "Uploaded product artwork", "design");
+      commitSpec(
+        validateProjectSpec({
+          ...project.spec,
+          experience: {
+            ...project.spec.experience,
+            backgroundImage: image,
+            assetSource: "uploaded",
+          },
+          ...(gameDirection ? { gameDirection } : {}),
+        }),
+        "Uploaded product artwork",
+        "design",
+      );
       setToast("Artwork optimized and included in publish/export");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Artwork could not be applied.");
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "Artwork could not be applied.",
+      );
     }
   }
 
   function updateModule(index: number, value: string) {
     if (!project) return;
-    const modules = project.spec.experience.modules.map((module, moduleIndex) => moduleIndex === index ? value : module);
-    updateSpecQuiet((spec) => ({ ...spec, experience: { ...spec.experience, modules } }));
+    const modules = project.spec.experience.modules.map(
+      (module, moduleIndex) => (moduleIndex === index ? value : module),
+    );
+    updateSpecQuiet((spec) => ({
+      ...spec,
+      experience: { ...spec.experience, modules },
+    }));
   }
 
   function moveModule(index: number, direction: -1 | 1) {
     if (!project) return;
     const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= project.spec.experience.modules.length) return;
+    if (nextIndex < 0 || nextIndex >= project.spec.experience.modules.length)
+      return;
     const modules = [...project.spec.experience.modules];
     [modules[index], modules[nextIndex]] = [modules[nextIndex], modules[index]];
-    commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, modules } }), "Reordered product modules", "manual");
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        experience: { ...project.spec.experience, modules },
+      }),
+      "Reordered product modules",
+      "manual",
+    );
   }
 
   function removeModule(index: number) {
     if (!project || project.spec.experience.modules.length <= 1) return;
-    const modules = project.spec.experience.modules.filter((_, moduleIndex) => moduleIndex !== index);
-    commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, modules } }), "Removed a product module", "manual");
+    const modules = project.spec.experience.modules.filter(
+      (_, moduleIndex) => moduleIndex !== index,
+    );
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        experience: { ...project.spec.experience, modules },
+      }),
+      "Removed a product module",
+      "manual",
+    );
   }
 
   function addModule() {
-    if (!project || !newModule.trim() || project.spec.experience.modules.length >= 12) return;
+    if (
+      !project ||
+      !newModule.trim() ||
+      project.spec.experience.modules.length >= 12
+    )
+      return;
     const modules = [...project.spec.experience.modules, newModule.trim()];
-    commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, modules } }), "Added a product module", "manual");
+    commitSpec(
+      validateProjectSpec({
+        ...project.spec,
+        experience: { ...project.spec.experience, modules },
+      }),
+      "Added a product module",
+      "manual",
+    );
     setNewModule("");
   }
 
   function openRuntime() {
-    if (!project) return;
-    if (project.publishedUrl && !dirty) window.open(project.publishedUrl, "_blank", "noopener,noreferrer");
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    if (currentProject.publishedUrl && !dirty)
+      window.open(
+        currentProject.publishedUrl,
+        "_blank",
+        "noopener,noreferrer",
+      );
     else {
-      const url = URL.createObjectURL(new Blob([project.html], { type: "text/html" }));
+      const url = URL.createObjectURL(
+        new Blob([currentProject.html], { type: "text/html" }),
+      );
       window.open(url, "_blank", "noopener,noreferrer");
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     }
   }
 
+  async function persistPublicationState(
+    currentProject: GeneratedProject,
+    desiredProject: GeneratedProject,
+  ): Promise<{ project: GeneratedProject; conflicted: boolean } | null> {
+    let candidate = desiredProject;
+    let expectedUpdatedAt = currentProject.updatedAt;
+    let conflicted = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await saveProjectSafely(candidate, {
+          expectedUpdatedAt,
+        });
+        if (result.status === "saved") return { project: candidate, conflicted };
+        if (!result.current) {
+          setPublishError(
+            "The local project changed before publication metadata could be saved. Reload before publishing again.",
+          );
+          setToast("Reload this project before publishing again");
+          return null;
+        }
+        conflicted = true;
+        candidate = mergePublicationState(result.current, candidate);
+        expectedUpdatedAt = result.current.updatedAt;
+      } catch {
+        setPublishError(
+          "Publication changed, but its browser management data could not be saved locally. Free browser storage before continuing.",
+        );
+        setToast("Publication management data could not be saved locally");
+        return null;
+      }
+    }
+    setPublishError(
+      "Another tab keeps changing this project. Close the other editor and reload before publishing again.",
+    );
+    setToast("Another tab is still editing this project");
+    return null;
+  }
+
   async function publish(): Promise<string | null> {
-    if (!project || publishing) return null;
-    const quality = evaluateProjectQuality(project.spec, project.html, runtimeSmoke);
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject || publishing || unpublishing) return null;
+    const quality = evaluateProjectQuality(
+      currentProject.spec,
+      currentProject.html,
+      runtimeSmoke,
+    );
     if (!quality.readyToPublish) {
-      setProject({ ...project, quality });
+      const next = { ...currentProject, quality };
+      projectRef.current = next;
+      setProject(next);
       setTab("quality");
-      setPublishError(`Quality gate blocked publishing at ${quality.score}/100.`);
+      setPublishError(
+        `Quality gate blocked publishing at ${quality.score}/100.`,
+      );
       setToast("Fix the failed release checks before publishing");
       return null;
     }
     setPublishing(true);
     setPublishError("");
     try {
-      const response = await fetch("/api/projects/publish", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ spec: project.spec }) });
-      const payload = await response.json() as { url?: string; slug?: string; error?: string };
-      if (!response.ok || !payload.url || !payload.slug) throw new Error(payload.error || "Publishing failed.");
+      const publishMutation = publishMutationForProject(currentProject);
+      const response = await fetch("/api/projects/publish", {
+        method: publishMutation === "update" ? "PUT" : "POST",
+        headers: {
+          ...studioRequestHeaders(),
+          ...(publishMutation === "update"
+            ? {
+                authorization: `Bearer ${currentProject.publishCapability}`,
+              }
+            : {}),
+        },
+        body: JSON.stringify({
+          spec: currentProject.spec,
+          ...(currentProject.sourceEditedAt
+            ? { html: currentProject.html }
+            : {}),
+          ...(publishMutation === "update"
+            ? { slug: currentProject.publishedSlug }
+            : {}),
+        }),
+      });
+      const payload = (await response.json()) as {
+        url?: string;
+        slug?: string;
+        capability?: string;
+        code?: string;
+        error?: string;
+      };
+      if (!response.ok || !payload.url || !payload.slug) {
+        if (
+          response.status === 403 &&
+          payload.code === "PUBLISH_CAPABILITY_INVALID" &&
+          publishMutation === "update"
+        ) {
+          const readOnly = {
+            ...currentProject,
+            publishCapability: undefined,
+          };
+          const persisted = await persistPublicationState(
+            currentProject,
+            readOnly,
+          );
+          if (persisted) {
+            projectRef.current = persisted.project;
+            committedProjectRef.current = persisted.project;
+            setRuntimeProject(persisted.project);
+            setProject(persisted.project);
+          }
+        }
+        throw new Error(payload.error || "Publishing failed.");
+      }
+      if (publishMutation === "create" && !payload.capability) {
+        throw new Error(
+          "The public app was created without a browser management capability. Reload before publishing again.",
+        );
+      }
       const publishedAt = new Date().toISOString();
-      const next = { ...project, publishedUrl: payload.url, publishedSlug: payload.slug, publishedAt, updatedAt: publishedAt };
-      saveProject(next);
-      setProject(next);
+      const next = {
+        ...currentProject,
+        publishedUrl: payload.url,
+        publishedSlug: payload.slug,
+        publishedAt,
+        publishCapability:
+          publishMutation === "create"
+            ? payload.capability
+            : currentProject.publishCapability,
+        updatedAt: publishedAt,
+      };
+      const persisted = await persistPublicationState(currentProject, next);
+      if (!persisted) return null;
+      projectRef.current = persisted.project;
+      committedProjectRef.current = persisted.project;
+      setRuntimeProject(persisted.project);
+      setProject(persisted.project);
+      if (persisted.conflicted) {
+        setRuntimeRevision((revision) => revision + 1);
+        setDirty(true);
+        const conflictMessage =
+          "A newer local edit was kept. The public link is managed, but publish again to sync that edit.";
+        setPublishError(conflictMessage);
+        setToast(conflictMessage);
+        return null;
+      }
       setDirty(false);
-      setToast(quality.externalSetupRequired ? "Setup app published — connect and verify the external destination next" : "Working public app published");
+      setToast(
+        publishMutation === "update"
+          ? "Public app updated at the same URL"
+          : quality.externalSetupRequired
+          ? "Setup app published — connect and verify the external destination next"
+          : "Working public app published",
+      );
       return payload.url;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Publishing failed.";
+      const message =
+        error instanceof Error ? error.message : "Publishing failed.";
       setPublishError(message);
       setToast(message);
       return null;
@@ -772,35 +1876,177 @@ export function ProjectStudio() {
     }
   }
 
+  async function unpublish() {
+    const currentProject = projectRef.current ?? project;
+    if (
+      !currentProject?.publishedSlug ||
+      !currentProject.publishCapability ||
+      publishing ||
+      unpublishing
+    ) {
+      return;
+    }
+    if (
+      !window.confirm(
+        "Unpublish this public app? Its current link will stop working, while your local project stays in this browser.",
+      )
+    ) {
+      return;
+    }
+    setUnpublishing(true);
+    setPublishError("");
+    try {
+      const response = await fetch("/api/projects/publish", {
+        method: "DELETE",
+        headers: {
+          ...studioRequestHeaders(),
+          authorization: `Bearer ${currentProject.publishCapability}`,
+        },
+        body: JSON.stringify({ slug: currentProject.publishedSlug }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          code?: string;
+          error?: string;
+        } | null;
+        if (
+          response.status === 403 &&
+          payload?.code === "PUBLISH_CAPABILITY_INVALID"
+        ) {
+          const readOnly = {
+            ...currentProject,
+            publishCapability: undefined,
+          };
+          const persisted = await persistPublicationState(
+            currentProject,
+            readOnly,
+          );
+          if (persisted) {
+            projectRef.current = persisted.project;
+            committedProjectRef.current = persisted.project;
+            setRuntimeProject(persisted.project);
+            setProject(persisted.project);
+          }
+        }
+        throw new Error(payload?.error || "Unpublishing failed.");
+      }
+      const next: GeneratedProject = {
+        ...currentProject,
+        publishedUrl: undefined,
+        publishedSlug: undefined,
+        publishedAt: undefined,
+        publishCapability: undefined,
+      };
+      const persisted = await persistPublicationState(currentProject, next);
+      if (!persisted) return;
+      projectRef.current = persisted.project;
+      committedProjectRef.current = persisted.project;
+      setRuntimeProject(persisted.project);
+      setProject(persisted.project);
+      setDirty(false);
+      if (persisted.conflicted) {
+        setRuntimeRevision((revision) => revision + 1);
+        const conflictMessage =
+          "A newer local edit was kept while the public link was removed. Review it before publishing again.";
+        setPublishError(conflictMessage);
+        setToast(conflictMessage);
+        return;
+      }
+      setPublishOpen(false);
+      setToast("Public app unpublished; local project kept");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unpublishing failed.";
+      setPublishError(message);
+      setToast(message);
+    } finally {
+      setUnpublishing(false);
+    }
+  }
+
   async function share() {
-    let url = project?.publishedUrl && !dirty ? project.publishedUrl : null;
+    const currentProject = projectRef.current ?? project;
+    let url =
+      currentProject?.publishedUrl && !dirty
+        ? currentProject.publishedUrl
+        : null;
     if (!url) url = await publish();
     if (!url) return;
-    if (navigator.share) await navigator.share({ title: project?.spec.name, text: project?.spec.tagline, url }).catch(() => undefined);
-    else await navigator.clipboard.writeText(url).then(() => setToast("Public link copied"));
+    if (navigator.share)
+      await navigator
+        .share({
+          title: currentProject?.spec.name,
+          text: currentProject?.spec.tagline,
+          url,
+        })
+        .catch(() => undefined);
+    else
+      await navigator.clipboard
+        .writeText(url)
+        .then(() => setToast("Public link copied"));
   }
 
   function handleCloudPublish() {
-    if (project?.publishedUrl && !dirty) {
-      window.open(project.publishedUrl, "_blank", "noopener,noreferrer");
+    const currentProject = projectRef.current ?? project;
+    if (currentProject?.publishedUrl && !dirty) {
+      window.open(
+        currentProject.publishedUrl,
+        "_blank",
+        "noopener,noreferrer",
+      );
       return;
     }
     void publish();
   }
 
   async function downloadSource(nextHost?: HostingProvider) {
-    if (!project) return;
-    const bytes = await projectArchive(project);
-    downloadBlob(`${project.spec.slug}-source.zip`, new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" }));
-    setToast(nextHost ? `Git-ready deployment package created for ${nextHost}` : "Runnable app + source ZIP downloaded");
-    if (nextHost) window.setTimeout(() => window.open(hostLinks[nextHost], "_blank", "noopener,noreferrer"), 450);
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    const bytes = await projectArchive(currentProject);
+    downloadBlob(
+      `${currentProject.spec.slug}-source.zip`,
+      new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" }),
+    );
+    setToast(
+      nextHost
+        ? `Git-ready deployment package created for ${nextHost}`
+        : "Runnable app + source ZIP downloaded",
+    );
+    if (nextHost)
+      window.setTimeout(
+        () => window.open(hostLinks[nextHost], "_blank", "noopener,noreferrer"),
+        450,
+      );
   }
 
   function openSource(file: SourceFile = "index.html") {
-    if (!project) return;
+    const currentProject =
+      commitPendingSpec() ?? projectRef.current ?? project;
+    if (!currentProject) return;
+    sourceReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setSourceFile(file);
-    setSourceDraft(file === "project.json" ? JSON.stringify(project.spec, null, 2) : "");
+    setSourceDraft(
+      file === "index.html"
+        ? prepareEditableRuntimeHtml(currentProject.html)
+        : file === "project.json"
+        ? JSON.stringify(currentProject.spec, null, 2)
+        : "",
+    );
+    setSourceIssues([]);
     setSourceOpen(true);
+  }
+
+  function openPublish() {
+    commitPendingSpec();
+    publishReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setPublishOpen(true);
   }
 
   function applyProjectJson() {
@@ -809,23 +2055,87 @@ export function ProjectStudio() {
       const spec = validateProjectSpec(JSON.parse(sourceDraft));
       commitSpec(spec, "Edited project.json", "manual");
       setSourceDraft(JSON.stringify(spec, null, 2));
+      setSourceIssues([]);
       setToast("Validated project.json applied — checkpoint created");
     } catch (error) {
-      setToast(error instanceof Error ? `Invalid project.json: ${error.message}` : "Invalid project.json");
+      const issue =
+        error instanceof Error
+          ? `Invalid project.json: ${error.message}`
+          : "Invalid project.json";
+      setSourceIssues([issue]);
+      setToast(issue);
     }
   }
 
-  if (!loaded) return <div className="studio-loading"><LoaderCircle className="spin" /> Loading product workspace…</div>;
-  if (!project || !preset) return <main className="studio-missing"><span><Rocket /></span><h1>Project not found</h1><p>This local project may belong to another browser.</p><a href="/">Create a working product</a></main>;
+  function applyRuntimeHtml() {
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject) return;
+    const validation = validateEditableRuntimeHtml(
+      currentProject.spec,
+      sourceDraft,
+    );
+    if (!validation.valid) {
+      setSourceIssues(validation.issues);
+      setToast(validation.issues[0] ?? "index.html did not pass validation");
+      return;
+    }
+    const transition = commitProjectCheckpoint(currentProject, {
+      id: nowId("checkpoint"),
+      label: "Edited runnable index.html",
+      createdAt: new Date().toISOString(),
+      source: "manual",
+      spec: currentProject.spec,
+      runtimeHtml: sourceDraft,
+    });
+    replaceProject(transition.project);
+    setSourceIssues([]);
+    setToast(
+      "Validated index.html applied — preview updated and checkpoint created",
+    );
+  }
+
+  if (!loaded)
+    return (
+      <div className="studio-loading">
+        <LoaderCircle className="spin" /> Loading product workspace…
+      </div>
+    );
+  if (!project || !preset)
+    return (
+      <main className="studio-missing">
+        <span>
+          <Rocket />
+        </span>
+        <h1>Project not found</h1>
+        <p>This local project may belong to another browser.</p>
+        <a href="/">Create a working product</a>
+      </main>
+    );
 
   const published = Boolean(project.publishedUrl);
-  const quality = qualityReport ?? evaluateProjectQuality(project.spec, project.html);
+  const managedPublication =
+    published && publishMutationForProject(project) === "update";
+  const legacyPublication = published && !managedPublication;
+  const quality =
+    qualityReport ?? evaluateProjectQuality(project.spec, project.html);
   const reality = getProductReality(project.spec.presetId);
   const externalSetup = quality.launchStatus === "external-setup-required";
   const researchOnly = quality.launchStatus === "research-only";
-  const releaseLabel = externalSetup ? "External setup required" : researchOnly ? "Research app ready" : "Web app ready";
+  const releaseLabel = externalSetup
+    ? "External setup required"
+    : researchOnly
+      ? "Research app ready"
+      : "Web app ready";
   const checkpoints = project.checkpoints ?? [];
-  const nav: Array<{ id: InspectorTab; label: string; icon: typeof Settings2 }> = [
+  const futureCheckpoints = project.futureCheckpoints ?? [];
+  const nav: Array<{
+    id: InspectorTab;
+    label: string;
+    icon: typeof Settings2;
+    mobileOnly?: boolean;
+  }> = [
+    { id: "project", label: "Project", icon: Settings2 },
+    { id: "preview", label: "Preview", icon: Monitor, mobileOnly: true },
     { id: "director", label: "Director", icon: Sparkles },
     { id: "design", label: "Design", icon: Palette },
     { id: "data", label: "Data", icon: Database },
@@ -837,147 +2147,2113 @@ export function ProjectStudio() {
   ];
   const game = project.spec.gameDirection;
   const quickPrompts = categoryPrompts[project.spec.presetId];
-  const activeSourceContent = sourceFile === "index.html"
-    ? project.html
-    : sourceFile === "project.json"
-      ? sourceDraft || JSON.stringify(project.spec, null, 2)
-      : JSON.stringify(quality, null, 2);
+  const activeSourceContent =
+    sourceFile === "index.html"
+      ? sourceDraft || project.html
+      : sourceFile === "project.json"
+        ? sourceDraft || JSON.stringify(project.spec, null, 2)
+        : JSON.stringify(quality, null, 2);
+
+  const openInspectorTab = (nextTab: InspectorTab) => {
+    if (
+      nextTab === "director" &&
+      window.matchMedia("(min-width: 1600px)").matches
+    ) {
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus();
+      });
+      return;
+    }
+    setTab(nextTab);
+  };
 
   return (
-    <main className="project-studio-shell">
+    <main
+      className="project-studio-shell"
+      onBlurCapture={(event) => {
+        if (
+          event.target instanceof HTMLInputElement ||
+          event.target instanceof HTMLTextAreaElement ||
+          event.target instanceof HTMLSelectElement
+        )
+          commitPendingSpec();
+      }}
+      onKeyDownCapture={(event) => {
+        if (
+          event.key === "Enter" &&
+          event.target instanceof HTMLInputElement &&
+          event.target.type !== "file"
+        )
+          commitPendingSpec();
+      }}
+    >
       <header className="project-studio-topbar">
-        <div className="project-crumbs"><a href="/" aria-label="Back to builder"><ArrowLeft /></a><span className="studio-brand-mark"><Image src="https://dropstab.com/images/dropstab-logo-drop-default.svg" alt="DropsTab" width={20} height={20} unoptimized /></span><strong>Drops Studio</strong><i>/</i><span>{project.spec.name}</span><b className={published && !dirty ? "running" : "draft"}><i />{published && !dirty ? externalSetup ? "Setup app published" : researchOnly ? "Research app published" : "Web app published" : dirty ? "Edits pending" : externalSetup ? "Setup required" : "Draft"}</b></div>
-        <div className="workspace-actions"><button type="button" onClick={undo} disabled={checkpoints.length < 2}><Undo2 /> Undo</button><button type="button" onClick={openRuntime}><Play /> Run app</button><button type="button" onClick={() => setTab("connections")}><KeyRound /> Connections</button><button type="button" onClick={share} disabled={publishing}><Share2 /> Share</button><button className="publish-top" type="button" onClick={() => setPublishOpen(true)}><UploadCloud /> {published && dirty ? "Publish update" : published ? "Published" : "Publish"}<ChevronDown /></button></div>
+        <div className="project-crumbs">
+          <a href="/" aria-label="Back to builder">
+            <ArrowLeft />
+          </a>
+          <DropsBrand compact showPartners={false} />
+          <i>/</i>
+          <span>{project.spec.name}</span>
+          <b className={published && !dirty ? "running" : "draft"}>
+            <i />
+            {published && !dirty
+              ? externalSetup
+                ? "Setup app published"
+                : researchOnly
+                  ? "Research app published"
+                  : "Web app published"
+                : dirty
+                  ? "Edits pending"
+                  : externalSetup
+                  ? "Needs connection"
+                  : "Draft"}
+          </b>
+        </div>
+        <div className="workspace-actions">
+          <button
+            className="workspace-icon-action"
+            type="button"
+            aria-label="Undo"
+            onClick={undo}
+            disabled={checkpoints.length < 2}
+          >
+            <Undo2 /> <span>Undo</span>
+          </button>
+          <button
+            className="workspace-icon-action"
+            type="button"
+            aria-label="Redo"
+            onClick={redo}
+            disabled={futureCheckpoints.length === 0}
+          >
+            <Redo2 /> <span>Redo</span>
+          </button>
+          <button
+            className="workspace-run-action"
+            type="button"
+            aria-label="Run app"
+            onClick={openRuntime}
+          >
+            <Play /> <span>Run app</span>
+          </button>
+          <button
+            className="workspace-connections-action"
+            type="button"
+            aria-label="Connections"
+            onClick={() => setTab("connections")}
+          >
+            <KeyRound /> <span>Connections</span>
+          </button>
+          <button
+            className="workspace-icon-action"
+            type="button"
+            aria-label="Share"
+            onClick={share}
+            disabled={publishing || unpublishing}
+          >
+            <Share2 /> <span>Share</span>
+          </button>
+          <button
+            className="publish-top"
+            type="button"
+            onClick={openPublish}
+            disabled={publishing || unpublishing}
+          >
+            <UploadCloud />{" "}
+            <span>
+              {published && dirty
+                ? managedPublication
+                  ? "Publish update"
+                  : "Publish new version"
+                : published
+                  ? legacyPublication
+                    ? "Published read-only"
+                    : "Published"
+                  : "Publish"}
+            </span>
+            <ChevronDown />
+          </button>
+        </div>
       </header>
 
       <div className={`project-studio-layout tab-${tab}`}>
         <aside className="studio-rail">
-          {nav.map((item) => { const Icon = item.icon; return <button type="button" title={item.label} aria-label={item.label} className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}><Icon /><span>{item.label}</span></button>; })}
-          <div className="rail-foundation"><span title="DropsTab attached"><Database /></span><span title="Drops Bot attached"><Bot /></span></div>
+          {nav.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                type="button"
+                title={item.label}
+                aria-label={item.label}
+                className={`${tab === item.id ? "active" : ""}${item.mobileOnly ? " mobile-preview-tab" : ""}`.trim()}
+                key={item.id}
+                onClick={() => openInspectorTab(item.id)}
+              >
+                <Icon />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+          <div className="rail-foundation">
+            <span title="DropsTab attached">
+              <Database />
+            </span>
+            <span title="Drops Bot attached">
+              <Bot />
+            </span>
+          </div>
         </aside>
 
         <aside className="studio-inspector">
-          {tab === "director" && <section className="inspector-section">
-            <div className="inspector-heading"><span><Sparkles /> Product Director</span><b>FREE</b></div>
-            <p className="inspector-copy">Turns intent into a category-aware product plan before changes reach the working app.</p>
-            <div className="director-pipeline"><span className="done"><i>1</i><b>Brief</b><small>{preset.shortTitle}</small></span><span className="done"><i>2</i><b>Experience</b><small>{game ? game.genre.replace(/-/g, " ") : preset.output}</small></span><span className="done"><i>3</i><b>Foundation</b><small>DropsTab × Drops Bot</small></span><span className={quality.readyToPublish ? "done" : ""}><i>4</i><b>Ship</b><small>{quality.score}/100 quality</small></span></div>
-            <label>Product name<input value={project.spec.name} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, name: event.target.value }))} /></label>
-            <label>Product promise<textarea rows={4} value={project.spec.tagline} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, tagline: event.target.value }))} /></label>
-            <div className="experience-brief"><span><Layers3 /> Experience brief</span><dl><div><dt>Archetype</dt><dd>{project.spec.experience.archetype.replace(/-/g, " ")}</dd></div><div><dt>Layout</dt><dd>{project.spec.experience.layout}</dd></div><div><dt>Data view</dt><dd>{project.spec.experience.dataView}</dd></div><div><dt>Loop</dt><dd>{project.spec.experience.engagement}</dd></div></dl><p>{project.spec.experience.primaryLoop}</p><div>{project.spec.experience.modules.map((module) => <i key={module}>{module}</i>)}</div></div>
-            <div className="blueprint-inspector"><span><WandSparkles /> AI product blueprint</span><p>{project.spec.blueprint.visualConcept}</p><dl><div><dt>Native screens</dt><dd>{project.spec.blueprint.screens.join(" · ")}</dd></div><div><dt>Working interactions</dt><dd>{project.spec.blueprint.interactions.join(" · ")}</dd></div><div><dt>DropsTab foundation</dt><dd>{project.spec.blueprint.dropsTabUse.join(" · ")}</dd></div><div><dt>Drops Bot automation</dt><dd>{project.spec.blueprint.dropsBotUse.join(" · ")}</dd></div>{project.spec.blueprint.revisionNotes?.length ? <div><dt>Revision trade-offs</dt><dd>{project.spec.blueprint.revisionNotes.join(" · ")}</dd></div> : null}</dl></div>
-            {game && <div className="game-brief"><span><Gamepad2 /> Game brief</span><dl><div><dt>Genre</dt><dd>{game.genre.replace(/-/g, " ")}</dd></div><div><dt>World</dt><dd>{game.world.replace(/-/g, " ")}</dd></div><div><dt>Art</dt><dd>{game.artStyle}</dd></div><div><dt>Loop</dt><dd>{game.roundSeconds}s · {game.difficulty}</dd></div></dl><p>{game.gameLoop}</p></div>}
-            <button className="inspector-primary" type="button" onClick={() => void sendDirectorPrompt(game ? "Make this game feel more visual, playful and shareable" : "Improve the product hierarchy and primary user loop")}><WandSparkles /> Ask Director to improve it</button>
-          </section>}
-
-          {tab === "design" && <section className="inspector-section">
-            <div className="inspector-heading"><span><Palette /> Design Canvas</span><b className="free-badge">FREE</b></div>
-            <button type="button" className={`design-mode-control ${designMode ? "active" : ""}`} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /><span><strong>{designMode ? "Selecting elements" : "Select in preview"}</strong><small>{designMode ? "Click to inspect · double-click text to type" : "Choose any text, image, button or block"}</small></span><i>{designMode ? "ON" : "OFF"}</i></button>
-            {selectedBlock?.kind === "block" && (
-              <div className="selected-inspector">
-                <div><span>Selected block</span><strong><Layers3 /> {selectedBlock.label}</strong></div>
-                <label>Variant<select value={project.spec.blocks[selectedBlock.id]?.variant ?? "default"} onChange={(event) => updateSelectedBlock({ variant: event.target.value as "default" | "compact" | "wide" | "spotlight" })}><option value="default">Default</option><option value="compact">Compact</option><option value="wide">Wide</option><option value="spotlight">Spotlight</option></select></label>
-                <label className="toggle-line"><input type="checkbox" checked={project.spec.blocks[selectedBlock.id]?.visible !== false} onChange={(event) => updateSelectedBlock({ visible: event.target.checked })} /> Visible in the app</label>
+          {tab === "project" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <Sparkles /> Drops Director
+                </span>
+                <b>FREE</b>
               </div>
-            )}
-            {selectedBlock?.kind === "element" && (
-              <div className="selected-inspector element-inspector">
-                <div className="element-inspector-head"><span>Selected {selectedBlock.tag}</span><strong><MousePointer2 /> {selectedBlock.label}</strong><button type="button" onClick={resetSelectedElement}>Reset</button></div>
-                {selectedBlock.textEditable && <label>Text<textarea rows={3} value={selectedBlock.text} onChange={(event) => previewSelectedElement({ text: event.target.value })} /></label>}
-                {selectedBlock.imageEditable && <label className="element-image-upload"><ImageIcon /><span><strong>Replace this image</strong><small>PNG, JPG or WebP · optimized into the published app</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void previewElementImage(event.target.files?.[0])} /></label>}
-                <div className="element-control-grid">
-                  <label>Font size<input type="number" min="8" max="120" value={selectedBlock.styles.fontSize} onChange={(event) => previewSelectedElement({ styles: { fontSize: Number(event.target.value) } })} /></label>
-                  <label>Weight<select value={selectedBlock.styles.fontWeight} onChange={(event) => previewSelectedElement({ styles: { fontWeight: Number(event.target.value) } })}><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Extra bold</option><option value="900">Black</option></select></label>
-                  <label>Text color<span className="element-color"><input type="color" value={colorInputValue(selectedBlock.styles.color)} onChange={(event) => previewSelectedElement({ styles: { color: event.target.value } })} /><b>{selectedBlock.styles.color}</b></span></label>
-                  <label>Background<span className="element-color"><input type="color" value={colorInputValue(selectedBlock.styles.backgroundColor)} onChange={(event) => previewSelectedElement({ styles: { backgroundColor: event.target.value } })} /><b>{selectedBlock.styles.backgroundColor === "transparent" ? "No fill" : selectedBlock.styles.backgroundColor}</b><button type="button" aria-label="Remove background fill" onClick={() => previewSelectedElement({ styles: { backgroundColor: "transparent" } })}>×</button></span></label>
-                  <label>Alignment<select value={selectedBlock.styles.textAlign} onChange={(event) => previewSelectedElement({ styles: { textAlign: event.target.value as ProjectElementConfig["textAlign"] } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
-                  <label>Width %<input type="number" min="10" max="100" value={selectedBlock.styles.width} onChange={(event) => previewSelectedElement({ styles: { width: Number(event.target.value) } })} /></label>
-                  <label>Padding<input type="number" min="0" max="80" value={selectedBlock.styles.padding} onChange={(event) => previewSelectedElement({ styles: { padding: Number(event.target.value) } })} /></label>
-                  <label>Corner radius<input type="number" min="0" max="80" value={selectedBlock.styles.borderRadius} onChange={(event) => previewSelectedElement({ styles: { borderRadius: Number(event.target.value) } })} /></label>
-                  <label>Move X<input type="number" min="-500" max="500" value={selectedBlock.styles.translateX} onChange={(event) => previewSelectedElement({ styles: { translateX: Number(event.target.value) } })} /></label>
-                  <label>Move Y<input type="number" min="-500" max="500" value={selectedBlock.styles.translateY} onChange={(event) => previewSelectedElement({ styles: { translateY: Number(event.target.value) } })} /></label>
-                  <label>Opacity<input type="number" min="0" max="1" step="0.05" value={selectedBlock.styles.opacity} onChange={(event) => previewSelectedElement({ styles: { opacity: Number(event.target.value) } })} /></label>
-                  <label>Layer<input type="number" min="-10" max="100" value={selectedBlock.styles.zIndex} onChange={(event) => previewSelectedElement({ styles: { zIndex: Number(event.target.value) } })} /></label>
+              <p className="inspector-copy">
+                Shapes your brief into a category-aware plan before changes
+                reach the working app.
+              </p>
+              <div className="director-pipeline">
+                <span className="done">
+                  <i>1</i>
+                  <b>Brief</b>
+                  <small>{preset.shortTitle}</small>
+                </span>
+                <span className="done">
+                  <i>2</i>
+                  <b>Experience</b>
+                  <small>
+                    {game ? game.genre.replace(/-/g, " ") : preset.output}
+                  </small>
+                </span>
+                <span className="done">
+                  <i>3</i>
+                  <b>Foundation</b>
+                  <small>DropsTab × Drops Bot</small>
+                </span>
+                <span className={quality.readyToPublish ? "done" : ""}>
+                  <i>4</i>
+                  <b>Ship</b>
+                  <small>{quality.score}/100 quality</small>
+                </span>
+              </div>
+              <label>
+                Product name
+                <input
+                  value={project.spec.name}
+                  onChange={(event) =>
+                    updateSpecQuiet((spec) => ({
+                      ...spec,
+                      name: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                Product promise
+                <textarea
+                  rows={4}
+                  value={project.spec.tagline}
+                  onChange={(event) =>
+                    updateSpecQuiet((spec) => ({
+                      ...spec,
+                      tagline: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <div className="experience-brief">
+                <span>
+                  <Layers3 /> Experience brief
+                </span>
+                <dl>
+                  <div>
+                    <dt>Archetype</dt>
+                    <dd>
+                      {project.spec.experience.archetype.replace(/-/g, " ")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Layout</dt>
+                    <dd>{project.spec.experience.layout}</dd>
+                  </div>
+                  <div>
+                    <dt>Data view</dt>
+                    <dd>{project.spec.experience.dataView}</dd>
+                  </div>
+                  <div>
+                    <dt>Loop</dt>
+                    <dd>{project.spec.experience.engagement}</dd>
+                  </div>
+                </dl>
+                <p>{project.spec.experience.primaryLoop}</p>
+                <div>
+                  {project.spec.experience.modules.map((module) => (
+                    <i key={module}>{module}</i>
+                  ))}
                 </div>
-                <label className="toggle-line"><input type="checkbox" checked={selectedBlock.styles.visible} onChange={(event) => previewSelectedElement({ styles: { visible: event.target.checked } })} /> Visible in the app</label>
-                <div className="element-actions"><button type="button" onClick={commitSelectedElement}><Check /> Save version</button><button type="button" onClick={() => setTab("director")}><Sparkles /> Edit with AI</button></div>
               </div>
-            )}
-            <span className="section-label">Design directions</span>
-            <div className="design-kits">{DESIGN_DIRECTIONS.map((direction) => <button type="button" className={project.spec.design.kit === direction.id ? "active" : ""} key={direction.id} onClick={() => applyKit(direction.id)}><span className="kit-preview" style={{ background: `linear-gradient(135deg,${direction.palette.join(",")})` }}><i /><i /><i /></span><span><strong>{direction.name}</strong><small>{direction.bestFor}</small></span>{project.spec.design.kit === direction.id && <Check />}</button>)}</div>
-            <div className="design-tokens"><label>Accent<div className="color-field"><input type="color" value={project.spec.theme.accent} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, theme: { ...spec.theme, accent: event.target.value } }))} /><input value={project.spec.theme.accent} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, theme: { ...spec.theme, accent: event.target.value } }))} /></div></label><label>Density<select value={project.spec.design.density} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, design: { ...spec.design, density: event.target.value as GeneratedProjectSpec["design"]["density"] } }))}><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="cinematic">Cinematic</option></select></label><label>Motion<select value={project.spec.design.motion} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, design: { ...spec.design, motion: event.target.value as GeneratedProjectSpec["design"]["motion"] } }))}><option value="reduced">Reduced</option><option value="smooth">Smooth</option><option value="expressive">Expressive</option></select></label></div>
-            <label className="art-upload"><ImageIcon /><span><strong>{game ? "Replace game world artwork" : "Add product hero artwork"}</strong><small>Auto-optimized · included in public app and ZIP</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void handleArtUpload(event.target.files?.[0])} /></label>
-          </section>}
+              <div className="blueprint-inspector">
+                <span>
+                  <WandSparkles /> AI product blueprint
+                </span>
+                <p>{project.spec.blueprint.visualConcept}</p>
+                <dl>
+                  <div>
+                    <dt>Native screens</dt>
+                    <dd>{project.spec.blueprint.screens.join(" · ")}</dd>
+                  </div>
+                  <div>
+                    <dt>Working interactions</dt>
+                    <dd>{project.spec.blueprint.interactions.join(" · ")}</dd>
+                  </div>
+                  <div>
+                    <dt>DropsTab foundation</dt>
+                    <dd>{project.spec.blueprint.dropsTabUse.join(" · ")}</dd>
+                  </div>
+                  <div>
+                    <dt>Drops Bot automation</dt>
+                    <dd>{project.spec.blueprint.dropsBotUse.join(" · ")}</dd>
+                  </div>
+                  {project.spec.blueprint.revisionNotes?.length ? (
+                    <div>
+                      <dt>Revision trade-offs</dt>
+                      <dd>
+                        {project.spec.blueprint.revisionNotes.join(" · ")}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+              {game && (
+                <div className="game-brief">
+                  <span>
+                    <Gamepad2 /> Game brief
+                  </span>
+                  <dl>
+                    <div>
+                      <dt>Genre</dt>
+                      <dd>{game.genre.replace(/-/g, " ")}</dd>
+                    </div>
+                    <div>
+                      <dt>World</dt>
+                      <dd>{game.world.replace(/-/g, " ")}</dd>
+                    </div>
+                    <div>
+                      <dt>Art</dt>
+                      <dd>{game.artStyle}</dd>
+                    </div>
+                    <div>
+                      <dt>Loop</dt>
+                      <dd>
+                        {game.roundSeconds}s · {game.difficulty}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p>{game.gameLoop}</p>
+                </div>
+              )}
+              <button
+                className="inspector-primary"
+                type="button"
+                onClick={() =>
+                  void sendDirectorPrompt(
+                    game
+                      ? "Make this game feel more visual, playful and shareable"
+                      : "Improve the product hierarchy and primary user loop",
+                  )
+                }
+              >
+                <WandSparkles /> Ask Director to improve it
+              </button>
+            </section>
+          )}
 
-          {tab === "data" && <section className="inspector-section"><div className="inspector-heading"><span><Database /> Data foundation</span><BadgeCheck /></div><p className="inspector-copy">DropsTab Public API is the primary production data contract. A clearly labelled public fallback keeps exported demos alive when no platform or user key is available.</p><div className="foundation-card"><span><Database /></span><div><strong>DropsTab Public API adapter</strong><small>Prices · change · market cap · context</small></div><b>API READY</b></div><div className="data-budget"><ShieldCheck /><div><strong>Low-consumption policy</strong><span>15-minute shared platform cache · no generated-app polling · manual BYOK refresh only</span></div><b>≤ 96/day</b></div><div className="asset-list">{project.spec.market.map((coin) => <div key={coin.symbol}><span>{coin.symbol.slice(0, 2)}</span><div><strong>{coin.symbol}</strong><small>{coin.name}</small></div><b className={coin.change === null ? undefined : coin.change >= 0 ? "up" : "down"}>{coin.change === null ? "—" : `${coin.change >= 0 ? "+" : ""}${coin.change.toFixed(2)}%`}</b></div>)}</div><div className="safety-note"><ShieldCheck /><span><strong>No secret in the output</strong><small>Connected keys stay session-only and never enter publish or ZIP.</small></span></div><button className="inspector-secondary" type="button" onClick={() => window.open("https://api-docs.dropstab.com/", "_blank", "noopener,noreferrer")}><Database /> DropsTab API docs <ExternalLink /></button></section>}
+          {tab === "design" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <Palette /> Design Canvas
+                </span>
+                <b className="free-badge">FREE</b>
+              </div>
+              <button
+                type="button"
+                className={`design-mode-control ${designMode ? "active" : ""}`}
+                onClick={() => setDesignMode((value) => !value)}
+              >
+                <MousePointer2 />
+                <span>
+                  <strong>
+                    {designMode ? "Selecting elements" : "Select in preview"}
+                  </strong>
+                  <small>
+                    {designMode
+                      ? "Click to inspect · double-click text to type"
+                      : "Choose any text, image, button or block"}
+                  </small>
+                </span>
+                <i>{designMode ? "ON" : "OFF"}</i>
+              </button>
+              {selectedBlock?.kind === "block" && (
+                <div className="selected-inspector">
+                  <div>
+                    <span>Selected block</span>
+                    <strong>
+                      <Layers3 /> {selectedBlock.label}
+                    </strong>
+                  </div>
+                  <label>
+                    Variant
+                    <select
+                      value={
+                        project.spec.blocks[selectedBlock.id]?.variant ??
+                        "default"
+                      }
+                      onChange={(event) =>
+                        updateSelectedBlock({
+                          variant: event.target.value as
+                            | "default"
+                            | "compact"
+                            | "wide"
+                            | "spotlight",
+                        })
+                      }
+                    >
+                      <option value="default">Default</option>
+                      <option value="compact">Compact</option>
+                      <option value="wide">Wide</option>
+                      <option value="spotlight">Spotlight</option>
+                    </select>
+                  </label>
+                  <label className="toggle-line">
+                    <input
+                      type="checkbox"
+                      checked={
+                        project.spec.blocks[selectedBlock.id]?.visible !== false
+                      }
+                      onChange={(event) =>
+                        updateSelectedBlock({ visible: event.target.checked })
+                      }
+                    />{" "}
+                    Visible in the app
+                  </label>
+                </div>
+              )}
+              {selectedBlock?.kind === "element" && (
+                <div className="selected-inspector element-inspector">
+                  <div className="element-inspector-head">
+                    <span>Selected {selectedBlock.tag}</span>
+                    <strong>
+                      <MousePointer2 /> {selectedBlock.label}
+                    </strong>
+                    <button type="button" onClick={resetSelectedElement}>
+                      Reset
+                    </button>
+                  </div>
+                  {selectedBlock.textEditable && (
+                    <label>
+                      Text
+                      <textarea
+                        rows={3}
+                        value={selectedBlock.text}
+                        onChange={(event) =>
+                          previewSelectedElement({ text: event.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+                  {selectedBlock.imageEditable && (
+                    <label className="element-image-upload">
+                      <ImageIcon />
+                      <span>
+                        <strong>Replace this image</strong>
+                        <small>
+                          PNG, JPG or WebP · optimized into the published app
+                        </small>
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(event) =>
+                          void previewElementImage(event.target.files?.[0])
+                        }
+                      />
+                    </label>
+                  )}
+                  <div className="element-control-grid">
+                    <label>
+                      Font size
+                      <input
+                        type="number"
+                        min="12"
+                        max="120"
+                        value={selectedBlock.styles.fontSize}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { fontSize: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Weight
+                      <select
+                        value={selectedBlock.styles.fontWeight}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { fontWeight: Number(event.target.value) },
+                          })
+                        }
+                      >
+                        <option value="400">Regular</option>
+                        <option value="500">Medium</option>
+                        <option value="600">Semibold</option>
+                        <option value="700">Bold</option>
+                        <option value="800">Extra bold</option>
+                        <option value="900">Black</option>
+                      </select>
+                    </label>
+                    <label>
+                      Text color
+                      <span className="element-color">
+                        <input
+                          type="color"
+                          value={colorInputValue(selectedBlock.styles.color)}
+                          onChange={(event) =>
+                            previewSelectedElement({
+                              styles: { color: event.target.value },
+                            })
+                          }
+                        />
+                        <b>{selectedBlock.styles.color}</b>
+                      </span>
+                    </label>
+                    <label>
+                      Background
+                      <span className="element-color">
+                        <input
+                          type="color"
+                          value={colorInputValue(
+                            selectedBlock.styles.backgroundColor,
+                          )}
+                          onChange={(event) =>
+                            previewSelectedElement({
+                              styles: { backgroundColor: event.target.value },
+                            })
+                          }
+                        />
+                        <b>
+                          {selectedBlock.styles.backgroundColor ===
+                          "transparent"
+                            ? "No fill"
+                            : selectedBlock.styles.backgroundColor}
+                        </b>
+                        <button
+                          type="button"
+                          aria-label="Remove background fill"
+                          onClick={() =>
+                            previewSelectedElement({
+                              styles: { backgroundColor: "transparent" },
+                            })
+                          }
+                        >
+                          ×
+                        </button>
+                      </span>
+                    </label>
+                    <label>
+                      Alignment
+                      <select
+                        value={selectedBlock.styles.textAlign}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: {
+                              textAlign: event.target
+                                .value as ProjectElementConfig["textAlign"],
+                            },
+                          })
+                        }
+                      >
+                        <option value="left">Left</option>
+                        <option value="center">Center</option>
+                        <option value="right">Right</option>
+                      </select>
+                    </label>
+                    <label>
+                      Width %
+                      <input
+                        type="number"
+                        min="10"
+                        max="100"
+                        value={selectedBlock.styles.width}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { width: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Padding
+                      <input
+                        type="number"
+                        min="0"
+                        max="80"
+                        value={selectedBlock.styles.padding}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { padding: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Corner radius
+                      <input
+                        type="number"
+                        min="0"
+                        max="80"
+                        value={selectedBlock.styles.borderRadius}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: {
+                              borderRadius: Number(event.target.value),
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Move X
+                      <input
+                        type="number"
+                        min="-500"
+                        max="500"
+                        value={selectedBlock.styles.translateX}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { translateX: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Move Y
+                      <input
+                        type="number"
+                        min="-500"
+                        max="500"
+                        value={selectedBlock.styles.translateY}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { translateY: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Opacity
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={selectedBlock.styles.opacity}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { opacity: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Layer
+                      <input
+                        type="number"
+                        min="-10"
+                        max="100"
+                        value={selectedBlock.styles.zIndex}
+                        onChange={(event) =>
+                          previewSelectedElement({
+                            styles: { zIndex: Number(event.target.value) },
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="toggle-line">
+                    <input
+                      type="checkbox"
+                      checked={selectedBlock.styles.visible}
+                      onChange={(event) =>
+                        previewSelectedElement({
+                          styles: { visible: event.target.checked },
+                        })
+                      }
+                    />{" "}
+                    Visible in the app
+                  </label>
+                  <div className="element-actions">
+                    <button type="button" onClick={commitSelectedElement}>
+                      <Check /> Save version
+                    </button>
+                    <button type="button" onClick={() => openInspectorTab("director")}>
+                      <Sparkles /> Edit with AI
+                    </button>
+                  </div>
+                </div>
+              )}
+              <span className="section-label">Design directions</span>
+              <div className="design-kits">
+                {DESIGN_DIRECTIONS.map((direction) => (
+                  <button
+                    type="button"
+                    className={
+                      project.spec.design.kit === direction.id ? "active" : ""
+                    }
+                    key={direction.id}
+                    onClick={() => applyKit(direction.id)}
+                  >
+                    <span
+                      className="kit-preview"
+                      style={{
+                        background: `linear-gradient(135deg,${direction.palette.join(",")})`,
+                      }}
+                    >
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span>
+                      <strong>{direction.name}</strong>
+                      <small>{direction.bestFor}</small>
+                    </span>
+                    {project.spec.design.kit === direction.id && <Check />}
+                  </button>
+                ))}
+              </div>
+              <div className="design-tokens">
+                <label>
+                  Accent
+                  <div className="color-field">
+                    <input
+                      type="color"
+                      value={project.spec.theme.accent}
+                      onChange={(event) =>
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          theme: { ...spec.theme, accent: event.target.value },
+                        }))
+                      }
+                    />
+                    <input
+                      value={project.spec.theme.accent}
+                      onChange={(event) =>
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          theme: { ...spec.theme, accent: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                </label>
+                <label>
+                  Density
+                  <select
+                    value={project.spec.design.density}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) => ({
+                        ...spec,
+                        design: {
+                          ...spec.design,
+                          density: event.target
+                            .value as GeneratedProjectSpec["design"]["density"],
+                        },
+                      }))
+                    }
+                  >
+                    <option value="compact">Compact</option>
+                    <option value="comfortable">Comfortable</option>
+                    <option value="cinematic">Cinematic</option>
+                  </select>
+                </label>
+                <label>
+                  Motion
+                  <select
+                    value={project.spec.design.motion}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) => ({
+                        ...spec,
+                        design: {
+                          ...spec.design,
+                          motion: event.target
+                            .value as GeneratedProjectSpec["design"]["motion"],
+                        },
+                      }))
+                    }
+                  >
+                    <option value="reduced">Reduced</option>
+                    <option value="smooth">Smooth</option>
+                    <option value="expressive">Expressive</option>
+                  </select>
+                </label>
+              </div>
+              <label className="art-upload">
+                <ImageIcon />
+                <span>
+                  <strong>
+                    {game
+                      ? "Replace game world artwork"
+                      : "Add product hero artwork"}
+                  </strong>
+                  <small>Auto-optimized · included in public app and ZIP</small>
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) =>
+                    void handleArtUpload(event.target.files?.[0])
+                  }
+                />
+              </label>
+            </section>
+          )}
+
+          {tab === "data" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <Database /> Data foundation
+                </span>
+                <BadgeCheck />
+              </div>
+              <p className="inspector-copy">
+                DropsTab Public API is the primary production data contract. A
+                clearly labelled public fallback keeps exported demos alive when
+                no platform or user key is available.
+              </p>
+              <div className="foundation-card">
+                <span>
+                  <Database />
+                </span>
+                <div>
+                  <strong>DropsTab Public API adapter</strong>
+                  <small>Prices · change · market cap · context</small>
+                </div>
+                <b>API READY</b>
+              </div>
+              <div className="data-budget">
+                <ShieldCheck />
+                <div>
+                  <strong>Low-consumption policy</strong>
+                  <span>
+                    15-minute shared platform cache · no generated-app polling ·
+                    manual BYOK refresh only
+                  </span>
+                </div>
+                <b>≤ 96/day</b>
+              </div>
+              <div className="asset-list">
+                {project.spec.market.map((coin) => (
+                  <div key={coin.symbol}>
+                    <span>{coin.symbol.slice(0, 2)}</span>
+                    <div>
+                      <strong>{coin.symbol}</strong>
+                      <small>{coin.name}</small>
+                    </div>
+                    <b
+                      className={
+                        coin.change === null
+                          ? undefined
+                          : coin.change >= 0
+                            ? "up"
+                            : "down"
+                      }
+                    >
+                      {coin.change === null
+                        ? "—"
+                        : `${coin.change >= 0 ? "+" : ""}${coin.change.toFixed(2)}%`}
+                    </b>
+                  </div>
+                ))}
+              </div>
+              <div className="safety-note">
+                <ShieldCheck />
+                <span>
+                  <strong>No secret in the output</strong>
+                  <small>
+                    Connected keys stay session-only and never enter publish or
+                    ZIP.
+                  </small>
+                </span>
+              </div>
+              <button
+                className="inspector-secondary"
+                type="button"
+                onClick={() =>
+                  window.open(
+                    "https://api-docs.dropstab.com/",
+                    "_blank",
+                    "noopener,noreferrer",
+                  )
+                }
+              >
+                <Database /> DropsTab API docs <ExternalLink />
+              </button>
+            </section>
+          )}
 
           {tab === "logic" && (
             <section className="inspector-section">
-              <div className="inspector-heading"><span><Blocks /> Product logic</span><Zap /></div>
-              <p className="inspector-copy">Category controls and experience architecture recompile real behavior, not a static preview.</p>
+              <div className="inspector-heading">
+                <span>
+                  <Blocks /> Product logic
+                </span>
+                <Zap />
+              </div>
+              <p className="inspector-copy">
+                Category controls and experience architecture recompile real
+                behavior, not a static preview.
+              </p>
               {preset.fields.map((field) => (
                 <label key={field.id}>
                   {field.label}
-                  <select value={project.spec.values[field.id] || field.value} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, values: { ...spec.values, [field.id]: event.target.value } }))}>
-                    {field.options.map((option) => <option key={option}>{option}</option>)}
+                  <select
+                    value={project.spec.values[field.id] || field.value}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) =>
+                        applyPresetFieldValue(
+                          spec,
+                          field.id,
+                          event.target.value,
+                        ),
+                      )
+                    }
+                  >
+                    {field.options.map((option) => (
+                      <option key={option}>{option}</option>
+                    ))}
                   </select>
                 </label>
               ))}
               <span className="section-label">Professional experience</span>
               <div className="logic-grid">
-                <label>Layout<select value={project.spec.experience.layout} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, layout: event.target.value } }), "Changed experience layout")}><option value="focus">Focus</option><option value="split">Split workflow</option><option value="dashboard">Dashboard</option><option value="feed">Feed</option><option value="spatial">Spatial</option></select></label>
-                <label>Data view<select value={project.spec.experience.dataView} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, dataView: event.target.value } }), "Changed data presentation")}><option value="cards">Cards</option><option value="table">Table</option><option value="timeline">Timeline</option><option value="graph">Graph</option><option value="map">Map</option></select></label>
-                <label>Engagement<select value={project.spec.experience.engagement} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, experience: { ...project.spec.experience, engagement: event.target.value } }), "Changed engagement model")}><option value="realtime">Real-time</option><option value="scheduled">Scheduled</option><option value="social">Social</option><option value="personal">Personal</option></select></label>
-                <label>Audience<input value={project.spec.experience.audience} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, experience: { ...spec.experience, audience: event.target.value } }))} /></label>
+                <label>
+                  Layout
+                  <select
+                    value={project.spec.experience.layout}
+                    onChange={(event) =>
+                      commitSpec(
+                        validateProjectSpec({
+                          ...project.spec,
+                          experience: {
+                            ...project.spec.experience,
+                            layout: event.target.value,
+                          },
+                        }),
+                        "Changed experience layout",
+                      )
+                    }
+                  >
+                    <option value="focus">Focus</option>
+                    <option value="split">Split workflow</option>
+                    <option value="dashboard">Dashboard</option>
+                    <option value="feed">Feed</option>
+                    <option value="spatial">Spatial</option>
+                  </select>
+                </label>
+                <label>
+                  Data view
+                  <select
+                    value={project.spec.experience.dataView}
+                    onChange={(event) =>
+                      commitSpec(
+                        validateProjectSpec({
+                          ...project.spec,
+                          experience: {
+                            ...project.spec.experience,
+                            dataView: event.target.value,
+                          },
+                        }),
+                        "Changed data presentation",
+                      )
+                    }
+                  >
+                    <option value="cards">Cards</option>
+                    <option value="table">Table</option>
+                    <option value="timeline">Timeline</option>
+                    <option value="graph">Graph</option>
+                    <option value="map">Map</option>
+                  </select>
+                </label>
+                <label>
+                  Engagement
+                  <select
+                    value={project.spec.experience.engagement}
+                    onChange={(event) =>
+                      commitSpec(
+                        validateProjectSpec({
+                          ...project.spec,
+                          experience: {
+                            ...project.spec.experience,
+                            engagement: event.target.value,
+                          },
+                        }),
+                        "Changed engagement model",
+                      )
+                    }
+                  >
+                    <option value="realtime">Real-time</option>
+                    <option value="scheduled">Scheduled</option>
+                    <option value="social">Social</option>
+                    <option value="personal">Personal</option>
+                  </select>
+                </label>
+                <label>
+                  Audience
+                  <input
+                    value={project.spec.experience.audience}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) => ({
+                        ...spec,
+                        experience: {
+                          ...spec.experience,
+                          audience: event.target.value,
+                        },
+                      }))
+                    }
+                  />
+                </label>
               </div>
-              <label>Primary user loop<textarea rows={3} value={project.spec.experience.primaryLoop} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, experience: { ...spec.experience, primaryLoop: event.target.value } }))} /></label>
+              <label>
+                Primary user loop
+                <textarea
+                  rows={3}
+                  value={project.spec.experience.primaryLoop}
+                  onChange={(event) =>
+                    updateSpecQuiet((spec) => ({
+                      ...spec,
+                      experience: {
+                        ...spec.experience,
+                        primaryLoop: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </label>
               <span className="section-label">Product modules</span>
               <div className="module-editor">
                 {project.spec.experience.modules.map((module, index) => (
                   <div key={`${module}-${index}`}>
                     <Check />
-                    <input aria-label={`Module ${index + 1}`} value={module} onChange={(event) => updateModule(index, event.target.value)} />
-                    <button type="button" aria-label={`Move ${module} up`} disabled={index === 0} onClick={() => moveModule(index, -1)}><ArrowUp /></button>
-                    <button type="button" aria-label={`Move ${module} down`} disabled={index === project.spec.experience.modules.length - 1} onClick={() => moveModule(index, 1)}><ArrowDown /></button>
-                    <button type="button" aria-label={`Remove ${module}`} disabled={project.spec.experience.modules.length <= 1} onClick={() => removeModule(index)}><X /></button>
+                    <input
+                      aria-label={`Module ${index + 1}`}
+                      value={module}
+                      onChange={(event) =>
+                        updateModule(index, event.target.value)
+                      }
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Move ${module} up`}
+                      disabled={index === 0}
+                      onClick={() => moveModule(index, -1)}
+                    >
+                      <ArrowUp />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move ${module} down`}
+                      disabled={
+                        index === project.spec.experience.modules.length - 1
+                      }
+                      onClick={() => moveModule(index, 1)}
+                    >
+                      <ArrowDown />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${module}`}
+                      disabled={project.spec.experience.modules.length <= 1}
+                      onClick={() => removeModule(index)}
+                    >
+                      <X />
+                    </button>
                   </div>
                 ))}
-                <div className="module-add"><Plus /><input aria-label="New product module" value={newModule} placeholder="Add module…" onChange={(event) => setNewModule(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addModule(); } }} /><button type="button" disabled={!newModule.trim() || project.spec.experience.modules.length >= 12} onClick={addModule}>Add</button></div>
+                <div className="module-add">
+                  <Plus />
+                  <input
+                    aria-label="New product module"
+                    value={newModule}
+                    placeholder="Add module…"
+                    onChange={(event) => setNewModule(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addModule();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      !newModule.trim() ||
+                      project.spec.experience.modules.length >= 12
+                    }
+                    onClick={addModule}
+                  >
+                    Add
+                  </button>
+                </div>
               </div>
-              {game && <><span className="section-label">Game system</span><div className="logic-grid"><label>Difficulty<select value={game.difficulty} onChange={(event) => commitSpec(validateProjectSpec({ ...project.spec, gameDirection: { ...game, difficulty: event.target.value } }), "Changed game difficulty")}><option value="casual">Casual</option><option value="normal">Normal</option><option value="expert">Expert</option></select></label><label>Round timer<input type="number" min={5} max={120} value={game.roundSeconds} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, roundSeconds: Number(event.target.value) } : undefined }))} /></label></div><label>Core mechanic<textarea rows={3} value={game.mechanic} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, mechanic: event.target.value } : undefined }))} /></label><label>Character and world<textarea rows={3} value={`${game.protagonist}\n\n${game.scene}`} onChange={(event) => { const [protagonist, ...scene] = event.target.value.split("\n\n"); updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, protagonist, scene: scene.join("\n\n") || spec.gameDirection.scene } : undefined })); }} /></label><label>Art direction<textarea rows={3} value={game.artDirection} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, artDirection: event.target.value } : undefined }))} /></label><label>DropsTab gameplay mapping<textarea rows={3} value={game.dataUse} onChange={(event) => updateSpecQuiet((spec) => ({ ...spec, gameDirection: spec.gameDirection ? { ...spec.gameDirection, dataUse: event.target.value } : undefined }))} /></label></>}
-              <div className="tool-stack"><span>Working capabilities</span>{project.spec.tools.map((tool) => <div key={tool}><Check /> {tool}</div>)}</div>
+              {game && (
+                <>
+                  <span className="section-label">Game system</span>
+                  <div className="logic-grid">
+                    <label>
+                      Difficulty
+                      <select
+                        value={game.difficulty}
+                        onChange={(event) =>
+                          commitSpec(
+                            validateProjectSpec({
+                              ...project.spec,
+                              gameDirection: {
+                                ...game,
+                                difficulty: event.target.value,
+                              },
+                            }),
+                            "Changed game difficulty",
+                          )
+                        }
+                      >
+                        <option value="casual">Casual</option>
+                        <option value="normal">Normal</option>
+                        <option value="expert">Expert</option>
+                      </select>
+                    </label>
+                    <label>
+                      Round timer
+                      <input
+                        type="number"
+                        min={5}
+                        max={120}
+                        value={game.roundSeconds}
+                        onChange={(event) =>
+                          updateSpecQuiet((spec) => ({
+                            ...spec,
+                            gameDirection: spec.gameDirection
+                              ? {
+                                  ...spec.gameDirection,
+                                  roundSeconds: Number(event.target.value),
+                                }
+                              : undefined,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    Core mechanic
+                    <textarea
+                      rows={3}
+                      value={game.mechanic}
+                      onChange={(event) =>
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          gameDirection: spec.gameDirection
+                            ? {
+                                ...spec.gameDirection,
+                                mechanic: event.target.value,
+                              }
+                            : undefined,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Character and world
+                    <textarea
+                      rows={3}
+                      value={`${game.protagonist}\n\n${game.scene}`}
+                      onChange={(event) => {
+                        const [protagonist, ...scene] =
+                          event.target.value.split("\n\n");
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          gameDirection: spec.gameDirection
+                            ? {
+                                ...spec.gameDirection,
+                                protagonist,
+                                scene:
+                                  scene.join("\n\n") ||
+                                  spec.gameDirection.scene,
+                              }
+                            : undefined,
+                        }));
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Art direction
+                    <textarea
+                      rows={3}
+                      value={game.artDirection}
+                      onChange={(event) =>
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          gameDirection: spec.gameDirection
+                            ? {
+                                ...spec.gameDirection,
+                                artDirection: event.target.value,
+                              }
+                            : undefined,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    DropsTab gameplay mapping
+                    <textarea
+                      rows={3}
+                      value={game.dataUse}
+                      onChange={(event) =>
+                        updateSpecQuiet((spec) => ({
+                          ...spec,
+                          gameDirection: spec.gameDirection
+                            ? {
+                                ...spec.gameDirection,
+                                dataUse: event.target.value,
+                              }
+                            : undefined,
+                        }))
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <div className="tool-stack">
+                <span>Working capabilities</span>
+                {project.spec.tools.map((tool) => (
+                  <div key={tool}>
+                    <Check /> {tool}
+                  </div>
+                ))}
+              </div>
             </section>
           )}
 
-          {tab === "connections" && <section className="inspector-section connections-inspector"><div className="inspector-heading"><span><KeyRound /> Connections</span><b>SESSION SAFE</b></div><p className="inspector-copy">Your models, data, Telegram accounts and deployment targets in one place. Connected secrets never enter the generated app.</p><div className="connection-summary-grid"><button type="button" onClick={() => { window.location.href = "/?connections=1"; }}><BrainCircuit /><span><strong>AI models</strong><small>{modelLabels[activeProvider]} · OpenAI, Claude, OpenRouter, Kimi or custom</small></span><ChevronRight /></button><button type="button" onClick={() => { window.location.href = "/?connections=1"; }}><Database /><span><strong>DropsTab data</strong><small>Platform cache or your own API key</small></span><ChevronRight /></button><button type="button" onClick={() => setPublishOpen(true)}><Cloud /><span><strong>Hosting and source</strong><small>Free public URL, Vercel, Cloudflare and GitHub export</small></span><ChevronRight /></button></div><TelegramChannelWizard defaultTitle={project.spec.name} defaultAbout={`${project.spec.tagline} Powered by DropsTab and Drops Bot.`} defaultFirstPost={`${project.spec.name}\n\n${project.spec.tagline}\n\nBuilt with Drops Studio on DropsTab × Drops Bot.`} /></section>}
+          {tab === "connections" && (
+            <section className="inspector-section connections-inspector">
+              <div className="inspector-heading">
+                <span>
+                  <KeyRound /> Connections
+                </span>
+                <b>SESSION SAFE</b>
+              </div>
+              <p className="inspector-copy">
+                Your models, data, Telegram accounts and deployment targets in
+                one place. Connected secrets never enter the generated app.
+              </p>
+              <div className="connection-summary-grid">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = "/?connections=1";
+                  }}
+                >
+                  <BrainCircuit />
+                  <span>
+                    <strong>AI models</strong>
+                    <small>
+                      {modelLabels[activeProvider]} · OpenAI, Claude,
+                      OpenRouter, Kimi or custom
+                    </small>
+                  </span>
+                  <ChevronRight />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = "/?connections=1";
+                  }}
+                >
+                  <Database />
+                  <span>
+                    <strong>DropsTab data</strong>
+                    <small>Platform cache or your own API key</small>
+                  </span>
+                  <ChevronRight />
+                </button>
+                <button type="button" onClick={openPublish}>
+                  <Cloud />
+                  <span>
+                    <strong>Hosting and source</strong>
+                    <small>
+                      Free public URL, Vercel, Cloudflare and GitHub export
+                    </small>
+                  </span>
+                  <ChevronRight />
+                </button>
+              </div>
+              <TelegramChannelWizard
+                defaultTitle={project.spec.name}
+                defaultAbout={`${project.spec.tagline} Powered by DropsTab and Drops Bot.`}
+                defaultFirstPost={`${project.spec.name}\n\n${project.spec.tagline}\n\nBuilt with Drops Studio on DropsTab × Drops Bot.`}
+              />
+            </section>
+          )}
 
-          {tab === "quality" && <section className="inspector-section"><div className="inspector-heading"><span><ShieldCheck /> Release checks</span><b className={quality.readyToPublish ? "quality-pass" : "quality-fail"}>{quality.score}/100</b></div><div className={`quality-hero ${quality.readyToPublish ? "passed" : "failed"}`}><span><ShieldCheck /></span><div><strong>{quality.readyToPublish ? releaseLabel : "Build needs attention"}</strong><small>{externalSetup ? "The web setup app can publish, but the external outcome is not live until it is connected and verified." : "Deterministic checks run on every edit and before every publish."}</small></div></div><div className="experience-brief"><span><Zap /> Reality contract</span><p>{reality.deliverable}</p><dl><div><dt>Works now</dt><dd>{reality.worksNow.join(" · ")}</dd></div><div><dt>Requires</dt><dd>{reality.requires.join(" · ")}</dd></div></dl></div><div className="quality-list">{quality.checks.map((item) => <div className={item.passed ? "passed" : "failed"} key={item.id}><span>{item.passed ? <Check /> : <X />}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div>{item.critical && <b>GATE</b>}</div>)}</div><button className="inspector-secondary" type="button" onClick={() => openSource("quality-report.json")}><Code2 /> Inspect quality-report.json</button></section>}
+          {tab === "quality" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <ShieldCheck /> Release checks
+                </span>
+                <b
+                  className={
+                    quality.readyToPublish ? "quality-pass" : "quality-fail"
+                  }
+                >
+                  {quality.score}/100
+                </b>
+              </div>
+              <div
+                className={`quality-hero ${quality.readyToPublish ? "passed" : "failed"}`}
+              >
+                <span>
+                  <ShieldCheck />
+                </span>
+                <div>
+                  <strong>
+                    {quality.readyToPublish
+                      ? releaseLabel
+                      : "Build needs attention"}
+                  </strong>
+                  <small>
+                    {externalSetup
+                      ? "The web setup app can publish, but the external outcome is not live until it is connected and verified."
+                      : "Deterministic checks run on every edit and before every publish."}
+                  </small>
+                </div>
+              </div>
+              <div className="experience-brief">
+                <span>
+                  <Zap /> Reality contract
+                </span>
+                <p>{reality.deliverable}</p>
+                <dl>
+                  <div>
+                    <dt>Works now</dt>
+                    <dd>{reality.worksNow.join(" · ")}</dd>
+                  </div>
+                  <div>
+                    <dt>Requires</dt>
+                    <dd>{reality.requires.join(" · ")}</dd>
+                  </div>
+                </dl>
+              </div>
+              <div className="quality-list">
+                {quality.checks.map((item) => (
+                  <div
+                    className={item.passed ? "passed" : "failed"}
+                    key={item.id}
+                  >
+                    <span>{item.passed ? <Check /> : <X />}</span>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </div>
+                    {item.critical && <b>GATE</b>}
+                  </div>
+                ))}
+              </div>
+              <button
+                className="inspector-secondary"
+                type="button"
+                onClick={() => openSource("quality-report.json")}
+              >
+                <Code2 /> Inspect quality-report.json
+              </button>
+            </section>
+          )}
 
-          {tab === "code" && <section className="inspector-section"><div className="inspector-heading"><span><Code2 /> Code & Git</span><b>OWNED</b></div><div className="file-tree"><button type="button" onClick={() => openSource("index.html")}><Code2 /> index.html <b>generated</b></button><button type="button" onClick={() => openSource("project.json")}><Settings2 /> project.json <b>editable</b></button><button type="button" onClick={() => openSource("quality-report.json")}><ShieldCheck /> quality-report.json <b>{quality.score}/100</b></button><span><GitBranch /> .github/workflows/pages.yml <b>deploy</b></span><span><Cloud /> vercel · netlify · wrangler <b>ready</b></span></div><div className="git-card"><div><GitBranch /><span><strong>Git-ready workspace</strong><small>main · {checkpoints.length} local commits</small></span></div><p>ZIP contains the runnable app, validated project source, integration manifest, smoke test and deployment workflows. Two-way GitHub OAuth remains an honest infrastructure upgrade.</p><button type="button" onClick={() => downloadSource("github")}><GitCommit /> Export & continue to GitHub <ExternalLink /></button></div><button className="inspector-secondary" type="button" onClick={() => openSource("index.html")}><Code2 /> Open source workspace</button><button className="inspector-primary" type="button" onClick={() => downloadSource()}><Download /> Download runnable app + source</button></section>}
+          {tab === "code" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <Code2 /> Code & Git
+                </span>
+                <b>OWNED</b>
+              </div>
+              <div className="file-tree">
+                <button type="button" onClick={() => openSource("index.html")}>
+                  <Code2 /> index.html <b>editable</b>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openSource("project.json")}
+                >
+                  <Settings2 /> project.json <b>editable</b>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openSource("quality-report.json")}
+                >
+                  <ShieldCheck /> quality-report.json <b>{quality.score}/100</b>
+                </button>
+                <span>
+                  <GitBranch /> .github/workflows/pages.yml <b>deploy</b>
+                </span>
+                <span>
+                  <Cloud /> vercel · netlify · wrangler <b>ready</b>
+                </span>
+              </div>
+              <div className="git-card">
+                <div>
+                  <GitBranch />
+                  <span>
+                    <strong>Git-ready workspace</strong>
+                    <small>{checkpoints.length} local checkpoints · not Git commits</small>
+                  </span>
+                </div>
+                <p>
+                  ZIP contains the runnable app, validated project source,
+                  integration manifest, smoke test and deployment workflows.
+                  Two-way GitHub OAuth remains an honest infrastructure upgrade.
+                </p>
+                <button type="button" onClick={() => downloadSource("github")}>
+                  <GitCommit /> Export & continue to GitHub <ExternalLink />
+                </button>
+              </div>
+              <button
+                className="inspector-secondary"
+                type="button"
+                onClick={() => openSource("index.html")}
+              >
+                <Code2 /> Open source workspace
+              </button>
+              <button
+                className="inspector-primary"
+                type="button"
+                onClick={() => downloadSource()}
+              >
+                <Download /> Download runnable app + source
+              </button>
+            </section>
+          )}
 
-          {tab === "history" && <section className="inspector-section"><div className="inspector-heading"><span><History /> Checkpoints</span><b>{checkpoints.length}</b></div><p className="inspector-copy">Every applied Director or design direction creates a restore point.</p><div className="checkpoint-list">{[...checkpoints].reverse().map((checkpoint, index) => <button type="button" key={checkpoint.id} disabled={index === 0} onClick={() => commitSpec(checkpoint.spec, `Restored ${checkpoint.label}`, "manual")}><span><i className={checkpoint.source} /><strong>{checkpoint.label}</strong><small>{new Date(checkpoint.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {checkpoint.source}</small></span>{index === 0 ? <b>Current</b> : <Undo2 />}</button>)}</div></section>}
+          {tab === "history" && (
+            <section className="inspector-section">
+              <div className="inspector-heading">
+                <span>
+                  <History /> Checkpoints
+                </span>
+                <b>
+                  {checkpoints.length} active · {futureCheckpoints.length} redo
+                </b>
+              </div>
+              <p className="inspector-copy">
+                Undo keeps later versions in a persistent redo lane. A new edit
+                after Undo creates a branch and replaces that redo lane.
+              </p>
+              <div className="checkpoint-list">
+                {[...checkpoints].reverse().map((checkpoint, index) => (
+                  <button
+                    type="button"
+                    key={checkpoint.id}
+                    disabled={index === 0}
+                    onClick={() => restoreCheckpoint(checkpoint)}
+                  >
+                    <span>
+                      <i className={checkpoint.source} />
+                      <strong>{checkpoint.label}</strong>
+                      <small>
+                        {new Date(checkpoint.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        · {checkpoint.source}
+                        {checkpoint.branch
+                          ? ` · branch replaced ${checkpoint.branch.replacedCheckpointCount} redo version${checkpoint.branch.replacedCheckpointCount === 1 ? "" : "s"}`
+                          : ""}
+                      </small>
+                    </span>
+                    {index === 0 ? <b>Current</b> : <Undo2 />}
+                  </button>
+                ))}
+                {futureCheckpoints.map((checkpoint, index) => (
+                  <button
+                    type="button"
+                    key={`future-${checkpoint.id}`}
+                    disabled={index !== 0}
+                    onClick={redo}
+                  >
+                    <span>
+                      <i className={checkpoint.source} />
+                      <strong>{checkpoint.label}</strong>
+                      <small>
+                        Redo lane ·{" "}
+                        {index === 0 ? "next" : `${index + 1} steps ahead`}
+                      </small>
+                    </span>
+                    {index === 0 ? <Redo2 /> : <b>Future</b>}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </aside>
 
         <section className="runtime-stage">
-          <div className="stage-toolbar"><div className="device-switch"><button type="button" className={device === "desktop" ? "active" : ""} onClick={() => setDevice("desktop")}><Monitor /> Desktop</button><button type="button" className={device === "mobile" ? "active" : ""} onClick={() => setDevice("mobile")}><Smartphone /> Mobile</button></div><div><button type="button" className={designMode ? "active" : ""} onClick={() => setDesignMode((value) => !value)}><MousePointer2 /> Design mode</button><button type="button" onClick={() => openSource("index.html")}><Code2 /> Code</button><button type="button" className={quality.readyToPublish ? "quality-ready" : ""} onClick={() => setTab("quality")}><ShieldCheck /> {quality.score}</button><button type="button" onClick={openRuntime}><ExternalLink /> Fullscreen</button></div></div>
-          <div className={`runtime-browser ${device}`}><div className="browser-bar"><span><i /><i /><i /></span><strong>{project.spec.slug}.live</strong><b><i /> Live preview</b></div><iframe ref={iframeRef} key={`${project.updatedAt}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`} title={`${project.spec.name} live application`} srcDoc={runtimeHtml} sandbox="allow-scripts allow-forms allow-popups allow-downloads" onLoad={() => iframeRef.current?.contentWindow?.postMessage({ type: "drops-studio-design-mode", enabled: designMode }, "*")} /></div>
+          <div className="stage-toolbar">
+            <div className="device-switch">
+              <button
+                type="button"
+                className={device === "desktop" ? "active" : ""}
+                onClick={() => setDevice("desktop")}
+              >
+                <Monitor /> Desktop
+              </button>
+              <button
+                type="button"
+                className={device === "mobile" ? "active" : ""}
+                onClick={() => setDevice("mobile")}
+              >
+                <Smartphone /> Mobile
+              </button>
+            </div>
+            <div>
+              <button
+                type="button"
+                className={designMode ? "active" : ""}
+                onClick={() => setDesignMode((value) => !value)}
+              >
+                <MousePointer2 /> Design mode
+              </button>
+              <button type="button" onClick={() => openSource("index.html")}>
+                <Code2 /> Code
+              </button>
+              <button
+                type="button"
+                className={quality.readyToPublish ? "quality-ready" : ""}
+                onClick={() => setTab("quality")}
+              >
+                <ShieldCheck /> Quality {quality.score}
+              </button>
+              <button type="button" onClick={openRuntime}>
+                <ExternalLink /> Fullscreen
+              </button>
+            </div>
+          </div>
+          <div
+            className={`runtime-browser ${device}`}
+            tabIndex={0}
+            aria-label="Scrollable live application preview"
+          >
+            <div className="browser-bar">
+              <span>
+                <i />
+                <i />
+                <i />
+              </span>
+              <strong>{project.spec.slug}.live</strong>
+              <b
+                role="status"
+                aria-live="polite"
+                data-runtime-ready={runtimeReady ? "true" : "false"}
+              >
+                <i />
+                <span className="runtime-preview-label">Live preview</span>
+                <span className="runtime-ready-label">
+                  {runtimeReady ? "Runtime ready" : "Loading runtime"}
+                </span>
+              </b>
+            </div>
+            <iframe
+              ref={iframeRef}
+              key={`${runtimeRevision}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
+              title={`${project.spec.name} live application`}
+              srcDoc={runtimeHtml}
+              sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+              onLoad={() =>
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: "drops-studio-design-mode", enabled: designMode },
+                  "*",
+                )
+              }
+            />
+          </div>
         </section>
 
         <aside className="assistant-panel">
-          <header><span><span className="director-avatar"><Sparkles /></span><span><strong>Drops Director</strong><small>{modelLabels[activeProvider]} · project context on</small></span></span><button type="button" aria-label="Open connections" onClick={() => setTab("connections")}><Settings2 /></button></header>
-          {selectedBlock && <div className="chat-context"><MousePointer2 /><span>Editing context: <strong>{selectedBlock.label}</strong></span><button type="button" onClick={() => setSelectedBlock(null)}><X /></button></div>}
-          <div className="conversation">{(project.conversation?.length ?? 0) <= 1 && <div className="assistant-guide"><strong>Build with context, not from zero</strong><p>I already know this preset’s user loop, modules, Drops data contract and action boundaries.</p><span><MousePointer2 /><b>Select a block</b><small>then describe a targeted change</small></span><span><Palette /><b>Ask for directions</b><small>cartoon, terminal, editorial, glass</small></span><span><Blocks /><b>Change behavior</b><small>layout, data view, rules and social loop</small></span><span><Undo2 /><b>Experiment safely</b><small>every Apply creates a checkpoint</small></span></div>}{(project.conversation ?? []).map((message) => <article className={message.role} key={message.id}><span>{message.role === "assistant" ? <Sparkles /> : "You"}</span><p>{message.content}</p>{message.proposal && <div className="proposal-card"><header><span><WandSparkles /><strong>{message.proposal.label}</strong></span><b>Preview</b></header><ul>{message.proposal.summary.map((item) => <li key={item}><Check />{item}</li>)}</ul><div><button type="button" onClick={() => dismissProposal(message)}>Dismiss</button><button type="button" onClick={() => applyChatProposal(message)}><Check /> Apply changes</button></div></div>}</article>)}{directing && <article className="assistant thinking"><span><LoaderCircle className="spin" /></span><p>Planning a bounded change set, checking the product category and preserving Drops foundations…</p></article>}<div ref={chatEndRef} /></div>
-          <div className="quick-prompts">{quickPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => void sendDirectorPrompt(prompt)}>{prompt}</button>)}</div>
-          <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void sendDirectorPrompt(); }}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder={selectedBlock ? `Tell Director how to change ${selectedBlock.label}…` : "Describe a product, visual or behavior change…"} rows={3} /><footer><span><Sparkles /> {modelLabels[activeProvider]}</span><button type="submit" disabled={!chatInput.trim() || directing} aria-label="Send change request"><Send /></button></footer></form>
-          <div className="assistant-foot"><ShieldCheck /> Suggestions never change the app until you press Apply.</div>
+          <header>
+            <span>
+              <span className="director-avatar">
+                <Sparkles />
+              </span>
+              <span>
+                <strong>Drops Director</strong>
+                <small>
+                  {modelLabels[activeProvider]} · project context ready
+                </small>
+              </span>
+            </span>
+            <button
+              type="button"
+              aria-label="Open connections"
+              onClick={() => setTab("connections")}
+            >
+              <Settings2 />
+            </button>
+          </header>
+          {selectedBlock && (
+            <div className="chat-context">
+              <MousePointer2 />
+              <span>
+                Editing context: <strong>{selectedBlock.label}</strong>
+              </span>
+              <button type="button" onClick={() => setSelectedBlock(null)}>
+                <X />
+              </button>
+            </div>
+          )}
+          <div className="conversation" role="log" aria-label="Drops Director conversation" tabIndex={0}>
+            {(project.conversation?.length ?? 0) <= 1 && (
+              <div className="assistant-guide">
+                <strong>Build with context, not from zero</strong>
+                <p>
+                  I already know this preset’s user flow, modules, data sources
+                  and safe actions.
+                </p>
+                <span>
+                  <MousePointer2 />
+                  <b>Select a block</b>
+                  <small>then describe a targeted change</small>
+                </span>
+                <span>
+                  <Palette />
+                  <b>Ask for directions</b>
+                  <small>cartoon, terminal, editorial, glass</small>
+                </span>
+                <span>
+                  <Blocks />
+                  <b>Change behavior</b>
+                  <small>layout, data view, rules and social loop</small>
+                </span>
+                <span>
+                  <Undo2 />
+                  <b>Experiment safely</b>
+                  <small>every Apply creates a checkpoint</small>
+                </span>
+              </div>
+            )}
+            {(project.conversation ?? []).map((message) => (
+              <article className={message.role} key={message.id}>
+                <span>
+                  {message.role === "assistant" ? <Sparkles /> : "You"}
+                </span>
+                <p>{message.content}</p>
+                {message.proposal && (
+                  <div className="proposal-card">
+                    <header>
+                      <span>
+                        <WandSparkles />
+                        <strong>{message.proposal.label}</strong>
+                      </span>
+                      <b>Preview</b>
+                    </header>
+                    <ul>
+                      {message.proposal.summary.map((item) => (
+                        <li key={item}>
+                          <Check />
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => dismissProposal(message)}
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyChatProposal(message)}
+                      >
+                        <Check /> Apply changes
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            ))}
+            {directing && (
+              <article className="assistant thinking">
+                <span>
+                  <LoaderCircle className="spin" />
+                </span>
+                <p>
+                  Planning a bounded change set, checking the product category
+                  and preserving Drops foundations…
+                </p>
+              </article>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <div className="quick-prompts">
+            {quickPrompts.map((prompt) => (
+              <button
+                type="button"
+                key={prompt}
+                onClick={() => void sendDirectorPrompt(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+          <form
+            className="chat-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendDirectorPrompt();
+            }}
+          >
+            <textarea
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              placeholder={
+                selectedBlock
+                  ? `Tell Director how to change ${selectedBlock.label}…`
+                  : "Describe a product, visual or behavior change…"
+              }
+              rows={3}
+            />
+            <footer>
+              <span>
+                <Sparkles /> {modelLabels[activeProvider]}
+              </span>
+              <button
+                type="submit"
+                disabled={!chatInput.trim() || directing}
+                aria-label="Send change request"
+              >
+                <Send />
+              </button>
+            </footer>
+          </form>
+          <div className="assistant-foot">
+            <ShieldCheck /> Suggestions never change the app until you press
+            Apply.
+          </div>
         </aside>
       </div>
 
-      <footer className="project-statusbar"><span><Check /> Autosaved <small>{new Date(project.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></span><span><Database /> DropsTab foundation <b>15m cache</b></span><span><Bot /> Drops Bot <strong>{externalSetup ? "Connection pending" : "Action handoff"}</strong></span><span><ShieldCheck /> Quality <strong>{quality.score}/100</strong></span><span className={externalSetup ? "" : "operational"}><i /> {releaseLabel}</span></footer>
+      <footer
+        className="project-statusbar"
+        role="region"
+        aria-label="Project status"
+        tabIndex={0}
+      >
+        <span data-sync-status={projectSyncStatus}>
+          {projectSyncStatus === "saving" ? (
+            <LoaderCircle className="spin" />
+          ) : projectSyncStatus === "synced" ? (
+            <Cloud />
+          ) : projectSyncStatus === "conflict" ||
+            projectSyncStatus === "error" ? (
+            <X />
+          ) : (
+            <Check />
+          )}{" "}
+          {projectSyncStatus === "saving"
+            ? "Saving…"
+            : projectSyncStatus === "synced"
+              ? "Saved to cloud"
+              : projectSyncStatus === "conflict"
+                ? "Sync conflict"
+                : projectSyncStatus === "error"
+                  ? "Save failed"
+                  : "Saved in browser"}{" "}
+          <small>
+            {new Date(project.updatedAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </small>
+        </span>
+        <span>
+          <Database /> DropsTab data <b>15 min</b>
+        </span>
+        <span>
+          <Bot /> Drops Bot <strong>{externalSetup ? "Needs connection" : "Ready"}</strong>
+        </span>
+        <span>
+          <ShieldCheck /> Quality <strong>{quality.score}/100</strong>
+        </span>
+        <span className={externalSetup ? "" : "operational"}>
+          <i /> {releaseLabel}
+        </span>
+      </footer>
 
-      <Dialog.Root open={sourceOpen} onOpenChange={setSourceOpen}><Dialog.Portal><Dialog.Overlay className="studio-dialog-overlay" /><Dialog.Content className="source-dialog"><div><div><Dialog.Title>Owned source workspace</Dialog.Title><Dialog.Description>Inspect the exact runtime, edit validated project.json and export the same files you run.</Dialog.Description></div><Dialog.Close><X /></Dialog.Close></div><nav className="source-tabs" aria-label="Source files">{(["index.html", "project.json", "quality-report.json"] as SourceFile[]).map((file) => <button type="button" className={sourceFile === file ? "active" : ""} key={file} onClick={() => { setSourceFile(file); if (file === "project.json") setSourceDraft(JSON.stringify(project.spec, null, 2)); }}>{file === "index.html" ? <Code2 /> : file === "project.json" ? <Settings2 /> : <ShieldCheck />}{file}</button>)}</nav>{sourceFile === "project.json" ? <textarea className="source-editor" spellCheck={false} value={sourceDraft || JSON.stringify(project.spec, null, 2)} onChange={(event) => setSourceDraft(event.target.value)} aria-label="Editable project JSON" /> : <pre>{activeSourceContent}</pre>}<footer><button type="button" onClick={() => { if (!navigator.clipboard?.writeText) { setToast("Copy is unavailable in this browser"); return; } void navigator.clipboard.writeText(activeSourceContent).then(() => setToast(`${sourceFile} copied`)).catch(() => setToast("Could not copy this file")); }}><Copy /> Copy file</button>{sourceFile === "project.json" && <button type="button" onClick={applyProjectJson}><Check /> Validate & apply</button>}<button type="button" onClick={() => downloadSource()}><Download /> Download full ZIP</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>
+      <Dialog.Root open={sourceOpen} onOpenChange={setSourceOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="studio-dialog-overlay" />
+          <Dialog.Content
+            className="source-dialog"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              sourceReturnFocusRef.current?.focus();
+            }}
+          >
+            <div>
+              <div>
+                <Dialog.Title>Owned source workspace</Dialog.Title>
+                <Dialog.Description>
+                  Edit the exact runnable HTML or project graph, validate it,
+                  and export the same files you run.
+                </Dialog.Description>
+              </div>
+              <Dialog.Close aria-label="Close source workspace">
+                <X />
+              </Dialog.Close>
+            </div>
+            <nav className="source-tabs" aria-label="Source files">
+              {(
+                [
+                  "index.html",
+                  "project.json",
+                  "quality-report.json",
+                ] as SourceFile[]
+              ).map((file) => (
+                <button
+                  type="button"
+                  className={sourceFile === file ? "active" : ""}
+                  key={file}
+                  onClick={() => {
+                    setSourceFile(file);
+                    setSourceIssues([]);
+                    if (file === "index.html")
+                      setSourceDraft(prepareEditableRuntimeHtml(project.html));
+                    if (file === "project.json")
+                      setSourceDraft(JSON.stringify(project.spec, null, 2));
+                  }}
+                >
+                  {file === "index.html" ? (
+                    <Code2 />
+                  ) : file === "project.json" ? (
+                    <Settings2 />
+                  ) : (
+                    <ShieldCheck />
+                  )}
+                  {file}
+                </button>
+              ))}
+            </nav>
+            {sourceFile === "index.html" || sourceFile === "project.json" ? (
+              <textarea
+                className="source-editor"
+                spellCheck={false}
+                value={
+                  sourceDraft ||
+                  (sourceFile === "project.json"
+                    ? JSON.stringify(project.spec, null, 2)
+                    : project.html)
+                }
+                onChange={(event) => {
+                  setSourceDraft(event.target.value);
+                  setSourceIssues([]);
+                }}
+                aria-label={
+                  sourceFile === "index.html"
+                    ? "Editable runnable HTML"
+                    : "Editable project JSON"
+                }
+              />
+            ) : (
+              <pre tabIndex={0} aria-label={`${sourceFile} contents`}>
+                {activeSourceContent}
+              </pre>
+            )}
+            {sourceIssues.length > 0 ? (
+              <div className="source-validation" role="alert">
+                <strong>Validation stopped this change</strong>
+                <ul>
+                  {sourceIssues.slice(0, 4).map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <footer>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!navigator.clipboard?.writeText) {
+                    setToast("Copy is unavailable in this browser");
+                    return;
+                  }
+                  void navigator.clipboard
+                    .writeText(activeSourceContent)
+                    .then(() => setToast(`${sourceFile} copied`))
+                    .catch(() => setToast("Could not copy this file"));
+                }}
+              >
+                <Copy /> Copy file
+              </button>
+              {(sourceFile === "index.html" ||
+                sourceFile === "project.json") && (
+                <button
+                  type="button"
+                  onClick={
+                    sourceFile === "index.html"
+                      ? applyRuntimeHtml
+                      : applyProjectJson
+                  }
+                >
+                  <Check /> Validate & apply
+                </button>
+              )}
+              <button type="button" onClick={() => downloadSource()}>
+                <Download /> Download full ZIP
+              </button>
+            </footer>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
-      <Dialog.Root open={publishOpen} onOpenChange={setPublishOpen}><Dialog.Portal><Dialog.Overlay className="studio-dialog-overlay" /><Dialog.Content className="publish-dialog"><header><div><Dialog.Title>{externalSetup ? "Publish the real setup app" : researchOnly ? "Publish the research app" : "Publish a working product"}</Dialog.Title><Dialog.Description>{externalSetup ? "The public web app is real; the external destination stays pending until the user connects and verifies it." : "Free public app now, professional hosting whenever you need it."}</Dialog.Description></div><Dialog.Close><X /></Dialog.Close></header><div className="publish-grid"><section className={`host-card cloud-card ${published && !dirty ? "published" : ""}`}><div className="host-title"><span><Cloud /></span><div><strong>Free Drops Studio Cloud</strong><small>{externalSetup ? "Working setup app · instant public link" : "Working app · instant public link"}</small></div><b>FREE</b></div><ul><li><Check /> {externalSetup ? "Public configuration and verification app" : "Public playable/useable app"}</li><li><Check /> Global edge delivery + HTTPS</li><li><Check /> No connected secret included</li><li><Check /> Republish after edits</li></ul>{externalSetup && <div className="safety-note"><ShieldCheck /><span><strong>External setup required</strong><small>{reality.requires.join(" · ")}</small></span></div>}{published && <div className="public-url"><span>{dirty ? "Last public version" : "Public URL"}</span><button type="button" onClick={() => project.publishedUrl && window.open(project.publishedUrl, "_blank", "noopener,noreferrer")}><strong>{project.publishedUrl}</strong><ExternalLink /></button></div>}<button className="cloud-publish" type="button" onClick={handleCloudPublish} disabled={publishing}>{publishing ? <><LoaderCircle className="spin" /> Publishing…</> : published && dirty ? <><UploadCloud /> Publish working update</> : published ? <><BadgeCheck /> Open published app</> : <><Rocket /> Publish free now</>}</button>{publishError && <p className="publish-error">{publishError}</p>}</section><section className="pro-hosts"><h3>Professional hosting</h3><p>Export the same working source to your own account and domain.</p><button type="button" onClick={() => downloadSource("vercel")}><Globe2 /><span><strong>Vercel</strong><small>Domains · analytics · serverless routes</small></span><ExternalLink /></button><button type="button" onClick={() => downloadSource("cloudflare")}><Cloud /><span><strong>Cloudflare Pages</strong><small>Edge hosting · custom routes</small></span><ExternalLink /></button><button type="button" onClick={() => downloadSource("netlify")}><Cloud /><span><strong>Netlify</strong><small>Static deploy · functions</small></span><ExternalLink /></button><button type="button" onClick={() => downloadSource("github")}><GitBranch /><span><strong>GitHub</strong><small>Repository-owned source</small></span><ExternalLink /></button></section></div><footer><button type="button" onClick={() => downloadSource()}><Download /> Download runnable app + source</button><span><ShieldCheck /> Published app and source contain no connected AI or Telegram keys.</span></footer></Dialog.Content></Dialog.Portal></Dialog.Root>
-      <div className={`project-toast ${toast ? "show" : ""}`} role="status"><Check />{toast}</div>
+      <Dialog.Root open={publishOpen} onOpenChange={setPublishOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="studio-dialog-overlay" />
+          <Dialog.Content
+            className="publish-dialog"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              publishReturnFocusRef.current?.focus();
+            }}
+          >
+            <header>
+              <div>
+                <Dialog.Title>
+                  {externalSetup
+                    ? "Publish the real setup app"
+                    : researchOnly
+                      ? "Publish the research app"
+                      : "Publish a working product"}
+                </Dialog.Title>
+                <Dialog.Description>
+                  {externalSetup
+                    ? "The public web app is real; the external destination stays pending until the user connects and verifies it."
+                    : "Free public app now, professional hosting whenever you need it."}
+                </Dialog.Description>
+              </div>
+              <Dialog.Close aria-label="Close publish dialog">
+                <X />
+              </Dialog.Close>
+            </header>
+            <div className="publish-grid">
+              <section
+                className={`host-card cloud-card ${published && !dirty ? "published" : ""}`}
+              >
+                <div className="host-title">
+                  <span>
+                    <Cloud />
+                  </span>
+                  <div>
+                    <strong>Free Drops Studio Cloud</strong>
+                    <small>
+                      {externalSetup
+                        ? "Working setup app · instant public link"
+                        : "Working app · instant public link"}
+                    </small>
+                  </div>
+                  <b>FREE</b>
+                </div>
+                <ul>
+                  <li>
+                    <Check />{" "}
+                    {externalSetup
+                      ? "Public configuration and verification app"
+                      : "Public playable/useable app"}
+                  </li>
+                  <li>
+                    <Check /> Global edge delivery + HTTPS
+                  </li>
+                  <li>
+                    <Check /> No connected secret included
+                  </li>
+                  <li>
+                    <Check />{" "}
+                    {managedPublication
+                      ? "Update or unpublish from this browser"
+                      : legacyPublication
+                        ? "Read-only legacy link"
+                        : "Browser-managed updates after first publish"}
+                  </li>
+                </ul>
+                {externalSetup && (
+                  <div className="safety-note">
+                    <ShieldCheck />
+                    <span>
+                      <strong>Connect to finish launch</strong>
+                      <small>{reality.requires.join(" · ")}</small>
+                    </span>
+                  </div>
+                )}
+                {legacyPublication && (
+                  <div className="safety-note">
+                    <ShieldCheck />
+                    <span>
+                      <strong>Read-only legacy link</strong>
+                      <small>
+                        Edits publish to a new managed URL. This browser cannot
+                        change or remove the previous link.
+                      </small>
+                    </span>
+                  </div>
+                )}
+                {published && (
+                  <div className="public-url">
+                    <span>
+                      {legacyPublication
+                        ? "Read-only legacy link"
+                        : dirty
+                          ? "Last public version"
+                          : "Public URL"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        project.publishedUrl &&
+                        window.open(
+                          project.publishedUrl,
+                          "_blank",
+                          "noopener,noreferrer",
+                        )
+                      }
+                    >
+                      <strong>{project.publishedUrl}</strong>
+                      <ExternalLink />
+                    </button>
+                    {managedPublication && (
+                      <button
+                        type="button"
+                        onClick={() => void unpublish()}
+                        disabled={publishing || unpublishing}
+                      >
+                        <strong>
+                          {unpublishing
+                            ? "Unpublishing…"
+                            : "Unpublish public app"}
+                        </strong>
+                        <X />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <button
+                  className="cloud-publish"
+                  type="button"
+                  onClick={handleCloudPublish}
+                  disabled={publishing || unpublishing}
+                >
+                  {publishing ? (
+                    <>
+                      <LoaderCircle className="spin" /> Publishing…
+                    </>
+                  ) : unpublishing ? (
+                    <>
+                      <LoaderCircle className="spin" /> Unpublishing…
+                    </>
+                  ) : published && dirty ? (
+                    <>
+                      <UploadCloud />{" "}
+                      {managedPublication
+                        ? "Publish working update"
+                        : "Publish new version"}
+                    </>
+                  ) : published ? (
+                    <>
+                      <BadgeCheck /> Open published app
+                    </>
+                  ) : (
+                    <>
+                      <Rocket /> Publish free now
+                    </>
+                  )}
+                </button>
+                {publishError && (
+                  <p className="publish-error">{publishError}</p>
+                )}
+              </section>
+              <section className="pro-hosts">
+                <h3>Professional hosting</h3>
+                <p>
+                  Export the runnable static product to your own account and
+                  domain. Vercel additionally supports the bundled server
+                  adapters.
+                </p>
+                <button type="button" onClick={() => downloadSource("vercel")}>
+                  <Globe2 />
+                  <span>
+                    <strong>Vercel</strong>
+                    <small>Domains · analytics · serverless routes</small>
+                  </span>
+                  <ExternalLink />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadSource("cloudflare")}
+                >
+                  <Cloud />
+                  <span>
+                    <strong>Cloudflare Pages</strong>
+                    <small>Static hosting · custom domain</small>
+                  </span>
+                  <ExternalLink />
+                </button>
+                <button type="button" onClick={() => downloadSource("netlify")}>
+                  <Cloud />
+                  <span>
+                    <strong>Netlify</strong>
+                    <small>Static hosting · custom domain</small>
+                  </span>
+                  <ExternalLink />
+                </button>
+                <button type="button" onClick={() => downloadSource("github")}>
+                  <GitBranch />
+                  <span>
+                    <strong>GitHub</strong>
+                    <small>Repository-owned source</small>
+                  </span>
+                  <ExternalLink />
+                </button>
+              </section>
+            </div>
+            <footer>
+              <button type="button" onClick={() => downloadSource()}>
+                <Download /> Download runnable app + source
+              </button>
+              <span>
+                <ShieldCheck /> Published app and source contain no connected AI
+                or Telegram keys.
+              </span>
+            </footer>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      <div className={`project-toast ${toast ? "show" : ""}`} role="status">
+        <Check />
+        {toast}
+      </div>
     </main>
   );
 }

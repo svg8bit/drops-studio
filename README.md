@@ -4,15 +4,21 @@ Drops Studio turns a crypto idea into a real, editable and publishable product p
 
 The start page is a prompt-first recipe builder. Choose one of 12 products, tune its settings or describe something custom, then build. Drops Studio compiles a standalone application and opens its Project Studio, where the user can run it, change logic and branding, publish a public URL and download the runnable source.
 
-![Drops Studio start builder](docs/screenshots/desktop.png)
+![Drops Studio current start builder architecture](docs/design/current-home-structure-reference.png)
 
-![Drops Studio Project Studio](docs/screenshots/project-studio.png)
+![Drops Studio current unified Project Studio architecture](docs/design/current-studio-structure-reference.png)
+
+These two images preserve the current product structure while the automated
+visual baselines verify the corrected typography, spacing, targets and
+responsive states. Files under `docs/screenshots/` are historical evidence and
+must not be used to restore an older editor layout.
 
 ## What works
 
 - output-first intent routing: the requested app type wins while wallet, alert, AI and delivery requirements become capabilities inside it
 - 12 distinct standalone crypto product runtimes
-- platform-funded guest AI planning with a signed daily quota and a deterministic no-key fallback compiler
+- platform-funded guest and signed-in member AI planning with explicit daily quotas and a deterministic no-key fallback compiler
+- OpenRouter PKCE sign-in with an HttpOnly Studio identity while the provider key remains session-only
 - bounded design enhancement through OpenAI, Anthropic, OpenRouter Free, Kimi or a custom OpenAI-compatible model
 - universal Experience Director for every recipe: archetype, layout, data view,
   engagement loop, audience, primary loop and editable product modules
@@ -65,7 +71,7 @@ change creates a restorable checkpoint.
 - Trading-like actions are explicit research, paper-mode or official-product handoffs until the user approves an action in the connected product.
 - Connected models return a validated JSON design object. They never author the executable runtime.
 
-See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md), [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md) and [docs/COMPETITIVE-BENCHMARK.md](docs/COMPETITIVE-BENCHMARK.md) for the product, competitor and security contracts.
+See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md), [docs/ACCESS_TIERS.md](docs/ACCESS_TIERS.md), [docs/PREMIUM_RELEASE.md](docs/PREMIUM_RELEASE.md), [docs/COMPETITIVE-BENCHMARK.md](docs/COMPETITIVE-BENCHMARK.md) and [docs/ACCOUNTABILITY_REPORT_RU.md](docs/ACCOUNTABILITY_REPORT_RU.md) for the product, access-tier, competitor, security and process-correction contracts.
 
 ## Run locally
 
@@ -81,18 +87,30 @@ Open `http://localhost:3000`.
 ## Verify
 
 ```bash
+npm run guardrails:ui
 npm run lint
-npx tsc --noEmit
-npm test
+npm run typecheck
+npm run test:unit
+npm run build:vercel
+npm run build-storybook
+npm run test:storybook
+npm run test:e2e:prepared
+npm run test:lighthouse:prepared
+npm run build
 ```
 
-The production test builds the Cloudflare-compatible application and checks the server-rendered builder and generator contract. Browser QA covers all 12 Build flows, their standalone runtimes, free publishing and the public project route.
+The release pipeline checks the split UI policy, Storybook states, Axe,
+console/runtime failures, horizontal overflow, the current workspace
+architecture, all 12 native products, public game/radio/Telegram proof flows,
+the Vercel build, Lighthouse budgets and the Cloudflare-compatible Sites build.
+Visual baselines are never updated without explicit approval.
 
 ## Stack
 
 - Next.js 16 / React 19 through Vinext
 - TypeScript and Tailwind CSS v4
-- Radix UI, Framer Motion and Lucide icons
+- shadcn CLI v4 local components on Base UI 1.6, bounded legacy Radix
+  primitives, short Framer Motion transitions and Lucide icons
 - Cloudflare D1 on Sites or Vercel Blob on the public fallback for
   published-project persistence
 - Fflate for browser-side runnable source archives

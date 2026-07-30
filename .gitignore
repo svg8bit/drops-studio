@@ -12,6 +12,12 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+/.playwright-cli/
+/.playwright/
+/.lighthouseci/
+/storybook-static/
 
 # next.js
 /.next/

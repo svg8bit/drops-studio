@@ -1,8 +1,9 @@
-import type { PublishedProjectRecord } from "@/lib/project-types";
-import { presets } from "@/lib/presets";
+import type { PublishedProjectRecord } from "../lib/project-types.ts";
+import { projectPresets } from "../lib/presets.ts";
 
 declare global {
   var __DROPS_STUDIO_ENV__: { DB?: D1Database } | undefined;
+  var __DROPS_STUDIO_LOCAL_PROJECTS__: Map<string, PublishedProjectRecord> | undefined;
 }
 
 const schema = `CREATE TABLE IF NOT EXISTS published_projects (
@@ -15,7 +16,7 @@ const schema = `CREATE TABLE IF NOT EXISTS published_projects (
   created_at TEXT NOT NULL,
   view_count INTEGER NOT NULL DEFAULT 0
 )`;
-const presetIds = new Set<string>(presets.map((preset) => preset.id));
+const presetIds = new Set<string>(projectPresets.map((preset) => preset.id));
 
 function database(): D1Database | null {
   return globalThis.__DROPS_STUDIO_ENV__?.DB ?? null;
@@ -23,6 +24,11 @@ function database(): D1Database | null {
 
 function blobAvailable(): boolean {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN));
+}
+
+function localProjectStore(): Map<string, PublishedProjectRecord> | null {
+  if (process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE !== "1" || process.env.VERCEL) return null;
+  return globalThis.__DROPS_STUDIO_LOCAL_PROJECTS__ ??= new Map();
 }
 
 function blobPath(slug: string): string {
@@ -37,6 +43,18 @@ function isPublishedProjectRecord(value: unknown): value is PublishedProjectReco
     && presetIds.has(record.presetId) && Boolean(record.spec);
 }
 
+function publicProjectRecord(project: PublishedProjectRecord): PublishedProjectRecord {
+  return {
+    id: project.id,
+    slug: project.slug,
+    title: project.title,
+    presetId: project.presetId,
+    spec: project.spec,
+    html: project.html,
+    createdAt: project.createdAt,
+  };
+}
+
 export async function ensureProjectsTable(): Promise<D1Database | null> {
   const db = database();
   if (!db) return null;
@@ -44,29 +62,156 @@ export async function ensureProjectsTable(): Promise<D1Database | null> {
   return db;
 }
 
-export async function insertPublishedProject(project: PublishedProjectRecord): Promise<void> {
+export async function insertPublishedProject(project: PublishedProjectRecord): Promise<boolean> {
+  const publicProject = publicProjectRecord(project);
+  const local = localProjectStore();
+  if (local) {
+    if (local.has(publicProject.slug)) return false;
+    local.set(publicProject.slug, structuredClone(publicProject));
+    return true;
+  }
   const db = await ensureProjectsTable();
   if (db) {
-    await db.prepare(
-      "INSERT INTO published_projects (id, slug, title, preset_id, spec_json, html, created_at, view_count) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
-    ).bind(project.id, project.slug, project.title, project.presetId, JSON.stringify(project.spec), project.html, project.createdAt).run();
-    return;
+    const inserted = await db.prepare(
+      "INSERT OR IGNORE INTO published_projects (id, slug, title, preset_id, spec_json, html, created_at, view_count) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+    ).bind(
+      publicProject.id,
+      publicProject.slug,
+      publicProject.title,
+      publicProject.presetId,
+      JSON.stringify(publicProject.spec),
+      publicProject.html,
+      publicProject.createdAt,
+    ).run();
+    return Number(inserted.meta?.changes ?? 0) > 0;
   }
   if (blobAvailable()) {
-    const { put } = await import("@vercel/blob");
-    await put(blobPath(project.slug), JSON.stringify(project), {
-      access: "public",
-      addRandomSuffix: false,
-      allowOverwrite: false,
-      cacheControlMaxAge: 60,
-      contentType: "application/json; charset=utf-8",
-    });
-    return;
+    const { BlobPreconditionFailedError, put } = await import("@vercel/blob");
+    try {
+      await put(blobPath(publicProject.slug), JSON.stringify(publicProject), {
+        access: "public",
+        addRandomSuffix: false,
+        allowOverwrite: false,
+        cacheControlMaxAge: 60,
+        contentType: "application/json; charset=utf-8",
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof BlobPreconditionFailedError) return false;
+      throw error;
+    }
+  }
+  throw new Error("Drops Studio Cloud storage is not available in this environment.");
+}
+
+export async function updatePublishedProject(project: PublishedProjectRecord): Promise<boolean> {
+  const publicProject = publicProjectRecord(project);
+  const local = localProjectStore();
+  if (local) {
+    const current = local.get(publicProject.slug);
+    if (!current) return false;
+    local.set(
+      publicProject.slug,
+      structuredClone({
+        ...publicProject,
+        id: current.id,
+        createdAt: current.createdAt,
+      }),
+    );
+    return true;
+  }
+  const db = await ensureProjectsTable();
+  if (db) {
+    const updated = await db.prepare(
+      "UPDATE published_projects SET title = ?, preset_id = ?, spec_json = ?, html = ? WHERE slug = ?",
+    ).bind(
+      publicProject.title,
+      publicProject.presetId,
+      JSON.stringify(publicProject.spec),
+      publicProject.html,
+      publicProject.slug,
+    ).run();
+    return Number(updated.meta?.changes ?? 0) > 0;
+  }
+  if (blobAvailable()) {
+    const {
+      BlobNotFoundError,
+      BlobPreconditionFailedError,
+      head,
+      put,
+    } = await import("@vercel/blob");
+    try {
+      const currentHead = await head(blobPath(publicProject.slug));
+      const current = await getPublishedProject(publicProject.slug);
+      if (!current) return false;
+      await put(
+        blobPath(publicProject.slug),
+        JSON.stringify({
+          ...publicProject,
+          id: current.id,
+          createdAt: current.createdAt,
+        }),
+        {
+          access: "public",
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          cacheControlMaxAge: 60,
+          contentType: "application/json; charset=utf-8",
+          ifMatch: currentHead.etag,
+        },
+      );
+      return true;
+    } catch (error) {
+      if (
+        error instanceof BlobNotFoundError ||
+        error instanceof BlobPreconditionFailedError
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Drops Studio Cloud storage is not available in this environment.");
+}
+
+export async function deletePublishedProject(slug: string): Promise<boolean> {
+  const local = localProjectStore();
+  if (local) return local.delete(slug);
+  const db = await ensureProjectsTable();
+  if (db) {
+    const deleted = await db
+      .prepare("DELETE FROM published_projects WHERE slug = ?")
+      .bind(slug)
+      .run();
+    return Number(deleted.meta?.changes ?? 0) > 0;
+  }
+  if (blobAvailable()) {
+    const {
+      BlobNotFoundError,
+      BlobPreconditionFailedError,
+      del,
+      head,
+    } = await import("@vercel/blob");
+    try {
+      const currentHead = await head(blobPath(slug));
+      await del(blobPath(slug), { ifMatch: currentHead.etag });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof BlobNotFoundError ||
+        error instanceof BlobPreconditionFailedError
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
   throw new Error("Drops Studio Cloud storage is not available in this environment.");
 }
 
 export async function getPublishedProject(slug: string): Promise<PublishedProjectRecord | null> {
+  const local = localProjectStore();
+  if (local) return structuredClone(local.get(slug) ?? null);
   const db = await ensureProjectsTable();
   if (db) {
     const row = await db.prepare(
@@ -93,7 +238,7 @@ export async function getPublishedProject(slug: string): Promise<PublishedProjec
   }
   if (blobAvailable()) {
     const { get } = await import("@vercel/blob");
-    const result = await get(blobPath(slug), { access: "public", useCache: true });
+    const result = await get(blobPath(slug), { access: "public", useCache: false });
     if (!result || result.statusCode !== 200) return null;
     const text = await new Response(result.stream).text();
     let parsed: unknown;

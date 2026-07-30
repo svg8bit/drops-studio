@@ -26,10 +26,18 @@ function response(payload: unknown, status = 200) {
   const result = NextResponse.json(payload, { status });
   result.headers.set("cache-control", "no-store, max-age=0");
   result.headers.set("pragma", "no-cache");
-  result.headers.set("access-control-allow-origin", "*");
-  result.headers.set("access-control-allow-methods", "POST, OPTIONS");
-  result.headers.set("access-control-allow-headers", "content-type, x-drops-session");
   return result;
+}
+
+function sameOrigin(request: NextRequest): boolean {
+  if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).origin === request.nextUrl.origin;
+  } catch {
+    return false;
+  }
 }
 
 function trustedAddress(value: string | null): string | null {
@@ -138,6 +146,7 @@ async function telegram<T>(token: string, method: string, payload: Record<string
 }
 
 export async function POST(request: NextRequest) {
+  if (!sameOrigin(request)) return response({ error: "Cross-origin Telegram actions are not accepted." }, 403);
   const body = await request.json().catch(() => null) as TelegramBody | null;
   const token = typeof body?.token === "string" ? body.token.trim() : "";
   const channel = typeof body?.channel === "string" ? body.channel.trim() : "";
@@ -187,14 +196,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
+  if (!sameOrigin(request)) return new NextResponse(null, { status: 403, headers: { "cache-control": "no-store, max-age=0" } });
   return new NextResponse(null, {
     status: 204,
     headers: {
       "cache-control": "no-store, max-age=0",
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "POST, OPTIONS",
-      "access-control-allow-headers": "content-type, x-drops-session",
     },
   });
 }

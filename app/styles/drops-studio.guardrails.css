@@ -1,0 +1,110 @@
+/* Final accessibility layer. Keep this import last in the global manifest. */
+:where(body) {
+  font-size: var(--font-body);
+  line-height: 1.6;
+}
+
+/* Paragraphs carry task meaning in the builder and its output previews. */
+:where(.studio-shell p) {
+  font-size: var(--font-body) !important;
+}
+
+:where(
+  button,
+  input:not([type="hidden"]),
+  textarea,
+  select,
+  a[href],
+  [role="button"],
+  [role="option"],
+  [role="switch"],
+  [role="combobox"],
+  [contenteditable="true"]
+) {
+  box-sizing: border-box;
+  font-size: var(--font-control) !important;
+  min-height: var(--control-min-height) !important;
+  min-width: var(--target-min-size) !important;
+}
+
+:where(a[href]) {
+  align-items: center;
+  display: inline-flex;
+}
+
+:where(
+  label:has(input[type="checkbox"]),
+  label:has(input[type="color"]),
+  label:has(input[type="file"])
+) {
+  min-height: var(--target-min-size);
+}
+
+:where(small, time, figcaption, [data-helper], [data-metadata]) {
+  font-size: var(--font-helper);
+}
+
+/* Keep Base UI/shadcn semantic foregrounds explicit after the legacy cascade. */
+:where([data-slot="button"].bg-primary) {
+  background-color: var(--primary-action) !important;
+  color: var(--primary-foreground) !important;
+}
+
+:where([data-slot="alert"].text-destructive) [data-slot="alert-description"] {
+  color: var(--destructive) !important;
+}
+
+/* AA text colors for legacy landing, preview and builder surfaces. */
+:where(
+  header .brand-lockup span,
+  .prompt-runbar > span,
+  .run-mode button,
+  .setup-heading p,
+  .custom-switch > span,
+  .config-field > span,
+  .brain-label span,
+  .source-strip,
+  .data-mode,
+  .preview-footnote,
+  .studio-footer .brand-lockup span,
+  .studio-footer > p
+) {
+  color: var(--muted-foreground) !important;
+}
+
+:where(
+  .eyebrow,
+  .prompt-meta span:last-child,
+  .section-heading span,
+  .setup-heading > div > span,
+  .source-strip button,
+  .blank-button
+) {
+  color: var(--primary-action) !important;
+}
+
+:where(.preset-badge, .preset-card em) {
+  color: #34445e !important;
+}
+
+:where(.provider-chips button.connected) {
+  color: #075f3d !important;
+}
+
+:where(.data-mode.live) {
+  color: var(--green) !important;
+}
+
+:where(.build-button) {
+  background-color: var(--primary-action) !important;
+  color: #ffffff !important;
+}
+
+:where(.provider-list small, .privacy-note, .privacy-note p, .telegram-auth-card > small) {
+  color: var(--muted-foreground) !important;
+}
+
+/* Avoid transient low-contrast compositing while the setup card mounts. */
+:where(.setup-card) {
+  opacity: 1 !important;
+}

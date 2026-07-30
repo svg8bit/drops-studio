@@ -1,6 +1,48 @@
 import type { PresetId } from "@/lib/presets";
 import type { ProjectLaunchStatus, ProjectRealityContract } from "@/lib/project-types";
 
+const STUDIO_CANONICAL_ORIGIN = "https://drops-studio.vercel.app";
+const STUDIO_TELEGRAM_CONNECTION_PARAMS = [
+  ["connections", "1"],
+  ["provider", "dropsbot"],
+  ["flow", "telegram-channel"],
+] as const;
+
+function telegramConnectionPath(projectSlug?: string): string {
+  const params = new URLSearchParams();
+  for (const [name, value] of STUDIO_TELEGRAM_CONNECTION_PARAMS) {
+    params.set(name, value);
+  }
+  if (projectSlug) params.set("project", projectSlug);
+  return `/?${params.toString()}`;
+}
+
+/** Canonical handoff used only by a standalone source export. */
+export const STUDIO_TELEGRAM_CONNECTION_URL = new URL(
+  telegramConnectionPath(),
+  STUDIO_CANONICAL_ORIGIN,
+).toString();
+
+/**
+ * Keeps an in-Studio preview or published project on the deployment that owns
+ * its data adapter. A relative data endpoint intentionally produces a relative
+ * handoff instead of silently sending the user to an unrelated deployment.
+ */
+export function studioTelegramConnectionUrl(
+  dataEndpoint: string,
+  projectSlug?: string,
+): string {
+  try {
+    const endpoint = new URL(dataEndpoint);
+    if (!/^https?:$/.test(endpoint.protocol) || endpoint.username || endpoint.password) {
+      throw new Error("Unsupported Studio origin.");
+    }
+    return new URL(telegramConnectionPath(projectSlug), endpoint.origin).toString();
+  } catch {
+    return telegramConnectionPath(projectSlug);
+  }
+}
+
 export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
   "action-engine": {
     deliveryMode: "research-only",
@@ -13,18 +55,18 @@ export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
   "alpha-channel": {
     deliveryMode: "connection-required",
     externalSetupRequired: true,
-    deliverable: "A working Telegram channel setup app, sourced post composer and verified test-post sender.",
-    worksNow: ["Market signal selection", "Sourced post composer", "Telegram preview", "Bot admin verification"],
-    requires: ["An existing Telegram channel", "Drops Bot setup or a BotFather bot token", "Bot administrator access"],
-    forbiddenClaims: ["already on air", "channel created", "subscribers"],
+    deliverable: "A runnable Telegram setup product with a sourced post composer, a Studio MTProto provisioning handoff and an existing-channel verified-send fallback.",
+    worksNow: ["Market signal selection", "Sourced post composer", "Truthful Telegram preview", "Studio MTProto connection handoff", "Existing-channel bot verification"],
+    requires: ["A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "Explicit approval to create or select the destination", "Drops Bot or a BotFather bot with administrator access", "Telegram provider evidence for completion"],
+    forbiddenClaims: ["already on air", "channel created", "subscribers", "preview is the channel"],
   },
   "morning-alpha": {
     deliveryMode: "connection-required",
     externalSetupRequired: true,
-    deliverable: "A working daily brief builder with real market sections and verified Telegram delivery.",
-    worksNow: ["Live price brief", "Watchlist settings", "Telegram preview", "Verified test delivery"],
-    requires: ["DropsTab API for unlocks and funding", "An existing Telegram channel", "Drops Bot or a BotFather bot"],
-    forbiddenClaims: ["online", "scheduled delivery active", "subscribers"],
+    deliverable: "A runnable daily brief builder with real market sections, a Studio MTProto provisioning handoff and verified existing-channel delivery.",
+    worksNow: ["Live price brief", "Watchlist settings", "Truthful Telegram preview", "Studio MTProto connection handoff", "Existing-channel test delivery"],
+    requires: ["DropsTab API for unlocks and funding", "A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "Drops Bot or a BotFather bot with administrator access", "A scheduler for recurring delivery"],
+    forbiddenClaims: ["online", "scheduled delivery active", "subscribers", "preview is the channel"],
   },
   "prediction-impact": {
     deliveryMode: "research-only",
@@ -77,10 +119,10 @@ export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
   "crypto-product-hunt": {
     deliveryMode: "connection-required",
     externalSetupRequired: true,
-    deliverable: "A working private launch tracker and submission draft board.",
-    worksNow: ["Local submissions", "Search", "Local votes", "DropsTab project context"],
-    requires: ["A database and authentication for a public community board"],
-    forbiddenClaims: ["community live", "verified votes", "trending launches"],
+    deliverable: "A working public launch community with persistent submissions and browser-session voting.",
+    worksNow: ["Persistent public submissions", "Top and new feeds", "Browser-session vote receipts", "DropsTab research context"],
+    requires: ["Cloud storage for public persistence", "Human moderation for trusted curation", "Sign-in for verified-person identity"],
+    forbiddenClaims: ["verified human votes", "moderated listing", "official endorsement"],
   },
   "crypto-radio": {
     deliveryMode: "web-native",
@@ -97,6 +139,14 @@ export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
     worksNow: ["Text questions", "Browser speech recognition", "Spoken answers", "Drops Bot alert handoff"],
     requires: ["Browser speech support", "AI connection for open-ended answers"],
     forbiddenClaims: ["always listening", "alert created", "trade executed"],
+  },
+  "custom-product": {
+    deliveryMode: "web-native",
+    externalSetupRequired: false,
+    deliverable: "A runnable modular crypto web application assembled from validated screens, components and local interactions.",
+    worksNow: ["Bounded screen navigation", "DropsTab-compatible market context", "Local saved state", "Drops Bot setup handoff"],
+    requires: ["DropsTab API for complete live intelligence", "An explicit provider setup for external alerts or delivery"],
+    forbiddenClaims: ["custom code executed", "alert created", "trade executed", "wallet connected"],
   },
 };
 
@@ -139,9 +189,10 @@ export function truthfulnessViolations(presetId: PresetId, html: string): string
     "crypto-game": [/global leaderboard/i, /players online/i, /prize pool/i],
     "personal-companion": [/learned across devices/i, /news feed connected/i],
     "portfolio-tamagotchi": [/wallet connected/i, /portfolio rebalanced/i],
-    "crypto-product-hunt": [/community live/i, /verified votes/i, /trending launches/i],
+    "crypto-product-hunt": [/verified human votes/i, /moderated listing/i, /official endorsement/i],
     "crypto-radio": [/live broadcast/i, /listeners online/i],
     "crypto-siri": [/alert created/i, /always listening/i],
+    "custom-product": [/custom code executed/i, /alert created/i, /wallet connected/i],
   };
   for (const pattern of presetPatterns[presetId] ?? []) if (pattern.test(html)) violations.push(pattern.source);
   return [...new Set(violations)];

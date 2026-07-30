@@ -1,5 +1,9 @@
 import type { NextRequest } from "next/server.js";
 
+declare global {
+  var __DROPS_STUDIO_LOCAL_RATE_LIMITS__: Map<string, { count: number; expiresAt: number }> | undefined;
+}
+
 function trustedAddress(value: string | null): string | null {
   const address = value?.trim() ?? "";
   if (!address || address.length > 64) return null;
@@ -26,53 +30,191 @@ async function shortHash(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }
 
-export async function consumeRequestLimit(options: {
+function localProjectStoreEnabled(): boolean {
+  return process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE === "1" && !process.env.VERCEL;
+}
+
+export type RequestLimitStatus = "allowed" | "limited" | "unavailable";
+
+export interface RequestLimitState {
+  status: RequestLimitStatus;
+  count: number | null;
+  remaining: number | null;
+}
+
+type RequestLimitOptions = {
   identity: string | null;
   namespace: string;
   max: number;
   windowMs: number;
-}): Promise<"allowed" | "limited" | "unavailable"> {
-  if (!options.identity) return "unavailable";
-  if (!process.env.BLOB_READ_WRITE_TOKEN && !(process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN)) {
-    return process.env.VERCEL || process.env.NODE_ENV === "production" ? "unavailable" : "allowed";
+};
+
+type BlobStorage = Pick<typeof import("@vercel/blob"), "get" | "put">;
+
+function unavailableState(): RequestLimitState {
+  return { status: "unavailable", count: null, remaining: null };
+}
+
+function countedState(count: number, max: number, limited = count > max): RequestLimitState {
+  return {
+    status: limited ? "limited" : "allowed",
+    count,
+    remaining: Math.max(0, max - count),
+  };
+}
+
+function cleanupLocalLimits(now: number): Map<string, { count: number; expiresAt: number }> {
+  const limits = globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ ??= new Map();
+  for (const [storedKey, stored] of limits) {
+    if (stored.expiresAt <= now) limits.delete(storedKey);
   }
-  const { get, put } = await import("@vercel/blob");
+  return limits;
+}
+
+function localLimitKey(options: {
+  identity: string;
+  namespace: string;
+  windowMs: number;
+}, now: number): string {
+  return `${options.namespace}:${Math.floor(now / options.windowMs)}:${options.identity}`;
+}
+
+function consumeLocalRequestLimit(options: RequestLimitOptions & { identity: string }): RequestLimitState {
   const now = Date.now();
   const bucket = Math.floor(now / options.windowMs);
+  const key = localLimitKey(options, now);
+  const limits = cleanupLocalLimits(now);
+
+  const current = limits.get(key);
+  const count = (current?.count ?? 0) + 1;
+  limits.set(key, { count, expiresAt: (bucket + 1) * options.windowMs });
+  return countedState(count, options.max);
+}
+
+function readLocalRequestLimit(options: RequestLimitOptions & { identity: string }): RequestLimitState {
+  const now = Date.now();
+  const count = cleanupLocalLimits(now).get(localLimitKey(options, now))?.count ?? 0;
+  return countedState(count, options.max, count >= options.max);
+}
+
+function durableBackendConfigured(): boolean {
+  return Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN
+      || (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN),
+  );
+}
+
+async function blobStorage(override?: BlobStorage): Promise<BlobStorage> {
+  return override ?? import("@vercel/blob");
+}
+
+function validStoredState(value: unknown): { count: number; windowEndsAt: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const { count, windowEndsAt } = value as { count?: unknown; windowEndsAt?: unknown };
+  if (!Number.isSafeInteger(count) || Number(count) < 0) return null;
+  if (!Number.isSafeInteger(windowEndsAt) || Number(windowEndsAt) <= 0) return null;
+  return { count: Number(count), windowEndsAt: Number(windowEndsAt) };
+}
+
+async function blobPathname(options: RequestLimitOptions & { identity: string }): Promise<string> {
   const key = await shortHash(`${options.namespace}:${options.identity}`);
-  const pathname = `drops-studio/rate-limit/${options.namespace}/${bucket}/${key}.json`;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const current = await get(pathname, { access: "private", useCache: false });
-    if (!current) {
+  return `drops-studio/rate-limit/${options.namespace}/${key}.json`;
+}
+
+async function storedBlobCount(
+  storage: BlobStorage,
+  pathname: string,
+): Promise<{ count: number; windowEndsAt: number; etag: string } | null> {
+  const current = await storage.get(pathname, { access: "private", useCache: false });
+  if (!current) return null;
+  if (current.statusCode !== 200) throw new Error("Rate-limit state could not be read.");
+  const parsed = JSON.parse(await new Response(current.stream).text()) as unknown;
+  const state = validStoredState(parsed);
+  if (!state || !current.blob.etag) throw new Error("Rate-limit state is invalid.");
+  return { ...state, etag: current.blob.etag };
+}
+
+export async function consumeRequestLimitState(
+  options: RequestLimitOptions,
+  storageOverride?: BlobStorage,
+): Promise<RequestLimitState> {
+  if (!options.identity) return unavailableState();
+  if (!storageOverride && localProjectStoreEnabled()) {
+    return consumeLocalRequestLimit({ ...options, identity: options.identity });
+  }
+  if (!storageOverride && !durableBackendConfigured()) {
+    return process.env.VERCEL || process.env.NODE_ENV === "production"
+      ? unavailableState()
+      : { status: "allowed", count: null, remaining: null };
+  }
+  try {
+    const storage = await blobStorage(storageOverride);
+    const pathname = await blobPathname({ ...options, identity: options.identity });
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      let current: Awaited<ReturnType<typeof storedBlobCount>>;
       try {
-        await put(pathname, JSON.stringify({ count: 1 }), {
+        current = await storedBlobCount(storage, pathname);
+      } catch {
+        continue;
+      }
+      const now = Date.now();
+      const windowEndsAt = (Math.floor(now / options.windowMs) + 1) * options.windowMs;
+      if (!current) {
+        try {
+          await storage.put(pathname, JSON.stringify({ count: 1, windowEndsAt }), {
+            access: "private",
+            addRandomSuffix: false,
+            allowOverwrite: false,
+            cacheControlMaxAge: 60,
+            contentType: "application/json; charset=utf-8",
+          });
+          return countedState(1, options.max);
+        } catch {
+          continue;
+        }
+      }
+      const expired = current.windowEndsAt <= now;
+      const count = expired ? 1 : current.count + 1;
+      try {
+        await storage.put(pathname, JSON.stringify({ count, windowEndsAt: expired ? windowEndsAt : current.windowEndsAt }), {
           access: "private",
           addRandomSuffix: false,
-          allowOverwrite: false,
+          allowOverwrite: true,
           cacheControlMaxAge: 60,
           contentType: "application/json; charset=utf-8",
+          ifMatch: current.etag,
         });
-        return "allowed";
+        return countedState(count, options.max);
       } catch {
         continue;
       }
     }
-    if (current.statusCode !== 200) continue;
-    const stored = JSON.parse(await new Response(current.stream).text()) as { count?: unknown };
-    const count = Math.max(0, Number(stored.count) || 0) + 1;
-    try {
-      await put(pathname, JSON.stringify({ count }), {
-        access: "private",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        cacheControlMaxAge: 60,
-        contentType: "application/json; charset=utf-8",
-        ifMatch: current.blob.etag,
-      });
-      return count > options.max ? "limited" : "allowed";
-    } catch {
-      continue;
-    }
+  } catch {
+    return unavailableState();
   }
-  return "unavailable";
+  return unavailableState();
+}
+
+export async function readRequestLimitState(
+  options: RequestLimitOptions,
+  storageOverride?: BlobStorage,
+): Promise<RequestLimitState> {
+  if (!options.identity) return unavailableState();
+  if (!storageOverride && localProjectStoreEnabled()) {
+    return readLocalRequestLimit({ ...options, identity: options.identity });
+  }
+  if (!storageOverride && !durableBackendConfigured()) return unavailableState();
+  try {
+    const storage = await blobStorage(storageOverride);
+    const pathname = await blobPathname({ ...options, identity: options.identity });
+    const current = await storedBlobCount(storage, pathname);
+    const count = current && current.windowEndsAt > Date.now() ? current.count : 0;
+    return countedState(count, options.max, count >= options.max);
+  } catch {
+    return unavailableState();
+  }
+}
+
+export async function consumeRequestLimit(options: RequestLimitOptions): Promise<RequestLimitStatus> {
+  return (await consumeRequestLimitState(options)).status;
 }

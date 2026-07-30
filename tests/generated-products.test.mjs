@@ -28,7 +28,7 @@ test("the compiler contains a distinct runnable product for every preset", async
     assert.match(compiler, new RegExp(`"${id}":render`));
   }
   assert.match(compiler, /data-project-kind=/);
-  assert.match(compiler, /Run decision engine/);
+  assert.match(compiler, /data-action="run-engine"/);
   assert.match(compiler, /Generate sourced post/);
   assert.match(compiler, /Refresh live brief/);
   assert.match(compiler, /Run paper scenario/);
@@ -41,6 +41,16 @@ test("the compiler contains a distinct runnable product for every preset", async
   assert.match(compiler, /id="huntName"/);
   assert.doesNotMatch(compiler, /prompt\("Product name"/);
   assert.doesNotMatch(compiler, /\.telegram-workspace \.channel-editor\{display:none\}/);
+  assert.doesNotMatch(compiler, /[✦⚡☀📈🔓🚀◎★☆↗‹⋮]/u);
+  assert.match(compiler, /class="tg-message-source"><img src="\/brand\/dropstab-mark\.svg" alt="DropsTab source">/);
+  assert.match(compiler, /class="tg-avatar"><img src="\/brand\/drops-bot-avatar\.jpg" alt="Drops Bot">/);
+  assert.match(compiler, /<img class="tama-creature" src="\/assets\/market-wolf-catcher\.png" alt="Market Wolf portfolio companion"/);
+  assert.doesNotMatch(compiler, /<svg\b/i);
+  assert.doesNotMatch(compiler, /data:image/i);
+  assert.doesNotMatch(compiler, /class="noise"|\.noise\{/);
+  assert.match(compiler, /aria-pressed="'\+Boolean\(item\.viewerHasVoted\)\+'"/);
+  assert.match(compiler, /data-hunt-vote/);
+  assert.match(compiler, /function huntRequest\(action,payload\)/);
   assert.doesNotMatch(compiler, /\beval\s*\(/);
   assert.doesNotMatch(compiler, /new Function/);
 });
@@ -59,10 +69,15 @@ test("publishing recompiles validated specs and persists recoverable public buil
 
   assert.match(publishRoute, /validateProjectSpec/);
   assert.match(publishRoute, /compileProject/);
+  assert.match(publishRoute, /consumeRequestLimit/);
+  assert.match(publishRoute, /requestIdentity\(request\)/);
+  assert.match(publishRoute, /namespace: "project-publish"/);
+  assert.match(publishRoute, /status: 429/);
+  assert.match(studio, /"x-drops-session": session/);
   assert.match(publicRoute, /text\/html; charset=utf-8/);
   assert.match(publicRoute, /content-security-policy/);
   assert.match(studio, /migrated\.publishedAt !== migrated\.updatedAt/);
-  assert.match(studio, /publishedAt, updatedAt: publishedAt/);
+  assert.match(studio, /publishedAt,[\s\S]{0,180}updatedAt:\s*publishedAt/);
   assert.match(studio, /function handleCloudPublish\(\)/);
   assert.match(studio, /onClick=\{handleCloudPublish\}/);
   assert.match(migration, /CREATE TABLE `published_projects`/);
@@ -70,7 +85,7 @@ test("publishing recompiles validated specs and persists recoverable public buil
   assert.match(persistence, /process\.env\.BLOB_READ_WRITE_TOKEN/);
   assert.match(persistence, /await import\("@vercel\/blob"\)/);
   assert.match(persistence, /presetIds\.has\(record\.presetId\)/);
-  assert.match(persistence, /await put\(blobPath\(project\.slug\)/);
+  assert.match(persistence, /await put\(blobPath\(publicProject\.slug\)/);
   assert.match(persistence, /await get\(blobPath\(slug\)/);
   assert.match(persistence, /try \{\s+parsed = JSON\.parse\(text\)/);
   assert.match(persistence, /catch \{\s+return null/);
@@ -108,7 +123,11 @@ test("professional editing and category direction apply to every product", async
   assert.match(compiler, /const runtimeSpec = \{/);
   assert.match(compiler, /experience: \{ \.\.\.spec\.experience, backgroundImage: undefined \}/);
   assert.match(compiler, /state\.lastResult/);
-  assert.match(compiler, /LOCAL ARCADE/);
+  assert.match(compiler, /data-game-genre/);
+  assert.match(compiler, /renderMarketRaceGame/);
+  assert.match(compiler, /renderCoinQuizGame/);
+  assert.match(compiler, /renderPortfolioBattleGame/);
+  assert.match(compiler, /renderUnlockDodgeGame/);
   assert.match(compiler, /LOCAL SCORE/);
   assert.match(studio, /Professional experience/);
   assert.match(studio, /Product modules/);
@@ -131,7 +150,7 @@ test("competitive benchmark and builder promise remain documented", async () => 
     readFile(new URL("../docs/INTEGRATIONS.md", import.meta.url), "utf8"),
   ]);
 
-  assert.match(home, /Requested output wins/);
+  assert.match(home, /Your requested product comes first/);
   assert.match(home, /Build now/);
   assert.match(benchmark, /Replit Agent/);
   assert.match(benchmark, /Lovable/);

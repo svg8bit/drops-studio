@@ -94,6 +94,74 @@ export interface ProjectBlueprint {
   };
 }
 
+export type ProjectCustomComponentKind =
+  | "metric-strip"
+  | "market-table"
+  | "watchlist"
+  | "research-feed"
+  | "event-timeline"
+  | "comparison"
+  | "portfolio"
+  | "alert-builder"
+  | "notes";
+
+export type ProjectCustomDataSource =
+  | "market"
+  | "unlocks"
+  | "funding"
+  | "activities"
+  | "predictions"
+  | "local";
+
+export type ProjectCustomAction =
+  | "refresh"
+  | "filter"
+  | "sort"
+  | "favorite"
+  | "compare"
+  | "save-local"
+  | "open-dropstab"
+  | "configure-dropsbot"
+  | "none";
+
+export interface ProjectCustomComponent {
+  id: string;
+  title: string;
+  description: string;
+  kind: ProjectCustomComponentKind;
+  dataSource: ProjectCustomDataSource;
+  actions: ProjectCustomAction[];
+  span: "third" | "half" | "full";
+}
+
+export interface ProjectCustomModule {
+  id: string;
+  title: string;
+  description: string;
+  componentIds: string[];
+}
+
+export interface ProjectCustomScreen {
+  id: string;
+  title: string;
+  route: string;
+  layout: "grid" | "feed" | "split";
+  componentIds: string[];
+}
+
+/**
+ * Safe intermediate representation for blank-canvas products. Models may
+ * select and configure these primitives but never inject HTML or JavaScript.
+ */
+export interface ProjectCustomGraph {
+  version: 1;
+  appKind: string;
+  initialScreenId: string;
+  screens: ProjectCustomScreen[];
+  modules: ProjectCustomModule[];
+  components: ProjectCustomComponent[];
+}
+
 export interface ProjectExperienceDirection {
   archetype:
     | "decision-cockpit"
@@ -107,9 +175,10 @@ export interface ProjectExperienceDirection {
     | "character-habitat"
     | "launch-board"
     | "audio-studio"
-    | "voice-assistant";
+    | "voice-assistant"
+    | "modular-crypto-app";
   layout: "focus" | "split" | "dashboard" | "feed" | "spatial";
-  dataView: "cards" | "table" | "timeline" | "graph" | "map";
+  dataView: "cards" | "table" | "timeline" | "graph" | "map" | "mixed";
   engagement: "realtime" | "scheduled" | "social" | "personal";
   audience: string;
   primaryLoop: string;
@@ -165,6 +234,7 @@ export interface GeneratedProjectSpec {
   elements?: Record<string, ProjectElementConfig>;
   experience: ProjectExperienceDirection;
   blueprint: ProjectBlueprint;
+  customGraph?: ProjectCustomGraph;
   gameDirection?: ProjectGameDirection;
   market: ProjectMarketCoin[];
   prediction: ProjectPrediction;
@@ -181,7 +251,11 @@ export interface GeneratedProject {
   publishedUrl?: string;
   publishedSlug?: string;
   publishedAt?: string;
+  publishCapability?: string;
   checkpoints?: ProjectCheckpoint[];
+  futureCheckpoints?: ProjectCheckpoint[];
+  /** Browser-owned manual source state. Cloud sync intentionally omits it. */
+  sourceEditedAt?: string;
   conversation?: ProjectChatMessage[];
   quality?: ProjectQualityReport;
 }
@@ -208,6 +282,8 @@ export interface ProjectQualityReport {
 }
 
 export interface ProjectRuntimeSmokeResult {
+  mode?: "browser" | "server-artifact";
+  dataProvider?: "dropstab" | "fallback" | "unverified" | (string & {});
   executed: boolean;
   runtime: boolean;
   interactions: boolean;
@@ -224,6 +300,12 @@ export interface ProjectCheckpoint {
   createdAt: string;
   source: "director" | "design" | "manual" | "system";
   spec: GeneratedProjectSpec;
+  /** Validated standalone source for a manual Code workspace checkpoint. */
+  runtimeHtml?: string;
+  branch?: {
+    fromCheckpointId: string;
+    replacedCheckpointCount: number;
+  };
 }
 
 export interface ProjectChatMessage {

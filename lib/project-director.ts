@@ -35,15 +35,19 @@ function nextKit(current: ProjectDesignKit): ProjectDesignKit {
 export function createFreeElementDirectorProposal(
   current: GeneratedProjectSpec,
   instruction: string,
-  element: { id: string; label: string; text: string; textEditable: boolean; styles: ProjectElementConfig; overrides?: ProjectElementConfig },
+  element: { id: string; label: string; tag?: string; text: string; textEditable: boolean; styles: ProjectElementConfig; overrides?: ProjectElementConfig },
 ): DirectorProposal {
   const query = instruction.trim().toLowerCase();
   const config: ProjectElementConfig = { ...(element.overrides ?? {}) };
   const summary: string[] = [];
   const note = (message: string) => summary.push(message);
-  const fontSize = Number(element.styles.fontSize || config.fontSize || 16);
-  const x = Number(element.styles.translateX || config.translateX || 0);
-  const y = Number(element.styles.translateY || config.translateY || 0);
+  const fontSize = Number(config.fontSize ?? element.styles.fontSize ?? 16);
+  const tag = String(element.tag || "").toLowerCase();
+  const controlTags = new Set(["button", "input", "select", "textarea", "a"]);
+  const helperCopy = tag === "small" || /helper|caption|metadata|eyebrow|kicker|status|time/i.test(element.label);
+  const minimumFontSize = controlTags.has(tag) ? 14 : helperCopy ? 12 : 16;
+  const x = Number(config.translateX ?? element.styles.translateX ?? 0);
+  const y = Number(config.translateY ?? element.styles.translateY ?? 0);
   const color = instruction.match(/#[0-9a-f]{6}\b/i)?.[0]?.toLowerCase();
   const copyMatch = instruction.match(/(?:replace(?: the)? text(?: with)?|change(?: the)? text(?: to)?|set(?: the)? text(?: to)?|замени(?:ть)? текст(?: на)?|измени(?:ть)? текст(?: на)?)\s*(["«]?)([^"»\n]{1,180})(["»]?)/i);
   const copy = copyMatch?.[2]?.trim();
@@ -62,7 +66,7 @@ export function createFreeElementDirectorProposal(
     note("Restored the selected element.");
   }
   if (includesAny(query, ["smaller", "уменьш", "меньше"])) {
-    config.fontSize = Math.max(8, Math.round(fontSize * 0.82));
+    config.fontSize = Math.max(minimumFontSize, Math.round(fontSize * 0.82));
     note(`Reduced the selected type to ${config.fontSize}px.`);
   } else if (includesAny(query, ["bigger", "larger", "увелич", "крупнее", "больше"])) {
     config.fontSize = Math.min(120, Math.round(fontSize * 1.18));

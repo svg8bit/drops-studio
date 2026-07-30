@@ -1,0 +1,87 @@
+name: UI Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ui-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      TZ: UTC
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Enforce UI source guardrails
+        run: npm run guardrails:ui
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build production application
+        run: npm run build:vercel
+
+      - name: Run unit tests
+        run: node --test tests/*.test.mjs
+
+      - name: Build Storybook
+        run: npm run build-storybook
+
+      - name: Test Storybook states
+        run: npm run test:storybook
+
+      - name: Compare approved Storybook visual states
+        run: npm run test:storybook:visual
+
+      - name: Run Playwright UI tests
+        run: npm run test:e2e:prepared
+
+      - name: Run Lighthouse CI
+        run: npm run test:lighthouse:prepared
+
+      - name: Verify Sites/Cloudflare build target
+        run: npm run build
+
+      - name: Upload UI quality diagnostics
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ui-quality-diagnostics
+          path: |
+            outputs/playwright-report
+            outputs/test-results
+            outputs/storybook-playwright-report
+            outputs/storybook-test-results
+            outputs/lighthouse
+          if-no-files-found: ignore
+          retention-days: 14

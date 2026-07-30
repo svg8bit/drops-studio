@@ -1,8 +1,8 @@
-import { presets, type PresetId } from "@/lib/presets";
-import { createDefaultBlueprint } from "@/lib/product-blueprint";
-import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectBlueprint, ProjectDesignKit, ProjectElementConfig, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
+import { getProjectPreset, projectPresets, type PresetId } from "@/lib/presets";
+import { createDefaultBlueprint, createDefaultCustomGraph } from "@/lib/product-blueprint";
+import type { GeneratedProjectSpec, ProjectBlockConfig, ProjectBlueprint, ProjectCustomAction, ProjectCustomComponent, ProjectCustomComponentKind, ProjectCustomDataSource, ProjectCustomGraph, ProjectDesignKit, ProjectElementConfig, ProjectExperienceDirection, ProjectGameDirection, ProjectMarketCoin, ProjectPrediction, ProjectProvider } from "@/lib/project-types";
 
-const presetIds = new Set(presets.map((preset) => preset.id));
+const presetIds = new Set(projectPresets.map((preset) => preset.id));
 const providers = new Set<ProjectProvider>(["free", "gateway", "openai", "anthropic", "openrouter", "kimi", "custom"]);
 const modes = new Set(["light", "dark", "hybrid"]);
 const styles = new Set(["precision", "cosmic", "editorial", "playful"]);
@@ -18,10 +18,15 @@ const gameWorlds = new Set<ProjectGameDirection["world"]>(["cloud-city", "space-
 const mascots = new Set<ProjectGameDirection["mascot"]>(["coin-crew", "rocket-pets", "market-monsters", "retro-wolf", "no-mascot"]);
 const assetSources = new Set<ProjectGameDirection["assetSource"]>(["free-vector", "uploaded", "ai-generated"]);
 const difficulties = new Set<ProjectGameDirection["difficulty"]>(["casual", "normal", "expert"]);
-const experienceArchetypes = new Set<ProjectExperienceDirection["archetype"]>(["decision-cockpit", "creator-feed", "editorial-brief", "impact-map", "strategy-monitor", "market-explorer", "game-world", "discovery-companion", "character-habitat", "launch-board", "audio-studio", "voice-assistant"]);
+const experienceArchetypes = new Set<ProjectExperienceDirection["archetype"]>(["decision-cockpit", "creator-feed", "editorial-brief", "impact-map", "strategy-monitor", "market-explorer", "game-world", "discovery-companion", "character-habitat", "launch-board", "audio-studio", "voice-assistant", "modular-crypto-app"]);
 const experienceLayouts = new Set<ProjectExperienceDirection["layout"]>(["focus", "split", "dashboard", "feed", "spatial"]);
-const dataViews = new Set<ProjectExperienceDirection["dataView"]>(["cards", "table", "timeline", "graph", "map"]);
+const dataViews = new Set<ProjectExperienceDirection["dataView"]>(["cards", "table", "timeline", "graph", "map", "mixed"]);
 const engagements = new Set<ProjectExperienceDirection["engagement"]>(["realtime", "scheduled", "social", "personal"]);
+const customComponentKinds = new Set<ProjectCustomComponentKind>(["metric-strip", "market-table", "watchlist", "research-feed", "event-timeline", "comparison", "portfolio", "alert-builder", "notes"]);
+const customDataSources = new Set<ProjectCustomDataSource>(["market", "unlocks", "funding", "activities", "predictions", "local"]);
+const customActions = new Set<ProjectCustomAction>(["refresh", "filter", "sort", "favorite", "compare", "save-local", "open-dropstab", "configure-dropsbot", "none"]);
+const customSpans = new Set<ProjectCustomComponent["span"]>(["third", "half", "full"]);
+const customLayouts = new Set<ProjectCustomGraph["screens"][number]["layout"]>(["grid", "feed", "split"]);
 
 const experienceDefaults: Record<PresetId, Omit<ProjectExperienceDirection, "assetSource" | "backgroundImage">> = {
   "action-engine": { archetype: "decision-cockpit", layout: "split", dataView: "graph", engagement: "realtime", audience: "Active crypto operators", primaryLoop: "Define thesis → confirm trigger → review action → monitor outcome", modules: ["Thesis", "Trigger graph", "Action ledger", "Drops Bot handoff"] },
@@ -36,6 +41,7 @@ const experienceDefaults: Record<PresetId, Omit<ProjectExperienceDirection, "ass
   "crypto-product-hunt": { archetype: "launch-board", layout: "feed", dataView: "cards", engagement: "social", audience: "Crypto builders and early adopters", primaryLoop: "Discover launch → inspect context → vote or follow → submit", modules: ["Launch feed", "Filters", "Project context", "Submissions"] },
   "crypto-radio": { archetype: "audio-studio", layout: "split", dataView: "timeline", engagement: "scheduled", audience: "Listeners who prefer audio intelligence", primaryLoop: "Build rundown → listen → skip or deepen → schedule or share", modules: ["Player", "Rundown", "Voice", "Schedule"] },
   "crypto-siri": { archetype: "voice-assistant", layout: "focus", dataView: "cards", engagement: "personal", audience: "Voice-first crypto users", primaryLoop: "Ask → hear sourced answer → open research → create alert", modules: ["Voice orb", "Answer cards", "Research handoff", "Alert intent"] },
+  "custom-product": { archetype: "modular-crypto-app", layout: "dashboard", dataView: "mixed", engagement: "personal", audience: "Crypto product operators", primaryLoop: "Open workspace → inspect sourced context → use the product tool → save local progress → configure alerts", modules: ["Market context", "Product workspace", "Research", "Saved state", "Alert setup"] },
 };
 
 function cleanText(value: unknown, fallback: string, max = 160): string {
@@ -164,7 +170,7 @@ function elements(value: unknown): Record<string, ProjectElementConfig> {
       ...(typeof item.visible === "boolean" ? { visible: item.visible } : {}),
       ...(safeColor ? { color: safeColor } : {}),
       ...(safeBackground ? { backgroundColor: safeBackground } : {}),
-      ...(optionalNumber("fontSize", 8, 120) !== undefined ? { fontSize: Math.round(optionalNumber("fontSize", 8, 120) as number) } : {}),
+      ...(optionalNumber("fontSize", 12, 120) !== undefined ? { fontSize: Math.round(optionalNumber("fontSize", 12, 120) as number) } : {}),
       ...(optionalNumber("fontWeight", 300, 950) !== undefined ? { fontWeight: Math.round(optionalNumber("fontWeight", 300, 950) as number) } : {}),
       ...(textAlign ? { textAlign } : {}),
       ...(optionalNumber("width", 10, 100) !== undefined ? { width: optionalNumber("width", 10, 100) } : {}),
@@ -182,6 +188,122 @@ function textList(value: unknown, fallback: string[], maxItems = 12, maxLength =
   if (!Array.isArray(value)) return [...fallback];
   const items = value.map((item) => cleanText(item, "", maxLength)).filter(Boolean).slice(0, maxItems);
   return items.length ? items : [...fallback];
+}
+
+function customId(value: unknown, fallback: string): string {
+  const id = cleanText(value, fallback, 48)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return id || fallback;
+}
+
+function uniqueCustomId(raw: unknown, fallback: string, seen: Set<string>): string {
+  const base = customId(raw, fallback);
+  let id = base;
+  let suffix = 2;
+  while (seen.has(id)) {
+    const tail = `-${suffix}`;
+    id = `${base.slice(0, 48 - tail.length)}${tail}`;
+    suffix += 1;
+  }
+  seen.add(id);
+  return id;
+}
+
+function customRoute(value: unknown, screenId: string): string {
+  if (value === "/") return "/";
+  if (typeof value !== "string" || value.length > 80 || !value.startsWith("/")) return `/${screenId}`;
+  const route = value
+    .toLowerCase()
+    .replace(/[^a-z0-9/-]+/g, "-")
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/{0,1}$/, "")
+    .replace(/\.{2,}/g, "");
+  return route && route !== "/" ? `/${route.replace(/^\/+/, "")}` : "/";
+}
+
+function customGraph(value: unknown, prompt: string): ProjectCustomGraph {
+  const fallback = createDefaultCustomGraph(prompt);
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const rawComponents = Array.isArray(input.components) ? input.components.slice(0, 18) : fallback.components;
+  const seenComponents = new Set<string>();
+  const aliases = new Map<string, string>();
+  const components = rawComponents.map((raw, index): ProjectCustomComponent => {
+    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const rawId = cleanText(item.id, `component-${index + 1}`, 80);
+    const id = uniqueCustomId(rawId, `component-${index + 1}`, seenComponents);
+    aliases.set(rawId, id);
+    aliases.set(customId(rawId, id), id);
+    const kind = customComponentKinds.has(item.kind as ProjectCustomComponentKind) ? item.kind as ProjectCustomComponentKind : "research-feed";
+    const dataSource = customDataSources.has(item.dataSource as ProjectCustomDataSource) ? item.dataSource as ProjectCustomDataSource : kind === "notes" ? "local" : "market";
+    const actions = Array.isArray(item.actions)
+      ? Array.from(new Set(item.actions.filter((action): action is ProjectCustomAction => customActions.has(action as ProjectCustomAction)))).slice(0, 6)
+      : [];
+    return {
+      id,
+      title: cleanText(item.title, `Component ${index + 1}`, 80).replace(/[<>]/g, ""),
+      description: cleanText(item.description, "Editable product component.", 220).replace(/[<>]/g, ""),
+      kind,
+      dataSource,
+      actions: actions.length ? actions : [kind === "notes" ? "save-local" : "open-dropstab"],
+      span: customSpans.has(item.span as ProjectCustomComponent["span"]) ? item.span as ProjectCustomComponent["span"] : "half",
+    };
+  });
+  const safeComponents = components.length ? components : fallback.components;
+  const componentIds = new Set(safeComponents.map((component) => component.id));
+  const resolveComponentIds = (candidate: unknown, defaults: string[]): string[] => {
+    const safeDefaults = defaults.filter((id) => componentIds.has(id)).slice(0, 12);
+    if (!Array.isArray(candidate)) return safeDefaults.length ? safeDefaults : [safeComponents[0].id];
+    const resolved = candidate
+      .map((id) => aliases.get(cleanText(id, "", 80)) ?? aliases.get(customId(id, "")) ?? customId(id, ""))
+      .filter((id) => componentIds.has(id));
+    const unique = Array.from(new Set(resolved)).slice(0, 12);
+    return unique.length ? unique : safeDefaults.length ? safeDefaults : [safeComponents[0].id];
+  };
+
+  const rawScreens = Array.isArray(input.screens) ? input.screens.slice(0, 6) : fallback.screens;
+  const seenScreens = new Set<string>();
+  const screens = rawScreens.map((raw, index) => {
+    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const fallbackScreen = fallback.screens[index] ?? fallback.screens[0];
+    const id = uniqueCustomId(item.id, fallbackScreen?.id ?? `screen-${index + 1}`, seenScreens);
+    return {
+      id,
+      title: cleanText(item.title, fallbackScreen?.title ?? `Screen ${index + 1}`, 72).replace(/[<>]/g, ""),
+      route: customRoute(item.route, id),
+      layout: customLayouts.has(item.layout as ProjectCustomGraph["screens"][number]["layout"])
+        ? item.layout as ProjectCustomGraph["screens"][number]["layout"]
+        : fallbackScreen?.layout ?? "grid",
+      componentIds: resolveComponentIds(item.componentIds, fallbackScreen?.componentIds ?? safeComponents.slice(0, 4).map((component) => component.id)),
+    };
+  });
+  const safeScreens = screens.length ? screens : fallback.screens;
+
+  const rawModules = Array.isArray(input.modules) ? input.modules.slice(0, 10) : fallback.modules;
+  const seenModules = new Set<string>();
+  const modules = rawModules.map((raw, index) => {
+    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const fallbackModule = fallback.modules[index] ?? fallback.modules[0];
+    const id = uniqueCustomId(item.id, fallbackModule?.id ?? `module-${index + 1}`, seenModules);
+    return {
+      id,
+      title: cleanText(item.title, fallbackModule?.title ?? `Module ${index + 1}`, 72).replace(/[<>]/g, ""),
+      description: cleanText(item.description, fallbackModule?.description ?? "Bounded product module.", 180).replace(/[<>]/g, ""),
+      componentIds: resolveComponentIds(item.componentIds, fallbackModule?.componentIds ?? safeComponents.slice(0, 4).map((component) => component.id)),
+    };
+  });
+  const safeModules = modules.length ? modules : fallback.modules;
+  const requestedInitial = customId(input.initialScreenId, fallback.initialScreenId);
+
+  return {
+    version: 1,
+    appKind: cleanText(input.appKind, fallback.appKind, 100).replace(/[<>]/g, ""),
+    initialScreenId: safeScreens.some((screen) => screen.id === requestedInitial) ? requestedInitial : safeScreens[0].id,
+    screens: safeScreens,
+    modules: safeModules,
+    components: safeComponents,
+  };
 }
 
 function blueprint(value: unknown, presetId: PresetId, prompt: string): ProjectBlueprint {
@@ -266,7 +388,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
   if (!value || typeof value !== "object") throw new Error("Project spec must be an object.");
   const input = value as Record<string, unknown>;
   const presetId = presetIds.has(input.presetId as PresetId) ? input.presetId as PresetId : "morning-alpha";
-  const preset = presets.find((item) => item.id === presetId) ?? presets[0];
+  const preset = getProjectPreset(presetId);
   const brainInput = input.brain && typeof input.brain === "object" ? input.brain as Record<string, unknown> : {};
   const provider = providers.has(brainInput.provider as ProjectProvider) ? brainInput.provider as ProjectProvider : "free";
   const themeInput = input.theme && typeof input.theme === "object" ? input.theme as Record<string, unknown> : {};
@@ -314,6 +436,7 @@ export function validateProjectSpec(value: unknown): GeneratedProjectSpec {
     elements: elements(input.elements),
     experience: experienceDirection(input.experience, presetId),
     blueprint: blueprint(input.blueprint, presetId, safePrompt),
+    ...(presetId === "custom-product" ? { customGraph: customGraph(input.customGraph, safePrompt) } : {}),
     ...(presetId === "crypto-game" ? { gameDirection: gameDirection(input.gameDirection) } : {}),
     market: safeMarket.length ? safeMarket : [
       { symbol: "BTC", name: "Bitcoin", price: "—", change: null, marketCap: "—" },
@@ -350,6 +473,9 @@ export function applyEnhancement(spec: GeneratedProjectSpec, enhancement: unknow
           },
         }
       : spec.blueprint,
+    customGraph: spec.presetId === "custom-product"
+      ? (input.customGraph && typeof input.customGraph === "object" ? input.customGraph : spec.customGraph)
+      : undefined,
     gameDirection: spec.gameDirection ? { ...spec.gameDirection, ...(input.gameDirection && typeof input.gameDirection === "object" ? input.gameDirection : {}) } : undefined,
     brain: { ...spec.brain, enhanced: true },
   });
