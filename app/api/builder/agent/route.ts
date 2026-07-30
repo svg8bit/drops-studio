@@ -19,6 +19,15 @@ import {
   type BuilderProjectPublisher,
   type BuilderProjectRepository,
 } from "../../../../lib/builder-agent/index.ts";
+import {
+  DefaultAgentEvalStore,
+  type AgentEvalStore,
+} from "../../../../lib/agent/evals/index.ts";
+import { resolveAgentIntelligenceFlags } from "../../../../lib/agent/flags.ts";
+import {
+  runIntelligentBuilderAgent,
+  type RunIntelligentBuilderAgentInput,
+} from "../../../../lib/agent/runtime/index.ts";
 import { VercelSandboxRuntimeAdapter } from "../../../../lib/vercel-sandbox-runtime-adapter.ts";
 import { VercelAgentBrowserChecker } from "../../../../lib/vercel-agent-browser-checker.ts";
 import type {
@@ -76,6 +85,10 @@ export interface BuilderAgentRouteDependencies {
   deterministicFallback?: BuilderDeterministicFallback;
   modelResolver?: BuilderModelResolver;
   runnerFactory?: BuilderAgentRunnerFactory;
+  evalStore?: Pick<AgentEvalStore, "writeTrace">;
+  intelligenceRunner?: (
+    input: RunIntelligentBuilderAgentInput,
+  ) => ReturnType<typeof runIntelligentBuilderAgent>;
   writeReleaseReceipt?: (
     descriptor: ProjectV2ReleaseReceiptDescriptor,
   ) => Promise<ProjectV2ReleaseReceipt>;
@@ -139,18 +152,39 @@ export async function handleBuilderAgentRequest(
     // Approval evidence is resolved server-side. Tool names are intentionally
     // absent from the public JSON body so a model cannot approve its own call.
     const approvedTools = await (dependencies.resolveApprovedTools?.(request) ?? []);
-    const result = await runBuilderAgent(
-      { ...parsed.data, approvedTools: [...approvedTools] },
-      {
-        services: session,
-        audit,
-        credentials: builderCredentials(request),
-        deterministicFallback:
-          dependencies.deterministicFallback ??
-          materializedProjectDeterministicFallback,
-        modelResolver: dependencies.modelResolver,
-        runnerFactory: dependencies.runnerFactory,
-      },
+    const agentRequest = {
+      ...parsed.data,
+      approvedTools: [...approvedTools],
+    };
+    const agentDependencies = {
+      services: session,
+      audit,
+      credentials: builderCredentials(request),
+      deterministicFallback:
+        dependencies.deterministicFallback ??
+        materializedProjectDeterministicFallback,
+      modelResolver: dependencies.modelResolver,
+      runnerFactory: dependencies.runnerFactory,
+    };
+    const flags = resolveAgentIntelligenceFlags();
+    const intelligence = flags.compositeModelRouting
+      ? await (dependencies.intelligenceRunner ?? runIntelligentBuilderAgent)({
+          request: agentRequest,
+          dependencies: agentDependencies,
+          actor: {
+            actorId,
+            tenantId: actorId,
+            workspaceId: actorId,
+            branch: `project:${project.id}`,
+          },
+          project,
+          flags,
+          evalStore: dependencies.evalStore ?? new DefaultAgentEvalStore(),
+        })
+      : null;
+    const result = intelligence?.result ?? await runBuilderAgent(
+      agentRequest,
+      agentDependencies,
     );
     if (result.releaseGate.ok) {
       const checkpoint = result.project.checkpoints.at(-1);
@@ -183,7 +217,22 @@ export async function handleBuilderAgentRequest(
         );
       }
     }
-    return builderJson({ result }, result.status === "blocked" ? 422 : 200);
+    return builderJson(
+      {
+        result,
+        ...(intelligence
+          ? {
+              intelligence: {
+                trace: intelligence.trace,
+                verification: intelligence.verification,
+                route: intelligence.route,
+                tracePersistence: intelligence.tracePersistence,
+              },
+            }
+          : {}),
+      },
+      result.status === "blocked" ? 422 : 200,
+    );
   } catch (error) {
     return builderRouteError(error);
   }

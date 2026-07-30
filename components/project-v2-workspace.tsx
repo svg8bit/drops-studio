@@ -3,6 +3,7 @@
 import {
   AlertCircle,
   ArchiveRestore,
+  BrainCircuit,
   Box,
   Braces,
   Check,
@@ -65,6 +66,9 @@ import type {
   ProjectIntegrationManifestV2,
   ProjectV2,
 } from "@/lib/project-v2-types";
+import type { AgentRunTrace } from "@/lib/agent/evals/types";
+
+import { ProjectV2AgentIntelligence } from "./project-v2-agent-intelligence";
 
 import {
   buildProjectV2FileTree,
@@ -81,6 +85,7 @@ const LazyCodeEditor = lazy(() => import("./project-v2-code-editor"));
 export type ProjectV2WorkspaceView =
   | "files"
   | "preview"
+  | "agent"
   | "data"
   | "logic"
   | "checks"
@@ -178,6 +183,7 @@ export interface ProjectV2WorkspaceProps {
   browserErrors?: readonly ProjectV2BrowserErrorView[];
   deploymentHistory?: readonly ProjectV2DeploymentReceiptView[];
   releaseReadiness?: ProjectV2ReleaseReadiness;
+  agentTrace?: AgentRunTrace | null;
   className?: string;
   onActiveViewChange?: (view: ProjectV2WorkspaceView) => void;
   onPreviewDeviceChange?: (device: ProjectV2PreviewDevice) => void;
@@ -210,6 +216,7 @@ const workspaceViews: Array<{
 }> = [
   { id: "files", label: "Files", icon: Files },
   { id: "preview", label: "Preview", icon: Monitor },
+  { id: "agent", label: "Agent", icon: BrainCircuit },
   { id: "integrations", label: "Integrations", icon: PlugZap },
   { id: "data", label: "Data", icon: Database },
   { id: "logic", label: "Logic", icon: Braces },
@@ -659,6 +666,7 @@ export function ProjectV2Workspace({
   browserErrors = EMPTY_BROWSER_ERRORS,
   deploymentHistory = EMPTY_DEPLOYMENTS,
   releaseReadiness,
+  agentTrace,
   className,
   onActiveViewChange,
   onPreviewDeviceChange,
@@ -1060,6 +1068,8 @@ export function ProjectV2Workspace({
             </footer>
           </div>
         ) : null}
+
+        {view === "agent" ? <ProjectV2AgentIntelligence trace={agentTrace} /> : null}
 
         {view === "checks" ? (
           <div className={styles.surfaceGrid}>

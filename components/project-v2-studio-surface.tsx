@@ -48,6 +48,7 @@ import type {
   RuntimeCommandResult,
   RuntimeState,
 } from "@/lib/project-runtime-adapter";
+import type { AgentRunTrace } from "@/lib/agent/evals/types";
 
 import styles from "./project-v2-studio-surface.module.css";
 
@@ -55,6 +56,13 @@ const AUTO_BUILD_KEY = "drops-studio:v2-auto-build";
 
 interface BuilderApiPayload {
   result?: BuilderAgentResult;
+  intelligence?: {
+    trace?: AgentRunTrace;
+    tracePersistence?: {
+      status: "persisted" | "unavailable" | "disabled";
+      reason?: string;
+    };
+  };
   code?: string;
   error?: string;
 }
@@ -336,6 +344,7 @@ export function ProjectV2StudioSurface({
       ? "Legacy HTML Runtime Adapter — V1 remains runnable and editable."
       : "Project V2 source is ready for an isolated build.",
   );
+  const [agentTrace, setAgentTrace] = useState<AgentRunTrace | null>(null);
   const mounted = useRef(true);
   const autoStarted = useRef(false);
   const draft = resolveProjectV2DraftContent(drafts, selectedPath, project.files);
@@ -489,6 +498,7 @@ export function ProjectV2StudioSurface({
   const absorbBuilderResult = useCallback(async (
     result: BuilderAgentResult,
     before: ProjectV2["files"],
+    trace?: AgentRunTrace,
   ) => {
     const remote = await loadProjectV2FromCloud(project.id).catch((error) => {
       if (supportsLocalProjectFallback(error)) return null;
@@ -507,6 +517,7 @@ export function ProjectV2StudioSurface({
       setDiagnostics(browserErrors(result.releaseGate));
       setRelease(readiness(result.releaseGate));
       setAgentSummary(result.summary);
+      if (trace) setAgentTrace(trace);
       setAgentState(
         result.status === "fallback"
           ? "fallback"
@@ -556,7 +567,7 @@ export function ProjectV2StudioSurface({
       if (!payload.result) {
         throw new Error(payload.error ?? "Builder agent returned no verifiable result.");
       }
-      await absorbBuilderResult(payload.result, snapshot.project.files);
+      await absorbBuilderResult(payload.result, snapshot.project.files, payload.intelligence?.trace);
       if (!response.ok && payload.result.status !== "blocked") {
         throw new Error(payload.error ?? "Builder request failed.");
       }
@@ -939,6 +950,7 @@ export function ProjectV2StudioSurface({
         </div>
       </header>
       <ProjectV2Workspace
+        agentTrace={agentTrace}
         activeView={activeView}
         browserErrors={diagnostics}
         busyAction={busy}
