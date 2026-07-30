@@ -242,8 +242,10 @@ async function publishLimit(request: NextRequest): Promise<NextResponse | null> 
   const localProofStore =
     process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE === "1" &&
     !process.env.VERCEL;
+  const identity = requestIdentity(request)
+    ?? (localProofStore ? "session:local-publish-proof" : null);
   const limit = await consumeRequestLimit({
-    identity: requestIdentity(request),
+    identity,
     namespace: "project-publish",
     // Parallel browser proofs publish all category-native products against the
     // explicit local-only store. Production keeps the conservative ceiling.

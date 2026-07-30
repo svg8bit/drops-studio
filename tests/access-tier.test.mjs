@@ -19,6 +19,7 @@ const {
   readStudioAccountCookie,
   resolveAccountCookieSecret,
   resolveGuestCookieSecret,
+  resolveStudioProjectActor,
 } = accessTierModule;
 
 const secret = "test-secret-with-enough-entropy";
@@ -32,6 +33,39 @@ test("signed anonymous identity rejects tampering", () => {
   assert.equal(readGuestIdentityCookie(cookie, secret), identity);
   assert.equal(readGuestIdentityCookie(cookie.replace(identity, `${identity}x`), secret), null);
   assert.equal(readGuestIdentityCookie(cookie, `${secret}-wrong`), null);
+});
+
+test("signed guest and member sessions resolve stable isolated project owners", () => {
+  const guestCookie = createGuestIdentityCookie(identity, secret);
+  const guest = resolveStudioProjectActor(
+    { guestCookie },
+    { NODE_ENV: "test", DROPS_GUEST_COOKIE_SECRET: secret },
+  );
+  const repeated = resolveStudioProjectActor(
+    { guestCookie },
+    { NODE_ENV: "test", DROPS_GUEST_COOKIE_SECRET: secret },
+  );
+  assert.equal(guest.kind, "guest");
+  assert.match(guest.identity, /^[a-f0-9]{64}$/);
+  assert.equal(repeated.identity, guest.identity);
+  assert.equal(
+    resolveStudioProjectActor(
+      { guestCookie: `${guestCookie}x` },
+      { NODE_ENV: "test", DROPS_GUEST_COOKIE_SECRET: secret },
+    ),
+    null,
+  );
+
+  const memberCookie = createStudioAccountCookie(
+    { provider: "openrouter", subject: accountSubject },
+    secret,
+  );
+  const member = resolveStudioProjectActor(
+    { accountCookie: memberCookie, guestCookie },
+    { NODE_ENV: "test", DROPS_ACCOUNT_COOKIE_SECRET: secret, DROPS_GUEST_COOKIE_SECRET: secret },
+  );
+  assert.equal(member.kind, "member");
+  assert.equal(member.identity, readStudioAccountCookie(memberCookie, secret).identity);
 });
 
 test("daily usage is bound to both day and signed anonymous identity", () => {

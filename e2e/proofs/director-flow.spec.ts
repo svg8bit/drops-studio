@@ -156,7 +156,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   const runtime = page.frameLocator("iframe[title$='live application']")
   const showPreviewOnMobile = async () => {
     if (testInfo.project.name !== "chromium-390") return
-    await page.getByRole("button", { name: "Preview", exact: true }).click()
+    await page.locator(".mobile-preview-tab").click()
     await expect(iframe).toBeVisible()
   }
   const initialSrcdoc = await iframe.getAttribute("srcdoc")
@@ -232,7 +232,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   await page.getByRole("button", { name: "Director", exact: true }).click()
   await expect(page.getByText("Applied as a new checkpoint.")).toBeVisible()
   if (testInfo.project.name === "chromium-390") {
-    await page.getByRole("button", { name: "Preview", exact: true }).click()
+    await page.locator(".mobile-preview-tab").click()
     const runtimeReady = page.locator('[data-runtime-ready="true"]')
     await expect(runtimeReady).toContainText("Browser telemetry")
     await expect(runtimeReady).toBeVisible()

@@ -2,7 +2,9 @@ export type ArtifactSecretKind =
   | "telegram-bot-token"
   | "jwt"
   | "github-token"
+  | "vercel-token"
   | "aws-access-key"
+  | "private-key"
   | "provider-api-key"
   | "bearer-token"
   | "secret-assignment";
@@ -22,7 +24,12 @@ const secretPatterns: SecretPattern[] = [
   { kind: "telegram-bot-token", expression: /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/g },
   { kind: "jwt", expression: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}\b/g },
   { kind: "github-token", expression: /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/g },
+  { kind: "vercel-token", expression: /\b(?:vercel|vca)_[A-Za-z0-9_-]{20,}\b/gi },
   { kind: "aws-access-key", expression: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
+  {
+    kind: "private-key",
+    expression: /-----BEGIN (?:ENCRYPTED |RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+  },
   { kind: "provider-api-key", expression: /\b(?:sk-(?:(?:proj|ant|or-v1)-)?[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,})\b/g },
   { kind: "bearer-token", expression: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi },
   {

@@ -14,7 +14,11 @@ const secretFixtures = [
   ["telegram", "123456789:AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8"],
   ["jwt", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwicm9sZSI6ImFkbWluIn0.sQ8OD8r2hVdRa6QbRzF0c3kF0d1p8G9mN4xE7qJ5vT0"],
   ["github", "github_pat_11AA0BBBB0cccccDDDDD0_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"],
+  ["vercel", "vercel_abcdefghijklmnopqrstuvwxyz0123456789"],
   ["aws", "AKIAIOSFODNN7EXAMPLE"],
+  ["private-key", "-----BEGIN PRIVATE KEY-----\nbase64-material\n-----END PRIVATE KEY-----"],
+  ["encrypted-private-key", "-----BEGIN ENCRYPTED PRIVATE KEY-----\nbase64-material\n-----END ENCRYPTED PRIVATE KEY-----"],
+  ["dsa-private-key", "-----BEGIN DSA PRIVATE KEY-----\nbase64-material\n-----END DSA PRIVATE KEY-----"],
   ["ai", "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"],
   ["generic", "api_key=private_live_key_0123456789abcdef"],
 ];

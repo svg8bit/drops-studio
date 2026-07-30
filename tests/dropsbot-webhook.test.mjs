@@ -288,6 +288,22 @@ test("callback creation accepts the browser-visible forwarded origin", async () 
   });
 });
 
+test("callback creation applies a durable per-owner mutation budget", async () => {
+  await withLocalDropsBot(async () => {
+    const { account, cookie } = signedAccount(firstSubject);
+    seedProject(account.identity);
+    const windowMs = 60 * 60 * 1_000;
+    const bucket = Math.floor(Date.now() / windowMs);
+    globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ = new Map([[
+      `dropsbot-webhook-mutation:${bucket}:${account.identity}`,
+      { count: 1_000, expiresAt: (bucket + 1) * windowMs },
+    ]]);
+    const { response, payload } = await createConnection(cookie);
+    assert.equal(response.status, 429);
+    assert.equal(payload.code, "DROPSBOT_WEBHOOK_RATE_LIMITED");
+  });
+});
+
 test("callback creation reports fixed storage capacity separately from transient storage failures", async () => {
   await withLocalDropsBot(async () => {
     const { account, cookie } = signedAccount(firstSubject);

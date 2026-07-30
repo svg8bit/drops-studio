@@ -34,6 +34,26 @@ The current rebuilt product architecture is the source of truth. Do not restore 
 
 The older `docs/design/project-studio-spec.png` and `docs/screenshots/*` files are historical evidence only. They are explicitly forbidden as new visual baselines. Current-state references define architecture; the accessibility and readability rules below intentionally change their undersized text.
 
+### Project V2 capability references
+
+The user-provided ten-screen pack under `docs/design/v2-reference/` is the
+approved capability and visual-polish direction for the V2 builder. Its screen
+map and SHA-256 manifest live in `docs/design/v2-reference/README.md`.
+
+- Apply its calm white/blue hierarchy, compact developer-tool affordances,
+  explicit build stages, real file tree, device preview, logs, checkpoint diff,
+  integration evidence, and release receipts to the current product.
+- Treat every provider badge and status in the pack as a layout reference only.
+  Drops Studio may render `Live`, `Connected`, `Passed`, `Deployed`, or a real
+  URL only after the corresponding Sandbox, Drops, GitHub, or Vercel response
+  has been verified.
+- The current prompt-first homepage and unified Project Studio architecture
+  still control layout. Do not recreate a permanent right Director column,
+  obsolete four-column shell, or permanent publish sidebar from a concept.
+- Use DropsTab market intelligence, Drops Bot monitoring/delivery, the existing
+  twelve recipes, and honest setup-required states wherever a generic concept
+  uses interchangeable DeFi or third-party examples.
+
 ## Drops Studio brand profile
 
 Brand tokens live only in `app/styles/drops-studio.tokens.css`.

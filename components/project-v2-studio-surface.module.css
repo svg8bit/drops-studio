@@ -1,0 +1,146 @@
+.surface {
+  background: #eef2f8;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.surface > :global([data-testid="project-v2-workspace"]) {
+  min-block-size: 0;
+}
+
+.agentBar {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #d8e1ee;
+  border-radius: 14px;
+  box-shadow: 0 9px 28px rgba(32, 54, 88, 0.08);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.agentIdentity {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agentIdentity > span {
+  align-items: center;
+  background: linear-gradient(145deg, #316cff, #7557eb);
+  border-radius: 10px;
+  color: #fff;
+  display: flex;
+  flex: 0 0 40px;
+  height: 40px;
+  justify-content: center;
+}
+
+.agentIdentity svg,
+.agentActions svg,
+.agentReceipt svg {
+  height: 17px;
+  width: 17px;
+}
+
+.agentIdentity > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agentIdentity strong {
+  color: #172b49;
+  font-size: 14px;
+}
+
+.agentIdentity p {
+  color: #5f718a;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 760px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentActions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.agentActions button {
+  min-height: 44px;
+}
+
+.agentActions button svg,
+.agentReceipt[data-running="true"] svg,
+.surface[data-agent-state="running"] .agentReceipt svg {
+  animation: v2-agent-spin 1s linear infinite;
+}
+
+.agentReceipt {
+  align-items: center;
+  background: #f2f5fa;
+  border: 1px solid #dbe3ee;
+  border-radius: 999px;
+  color: #526984;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 760;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+  text-transform: capitalize;
+}
+
+.surface[data-agent-state="verified"] .agentReceipt,
+.surface[data-agent-state="fallback"] .agentReceipt {
+  background: #eaf9f3;
+  border-color: #b7e8d2;
+  color: #147252;
+}
+
+.surface[data-agent-state="blocked"] .agentReceipt {
+  background: #fff1f1;
+  border-color: #f0c6c6;
+  color: #a4333c;
+}
+
+@keyframes v2-agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 820px) {
+  .surface { padding: 8px; }
+  .agentBar { align-items: stretch; flex-direction: column; }
+  .agentIdentity p { white-space: normal; }
+  .agentActions { flex-wrap: wrap; }
+  .agentReceipt { flex: 1 1 auto; justify-content: center; }
+  .agentActions button { flex: 1 1 140px; }
+}
+
+@media (max-width: 480px) {
+  .surface { overflow: auto; }
+  .agentActions { display: grid; grid-template-columns: 1fr 1fr; }
+  .agentReceipt { grid-column: 1 / -1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentActions button svg,
+  .surface[data-agent-state="running"] .agentReceipt svg {
+    animation: none;
+  }
+}

@@ -19,6 +19,13 @@ import {
   STUDIO_ACCOUNT_COOKIE,
 } from "../../../../lib/access-tier.ts";
 import { consumeRequestLimitState, requestIdentity } from "../../../../lib/request-rate-limit.ts";
+import {
+  decodeUtf8Body,
+  hasJsonMediaType,
+  readBoundedRequestBody,
+  RequestBodyBoundaryError,
+} from "../../../../lib/http-request-boundary.ts";
+import { secretFreeRuntimeMessage } from "../../../../lib/project-runtime-adapter.ts";
 
 export const runtime = "nodejs";
 
@@ -34,6 +41,56 @@ export const PLATFORM_PLAN_MODELS = {
   ],
 } as const;
 const GUEST_IP_REQUEST_LIMIT = 12;
+const PLAN_BODY_LIMIT_BYTES = 24_000;
+
+function requestOidcToken(request: NextRequest): string | undefined {
+  const value = request.headers.get("x-vercel-oidc-token")?.trim() ?? "";
+  return value && value.length <= 4_096 && !/[\r\n\0]/.test(value)
+    ? value
+    : undefined;
+}
+
+function requestCredential(request: NextRequest, name: string): string | undefined {
+  const value = request.headers.get(name)?.trim() ?? "";
+  return value && value.length <= 4_096 && !/[\r\n\0]/.test(value)
+    ? value
+    : undefined;
+}
+
+function sameOrigin(request: NextRequest): boolean {
+  if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return process.env.NODE_ENV !== "production";
+  try {
+    const host = request.headers.get("host")?.split(",")[0]?.trim();
+    const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().replace(/:$/, "")
+      || request.nextUrl.protocol.replace(/:$/, "");
+    const visibleOrigin = host ? `${protocol}://${host}` : request.nextUrl.origin;
+    const parsed = new URL(origin).origin;
+    return parsed === request.nextUrl.origin || parsed === visibleOrigin;
+  } catch {
+    return false;
+  }
+}
+
+async function requestBody(request: NextRequest): Promise<{
+  prompt?: string;
+  model?: string;
+  provider?: string;
+} | null> {
+  try {
+    const raw = decodeUtf8Body(await readBoundedRequestBody(request, PLAN_BODY_LIMIT_BYTES));
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as { prompt?: string; model?: string; provider?: string }
+      : null;
+  } catch (error) {
+    if (error instanceof RequestBodyBoundaryError && error.reason === "too-large") {
+      throw error;
+    }
+    return null;
+  }
+}
 
 const presetIds = projectPresetIds as [PresetId, ...PresetId[]];
 const planSchema = z.object({
@@ -350,8 +407,13 @@ async function runDirectProvider(prompt: string, key: string, provider: DirectPr
   return { ...planSchema.parse(parseObject(payload.choices?.[0]?.message?.content ?? "")), provider, model };
 }
 
-async function runGuestGateway(prompt: string, guestId: string, tier: "guest" | "member" = "guest") {
-  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+async function runGuestGateway(
+  prompt: string,
+  guestId: string,
+  tier: "guest" | "member" = "guest",
+  requestGatewayToken?: string,
+) {
+  const gatewayToken = requestGatewayToken || process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
   if (!gatewayToken) throw new Error("Platform AI Gateway is not configured.");
   const guestGateway = createGateway({ apiKey: gatewayToken });
   const errors: string[] = [];
@@ -394,14 +456,32 @@ async function runGuestGateway(prompt: string, guestId: string, tier: "guest" | 
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null) as { prompt?: string; model?: string; provider?: string } | null;
+  if (!sameOrigin(request)) {
+    return NextResponse.json({ error: "Cross-origin planning requests are not allowed." }, { status: 403 });
+  }
+  if (!hasJsonMediaType(request)) {
+    return NextResponse.json({ error: "Planning requests require application/json." }, { status: 415 });
+  }
+  let body: Awaited<ReturnType<typeof requestBody>>;
+  try {
+    body = await requestBody(request);
+  } catch (error) {
+    if (error instanceof RequestBodyBoundaryError) {
+      return NextResponse.json({ error: "Planning request exceeds the bounded request size." }, { status: 413 });
+    }
+    return NextResponse.json({ error: "Planning request is invalid." }, { status: 400 });
+  }
   const prompt = body?.prompt?.trim() ?? "";
   if (prompt.length < 3) return NextResponse.json({ error: "Describe what you want to build." }, { status: 400 });
   if (prompt.length > 16_000) return NextResponse.json({ error: "Keep the product brief and edit context under 16,000 characters." }, { status: 400 });
+  const gatewayToken = requestOidcToken(request);
+  const readinessEnvironment = gatewayToken
+    ? { ...process.env, VERCEL_OIDC_TOKEN: gatewayToken }
+    : process.env;
 
   const account = resolveStudioAccount(request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value);
 
-  const openRouterKey = request.headers.get("x-openrouter-key")?.trim();
+  const openRouterKey = requestCredential(request, "x-openrouter-key");
   if (openRouterKey) {
     try {
       const model = body?.model?.trim() || "openrouter/free";
@@ -413,12 +493,14 @@ export async function POST(request: NextRequest) {
         access: accessMetadata({ tier: "byok", used: 0, account }),
       }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : "OpenRouter planning failed." }, { status: 502 });
+      return NextResponse.json({
+        error: secretFreeRuntimeMessage(error, "OpenRouter planning failed."),
+      }, { status: 502 });
     }
   }
 
   const directProvider = ["openai", "anthropic", "kimi"].includes(body?.provider ?? "") ? body?.provider as DirectProvider : null;
-  const directKey = request.headers.get("x-provider-key")?.trim();
+  const directKey = requestCredential(request, "x-provider-key");
   if (directProvider && !directKey) {
     return NextResponse.json({ error: `Connect ${directProvider} with an API key before using it.` }, { status: 400 });
   }
@@ -438,12 +520,14 @@ export async function POST(request: NextRequest) {
         access: accessMetadata({ tier: "byok", used: 0, account }),
       }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : "Connected model planning failed." }, { status: 502 });
+      return NextResponse.json({
+        error: secretFreeRuntimeMessage(error, "Connected model planning failed."),
+      }, { status: 502 });
     }
   }
 
   if (account) {
-    const readiness = platformAiReadiness("member");
+    const readiness = platformAiReadiness("member", readinessEnvironment);
     if (!readiness.available) {
       const fallback = fallbackAgentPlan(prompt);
       return responseWithMemberQuota({
@@ -485,7 +569,7 @@ export async function POST(request: NextRequest) {
       }, account, 0);
     }
     try {
-      const result = await runGuestGateway(prompt, account.identity, "member");
+      const result = await runGuestGateway(prompt, account.identity, "member", gatewayToken);
       const plan = alignPlanToRequestedOutput(result.plan, prompt);
       return responseWithMemberQuota({
         plan,
@@ -530,7 +614,7 @@ export async function POST(request: NextRequest) {
     }, guest, used, 429);
   }
 
-  const readiness = platformAiReadiness("guest");
+  const readiness = platformAiReadiness("guest", readinessEnvironment);
   if (!guest.configured || !guest.identity || !readiness.available) {
     const fallback = fallbackAgentPlan(prompt);
     return responseWithQuota({
@@ -590,7 +674,7 @@ export async function POST(request: NextRequest) {
   const consumedUsed = Math.min(GUEST_DAILY_LIMIT, quota.count);
 
   try {
-    const result = await runGuestGateway(prompt, guest.identity);
+    const result = await runGuestGateway(prompt, guest.identity, "guest", gatewayToken);
     const plan = alignPlanToRequestedOutput(result.plan, prompt);
     return responseWithQuota({
       plan,

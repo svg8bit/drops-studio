@@ -25,6 +25,7 @@ import {
   readDropsBotWebhookBody,
 } from "../../../../lib/dropsbot-webhook.ts";
 import { hasJsonMediaType } from "../../../../lib/http-request-boundary.ts";
+import { consumeRequestLimit } from "../../../../lib/request-rate-limit.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,6 +150,29 @@ function requireConsent(input: Record<string, unknown>, action: string): void {
   }
 }
 
+async function enforceMutationLimit(identity: string): Promise<void> {
+  const status = await consumeRequestLimit({
+    identity,
+    namespace: "dropsbot-webhook-mutation",
+    max: process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE === "1" && !process.env.VERCEL
+      ? 1_000
+      : 20,
+    windowMs: 60 * 60 * 1_000,
+  }).catch(() => "unavailable" as const);
+  if (status === "limited") {
+    throw new DropsBotWebhookResponseError(429, {
+      code: "DROPSBOT_WEBHOOK_RATE_LIMITED",
+      error: "Drops Bot callback mutation limit reached. Retry after the current window.",
+    });
+  }
+  if (status === "unavailable" && process.env.NODE_ENV === "production") {
+    throw new DropsBotWebhookResponseError(503, {
+      code: "DROPSBOT_WEBHOOK_RATE_LIMIT_UNAVAILABLE",
+      error: "Drops Bot callback request protection is temporarily unavailable.",
+    });
+  }
+}
+
 async function requireOwnedProject(
   member: StudioAccount,
   input: Record<string, unknown>,
@@ -217,6 +241,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const member = account(request);
     requireSameOrigin(request);
+    await enforceMutationLimit(member.identity);
     if (!dropsBotWebhookStorageConfigured()) {
       throw new DropsBotWebhookStorageUnavailableError();
     }
@@ -259,6 +284,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   try {
     const member = account(request);
     requireSameOrigin(request);
+    await enforceMutationLimit(member.identity);
     if (!dropsBotWebhookStorageConfigured()) {
       throw new DropsBotWebhookStorageUnavailableError();
     }
@@ -299,6 +325,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
   try {
     const member = account(request);
     requireSameOrigin(request);
+    await enforceMutationLimit(member.identity);
     if (!dropsBotWebhookStorageConfigured()) {
       throw new DropsBotWebhookStorageUnavailableError();
     }

@@ -259,6 +259,8 @@ export interface GeneratedProject {
   sourceEditedAt?: string;
   /** Canonical multi-file source. Sync/share boundaries validate and strip runtime evidence. */
   workspace?: ProjectWorkspace;
+  /** Canonical Project V2 filesystem. V1 HTML remains the compatibility runtime. */
+  projectV2?: import("./project-v2-types.ts").ProjectV2;
   conversation?: ProjectChatMessage[];
   quality?: ProjectQualityReport;
 }

@@ -13,6 +13,7 @@ import {
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "../../../../lib/access-tier.ts";
+import { consumeRequestLimit } from "../../../../lib/request-rate-limit.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,6 +57,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
+    const requestLimit = await consumeRequestLimit({
+      identity: member.identity,
+      namespace: "dropsbot-webhook-events-read",
+      max: process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE === "1" && !process.env.VERCEL
+        ? 1_000
+        : 300,
+      windowMs: 60 * 60 * 1_000,
+    }).catch(() => "unavailable" as const);
+    if (requestLimit === "limited") {
+      return json({ code: "DROPSBOT_EVENTS_RATE_LIMITED", error: "Callback event read limit reached." }, 429);
+    }
+    if (requestLimit === "unavailable" && process.env.NODE_ENV === "production") {
+      return json({ code: "DROPSBOT_EVENTS_RATE_LIMIT_UNAVAILABLE", error: "Callback event protection is temporarily unavailable." }, 503);
+    }
     if (!dropsBotWebhookStorageConfigured()) {
       throw new DropsBotWebhookStorageUnavailableError();
     }
