@@ -68,6 +68,9 @@ const projects = [
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "outputs/test-results",
+  snapshotPathTemplate: executablePath
+    ? "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}-system{ext}"
+    : "{snapshotDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
