@@ -109,6 +109,9 @@ export class MultiAgentOrchestrator {
     }
     const planner = input.runners.planner;
     if (!planner) throw new Error("Planner runner is unavailable.");
+    if (this.#controllers.has(input.runId)) {
+      throw new Error(`Agent run ${input.runId} is already active.`);
+    }
     const controller = new AbortController();
     this.#controllers.set(input.runId, controller);
     const createdAt = this.#now().toISOString();
@@ -163,9 +166,15 @@ export class MultiAgentOrchestrator {
   }
 
   async resume(runId: string, runners: RoleRunnerRegistry): Promise<AgentRunState> {
+    if (this.#controllers.has(runId)) {
+      throw new Error(`Agent run ${runId} is already active.`);
+    }
     const stored = await this.#store.get(runId);
     if (!stored) throw new Error(`Agent run ${runId} was not found.`);
     if (stored.status === "completed") return stored;
+    if (!stored.tasks.length) {
+      throw new Error(`Agent run ${runId} has no task graph and must be planned again.`);
+    }
     const controller = new AbortController();
     this.#controllers.set(runId, controller);
     const tasks = stored.tasks.map((task) =>
@@ -229,7 +238,10 @@ export class MultiAgentOrchestrator {
       if (!ready.length) {
         throw new Error("Builder DAG is blocked by a non-builder or failed dependency.");
       }
-      const wave = selectDisjointWave(ready, Math.min(3, this.#limits.maxActiveSubagents ?? 3));
+      const wave = selectDisjointWave(
+        ready,
+        this.#limits.maxActiveSubagents ?? DEFAULT_SCHEDULER_LIMITS.maxActiveSubagents,
+      );
       const rebased = wave.map((task) => rebaseTask(task, project));
       const scheduled = await runDeterministicScheduler(
         rebased,
@@ -314,15 +326,20 @@ export class MultiAgentOrchestrator {
           findings.push(...security.findings);
           reviewBlocked ||= security.blocked;
         }
-        completed.add(task.taskId);
       }
       state.findings = findings;
-      state.tasks = updateTaskStatus(state.tasks, rebased.map((task) => task.taskId), "merged");
       reviewBlocked ||= findings.some((finding) => finding.blocksVerification || finding.severity === "critical");
       if (reviewBlocked) {
+        state.tasks = updateTaskStatus(
+          state.tasks,
+          rebased.map((task) => task.taskId),
+          "failed",
+        );
         state.canonicalProject = project;
         return await this.#failedState(state, "QA or Security evidence blocks verification.", false);
       }
+      for (const task of rebased) completed.add(task.taskId);
+      state.tasks = updateTaskStatus(state.tasks, rebased.map((task) => task.taskId), "merged");
     }
     state = {
       ...state,

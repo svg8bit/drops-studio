@@ -240,6 +240,52 @@ test("critical Security evidence blocks verification without mutating canonical 
   assert.match(run.failure, /blocks verification/i);
   assert.equal(run.findings[0].severity, "critical");
   assert.equal(run.canonicalProject.contentHash, current.contentHash);
+  assert.equal(run.tasks.find((entry) => entry.taskId === "security")?.status, "failed");
+});
+
+test("duplicate active run ids cannot overwrite cancellation ownership", async () => {
+  const current = await project();
+  const planner = task(current, "planner", { taskId: "planner" });
+  const orchestrator = new MultiAgentOrchestrator();
+  const running = orchestrator.run({
+    runId: "role-run",
+    project: current,
+    plannerTask: planner,
+    runners: {
+      planner: async (context) => new Promise((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+      }),
+    },
+  });
+  await assert.rejects(
+    () => orchestrator.run({
+      runId: "role-run",
+      project: current,
+      plannerTask: planner,
+      runners: { planner: async () => plannerResult([]) },
+    }),
+    /already active/,
+  );
+  assert.equal(orchestrator.cancel("role-run"), true);
+  assert.equal((await running).status, "cancelled");
+});
+
+test("resume rejects a failed run that never produced a task graph", async () => {
+  const current = await project();
+  const store = new MemoryAgentRunStore();
+  await store.save({
+    runId: "empty-run",
+    status: "failed",
+    canonicalProject: current,
+    tasks: [],
+    timelines: [],
+    findings: [],
+    failure: "Planner failed before producing a graph.",
+    createdAt: "2026-07-30T10:00:00.000Z",
+    updatedAt: "2026-07-30T10:00:00.000Z",
+  });
+  const orchestrator = new MultiAgentOrchestrator({ store });
+  await assert.rejects(() => orchestrator.resume("empty-run", {}), /must be planned again/);
 });
 
 test("seeded fixture proves Planner, parallel builders, atomic merge, and parallel read-only reviewers", async () => {
