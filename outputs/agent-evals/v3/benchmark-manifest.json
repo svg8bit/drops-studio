@@ -1,0 +1,29 @@
+{
+  "approvalBoundaryCaseCount": 12,
+  "artifact": "drops-agent-v3-benchmark-manifest",
+  "benchmarkVersion": "agent-data-driven-v3.0",
+  "browserFlowSpecCount": 49,
+  "caseCount": 120,
+  "catalogHash": "87b9711ff5b87a139f227a0406d7aa2dd18ad95aaa81af7aef1eb50df3b9464b",
+  "distribution": {
+    "context-retrieval": 10,
+    "debugging-repair": 18,
+    "design-responsive": 10,
+    "drops-integrations": 15,
+    "existing-project-editing": 18,
+    "multi-agent-orchestration": 10,
+    "new-product-generation": 24,
+    "security-approval": 15
+  },
+  "executionEvidence": {
+    "browserFlowsExecuted": false,
+    "modelRunsCollected": false,
+    "providerEvidenceCollected": false,
+    "reason": "This artifact validates repository-owned benchmark definitions only; it does not execute models, Sandbox commands, or browser flows.",
+    "sandboxRunsCollected": false
+  },
+  "schemaVersion": 1,
+  "suiteCount": 8,
+  "uniqueCaseIdCount": 120,
+  "uniqueIntentCount": 120
+}

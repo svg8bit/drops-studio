@@ -1,0 +1,72 @@
+{
+  "artifact": "drops-agent-v3-evidence-manifest",
+  "artifacts": [
+    {
+      "byteCount": 4150,
+      "name": "compact-core-metrics.json",
+      "sha256": "e4989d92f940b9b846324ceb1217c60cff691363a9c2c7b0b0c7a38c34a55367"
+    },
+    {
+      "byteCount": 234485,
+      "name": "benchmark-catalog.json",
+      "sha256": "87b9711ff5b87a139f227a0406d7aa2dd18ad95aaa81af7aef1eb50df3b9464b"
+    },
+    {
+      "byteCount": 967,
+      "name": "benchmark-manifest.json",
+      "sha256": "55ba1c97c576d272beb464428031578e656c659644cb60e92f75a702c6816c75"
+    },
+    {
+      "byteCount": 61203,
+      "name": "repairs.jsonl",
+      "sha256": "ff96539320816d460e6e0989dc35ca888794ead5bdde301cef472cfd2023133c"
+    },
+    {
+      "byteCount": 1355,
+      "name": "repair-manifest.json",
+      "sha256": "cadb7ac39d8f383d55e1bbf27fb6449c6c88a8fafbd73959c795a1d671057b1c"
+    },
+    {
+      "byteCount": 26106,
+      "name": "failure-features.jsonl",
+      "sha256": "fac27016e0d4d8af3786da77428f98bdc608ecd12c24d34c3364a7378a31211d"
+    },
+    {
+      "byteCount": 14869,
+      "name": "failure-clustering-report.json",
+      "sha256": "b6d2370766ad2e205bcee519ac39e1e32dd56c755b11590bddd8c8b478613e3d"
+    },
+    {
+      "byteCount": 1072,
+      "name": "README.md",
+      "sha256": "5e546dd6a6ec0f5ddaba94e0684bc8bb1f96a3f62bcb78469df82b521a75c7bb"
+    }
+  ],
+  "evidenceScopes": {
+    "benchmarks": {
+      "browserFlowsExecuted": false,
+      "modelRunsCollected": false,
+      "providerEvidenceCollected": false,
+      "reason": "This artifact validates repository-owned benchmark definitions only; it does not execute models, Sandbox commands, or browser flows.",
+      "sandboxRunsCollected": false
+    },
+    "clustering": "synthetic-source-level-fixture-validation",
+    "compactCore": "repository-source-metrics",
+    "repairs": "synthetic-source-level-fixture-validation"
+  },
+  "evidenceVersion": "3.0.0",
+  "productionImpact": {
+    "autoFixChanged": false,
+    "productionDefaultsChanged": false,
+    "promptDefaultsChanged": false,
+    "routerChanged": false
+  },
+  "reproducibility": {
+    "checkCommand": "node scripts/generate-agent-v3-evidence.mjs --check",
+    "deterministic": true,
+    "dynamicProviderCalls": false,
+    "writeCommand": "node scripts/generate-agent-v3-evidence.mjs"
+  },
+  "schemaVersion": 1,
+  "sourceSnapshotAt": "2026-07-30T00:00:00.000Z"
+}

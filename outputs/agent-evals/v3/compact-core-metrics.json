@@ -1,0 +1,125 @@
+{
+  "activation": {
+    "compactCoreFlag": "DROPS_AGENT_COMPACT_CORE_ENABLED",
+    "legacyFallbackFlag": "DROPS_AGENT_LEGACY_CORE_FALLBACK",
+    "productionDefaultChanged": false
+  },
+  "artifact": "drops-agent-v3-compact-core-metrics",
+  "core": {
+    "byteCount": 9557,
+    "contentHash": "0ee5337ca5804dbfc891f9b44577f21abcd30207132779edbe5a7a9fa598a145",
+    "estimatedTokens": 2390,
+    "lineCount": 208,
+    "mode": "compact-v3",
+    "sourcePath": "docs/agent/core/CORE_SYSTEM.md",
+    "version": "3.0.0"
+  },
+  "evidenceScope": "repository-source-metrics",
+  "roles": {
+    "aggregateHash": "f77874fd3cc12144ba74750cacc473d10feb54cb6e7920edb5c0bbb1899c4a41",
+    "count": 12,
+    "items": [
+      {
+        "contentHash": "aa010377253a7150c68e3ca6daa94723925c53388f38734ab7443694581ac352",
+        "estimatedTokens": 240,
+        "id": "router",
+        "lineCount": 16,
+        "sourcePath": "docs/agent/roles/ROUTER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "9942e845c6c680e64e5cedab65de030a3a5e8c7ff5b900549ca8712d3f6edeed",
+        "estimatedTokens": 256,
+        "id": "planner",
+        "lineCount": 17,
+        "sourcePath": "docs/agent/roles/PLANNER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "44b0a2f15046f42618b56ab10747da1224f29913d91b147c227345e53320e95a",
+        "estimatedTokens": 254,
+        "id": "coder",
+        "lineCount": 17,
+        "sourcePath": "docs/agent/roles/CODER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "3a91de32e6a96cdfb4fd4d5321e67591460c0e6ac2f15b2671f303b6944050d5",
+        "estimatedTokens": 191,
+        "id": "quick-edit",
+        "lineCount": 13,
+        "sourcePath": "docs/agent/roles/QUICK_EDIT.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "268cbaa5a96f732bb692e9c677f42f518963b04a0cfdd26844abf863088adbe2",
+        "estimatedTokens": 250,
+        "id": "autofix",
+        "lineCount": 17,
+        "sourcePath": "docs/agent/roles/AUTOFIX.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "5dc0f496d6f0f3308b4c3efaa5bfbe9bc8ef000923b2ecb782934891a682862a",
+        "estimatedTokens": 211,
+        "id": "verifier",
+        "lineCount": 15,
+        "sourcePath": "docs/agent/roles/VERIFIER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "f99119a99885a8f1b4ca7c78ea21d0736db338134c9ad9e1419ea7652129e4e5",
+        "estimatedTokens": 302,
+        "id": "design-agent",
+        "lineCount": 19,
+        "sourcePath": "docs/agent/roles/DESIGN_AGENT.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "bb7183f9ef1b6366521cb363e2c311cd011d8f494950d81d9f19734d641a2033",
+        "estimatedTokens": 239,
+        "id": "visual-verifier",
+        "lineCount": 16,
+        "sourcePath": "docs/agent/roles/VISUAL_VERIFIER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "f76bcf7d004787b12210cf9607d4dae247858397e261ea17c75a07fbbea1ecb2",
+        "estimatedTokens": 176,
+        "id": "qa",
+        "lineCount": 12,
+        "sourcePath": "docs/agent/roles/QA.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "47eb288d08c367d6c77458825f53d8f26425d62f341ae40723ce5860951468cb",
+        "estimatedTokens": 182,
+        "id": "security",
+        "lineCount": 12,
+        "sourcePath": "docs/agent/roles/SECURITY.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "9d100c61c96fad5dc01ea1baeb63967aeb2f5ef1af2d066b46c0cf7bdb3c084c",
+        "estimatedTokens": 181,
+        "id": "retrieval-reranker",
+        "lineCount": 13,
+        "sourcePath": "docs/agent/roles/RETRIEVAL_RERANKER.md",
+        "version": "3.0.0"
+      },
+      {
+        "contentHash": "e79fcf861f3272ca82cae6476126e836df73b38aac2034cc6d8bbc11bb0879da",
+        "estimatedTokens": 188,
+        "id": "eval-judge",
+        "lineCount": 13,
+        "sourcePath": "docs/agent/roles/EVAL_JUDGE.md",
+        "version": "3.0.0"
+      }
+    ]
+  },
+  "runtimeSkills": {
+    "aggregateHash": "bec6a706c391ba9e42534b2ec0ac4260f11044cb83bf6ac0066bec9af5c513cb",
+    "count": 17
+  },
+  "schemaVersion": 1
+}
