@@ -7,6 +7,7 @@ import * as accessTierModule from "../lib/access-tier.ts";
 const {
   GUEST_DAILY_LIMIT,
   MEMBER_DAILY_LIMIT,
+  PRO_DAILY_LIMIT,
   MEMBER_USAGE_COOKIE,
   STUDIO_ACCOUNT_COOKIE,
   accessMetadata,
@@ -151,6 +152,79 @@ test("access metadata exposes only tiers that actually work", () => {
   assert.equal(member.platformAi.remaining, MEMBER_DAILY_LIMIT - 4);
   assert.equal(member.account.connected, true);
   assert.equal(member.account.projectSync, true);
+
+  const proFailClosed = accessMetadata({ tier: "pro", used: 4, account });
+  assert.equal(proFailClosed.platformAi.limit, MEMBER_DAILY_LIMIT);
+  const pro = accessMetadata({
+    tier: "pro",
+    used: 4,
+    account,
+    platformLimit: PRO_DAILY_LIMIT,
+  });
+  assert.equal(pro.platformAi.limit, PRO_DAILY_LIMIT);
+  assert.equal(pro.platformAi.remaining, PRO_DAILY_LIMIT - 4);
+});
+
+test("funded Pro quota resolves tier and limit from one billing instant", async () => {
+  const {
+    applyBillingWebhookEvent,
+    resetLocalBillingStateForTests,
+  } = await import("../db/billing.ts");
+  const previous = {
+    DROPS_STUDIO_LOCAL_PROJECT_STORE: process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE,
+    STRIPE_PRO_PRICE_ID: process.env.STRIPE_PRO_PRICE_ID,
+    VERCEL: process.env.VERCEL,
+  };
+  const NativeDate = globalThis.Date;
+  try {
+    process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE = "1";
+    process.env.STRIPE_PRO_PRICE_ID = "price_pro_monthly";
+    delete process.env.VERCEL;
+    resetLocalBillingStateForTests();
+
+    const accountCookie = createStudioAccountCookie(
+      { provider: "openrouter", subject: "quota-boundary-member" },
+      secret,
+    );
+    const account = readStudioAccountCookie(accountCookie, secret);
+    assert.ok(account);
+    await applyBillingWebhookEvent({
+      id: "evt_quota_boundary_active_123",
+      type: "customer.subscription.updated",
+      mutation: "subscription",
+      createdAt: "2098-12-01T00:00:00.000Z",
+      accountIdentity: account.identity,
+      stripeCustomerId: "cus_quota_boundary_123456",
+      stripeSubscriptionId: "sub_quota_boundary_123456",
+      priceId: "price_pro_monthly",
+      status: "active",
+      currentPeriodEnd: "2099-01-01T00:00:00.000Z",
+      cancelAtPeriodEnd: false,
+    });
+
+    let clockReads = 0;
+    globalThis.Date = class BoundaryDate extends NativeDate {
+      constructor(...args) {
+        if (args.length > 0) super(...args);
+        else super(clockReads++ === 0
+          ? "2098-12-31T23:59:59.000Z"
+          : "2099-01-01T00:00:01.000Z");
+      }
+    };
+    const quota = await accessTierModule.resolveFundedBuildQuota({
+      kind: "account",
+      account,
+    });
+    assert.deepEqual([quota.tier, quota.limit], ["pro", PRO_DAILY_LIMIT]);
+    assert.equal(clockReads, 1);
+  } finally {
+    globalThis.Date = NativeDate;
+    resetLocalBillingStateForTests();
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("access status issues a signed HttpOnly anonymous identity without claiming authentication or Pro", async () => {

@@ -36,7 +36,8 @@
 
 .project-studio-layout {
   display: grid;
-  grid-template-columns: 74px 300px minmax(600px,1fr) 360px;
+  grid-template-areas: "rail side canvas";
+  grid-template-columns: 68px 390px minmax(0, 1fr);
   height: calc(100vh - 104px);
   min-height: 690px;
 }

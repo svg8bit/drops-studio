@@ -187,22 +187,7 @@ test("project studio preserves its current workspace architecture", async ({ pag
   await expect(page.locator(".project-statusbar")).toBeVisible()
 
   const viewportWidth = page.viewportSize()?.width ?? 0
-  if (viewportWidth >= 1600) {
-    await expect(page.locator(".runtime-stage")).toBeVisible()
-    const rail = await page.locator(".studio-rail").boundingBox()
-    const inspector = await page.locator(".studio-inspector").boundingBox()
-    const canvas = await page.locator(".runtime-stage").boundingBox()
-    const director = await page.locator(".assistant-panel").boundingBox()
-
-    expect(rail, "Desktop rail must be rendered").not.toBeNull()
-    expect(inspector, "Desktop inspector must be rendered").not.toBeNull()
-    expect(canvas, "Desktop canvas must be rendered").not.toBeNull()
-    expect(director, "Desktop AI Director must be rendered").not.toBeNull()
-
-    expect(rail!.x + rail!.width).toBeLessThanOrEqual(inspector!.x + 1)
-    expect(inspector!.x + inspector!.width).toBeLessThanOrEqual(canvas!.x + 1)
-    expect(canvas!.x + canvas!.width).toBeLessThanOrEqual(director!.x + 1)
-  } else if (viewportWidth > 920) {
+  if (viewportWidth > 920) {
     await expect(page.locator(".runtime-stage")).toBeVisible()
     await expect(page.locator(".studio-inspector")).toBeVisible()
     await expect(page.locator(".assistant-panel")).toBeHidden()
@@ -226,6 +211,53 @@ test("project studio preserves its current workspace architecture", async ({ pag
     await expect(page.locator(".studio-inspector")).toBeHidden()
     await expect(page.locator(".assistant-panel")).toBeHidden()
   }
+
+  await assertCleanRuntime()
+})
+
+test("1920px Project Studio keeps Director in the left context surface", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-1440")
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const assertCleanRuntime = installRuntimeGuards(page)
+
+  await prepareStudioPage(page)
+
+  const layout = page.locator(".project-studio-layout")
+  const inspector = page.locator(".studio-inspector")
+  const canvas = page.locator(".runtime-stage")
+  const director = page.locator(".assistant-panel")
+
+  await expect(inspector).toBeVisible()
+  await expect(canvas).toBeVisible()
+  await expect(director).toBeHidden()
+
+  const initialColumns = await layout.evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/)
+  )
+  expect(initialColumns, "Wide Project Studio must have rail, context and canvas only").toHaveLength(3)
+
+  const initialInspector = await inspector.boundingBox()
+  const initialCanvas = await canvas.boundingBox()
+  expect(initialInspector).not.toBeNull()
+  expect(initialCanvas).not.toBeNull()
+  expect(initialInspector!.x + initialInspector!.width).toBeLessThanOrEqual(initialCanvas!.x + 1)
+
+  await page.getByRole("button", { name: "Director", exact: true }).click()
+  await expect(director).toBeVisible()
+  await expect(inspector).toBeHidden()
+  await expect(canvas).toBeVisible()
+
+  const directorBox = await director.boundingBox()
+  const directorCanvas = await canvas.boundingBox()
+  expect(directorBox).not.toBeNull()
+  expect(directorCanvas).not.toBeNull()
+  expect(directorBox!.x).toBeCloseTo(initialInspector!.x, 0)
+  expect(directorBox!.width).toBeCloseTo(initialInspector!.width, 0)
+  expect(directorCanvas!.x).toBeCloseTo(initialCanvas!.x, 0)
+  expect(directorCanvas!.width).toBeCloseTo(initialCanvas!.width, 0)
+  expect(directorBox!.x + directorBox!.width).toBeLessThanOrEqual(directorCanvas!.x + 1)
 
   await assertCleanRuntime()
 })

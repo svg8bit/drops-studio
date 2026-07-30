@@ -1,7 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 
-import { expect, test, type Browser, type Page } from "@playwright/test"
+import {
+  expect,
+  test,
+  type Browser,
+  type FrameLocator,
+  type Page,
+} from "@playwright/test"
 
 import { createProjectSpec } from "../../lib/project-factory"
 import { presets, type PresetId } from "../../lib/presets"
@@ -240,50 +246,50 @@ async function createAnonymousProofPage(
   return { context, page, externalRequests, consoleErrors }
 }
 
-async function proveGame(page: Page) {
-  await page.evaluate(() => {
+async function proveGame(runtime: FrameLocator) {
+  await runtime.locator("html").evaluate(() => {
     Math.random = () => 0.3
   })
-  await page.locator("[data-action='play-catcher']").click()
-  await expect(page.locator("#roundTimer")).toHaveText("5s")
-  await expect(page.locator(".drop-object")).toBeVisible()
-  await page.locator("[data-move='1']").click()
-  await expect(page.locator(".catcher-player")).toHaveAttribute(
+  await runtime.locator("[data-action='play-catcher']").click()
+  await expect(runtime.locator("#roundTimer")).toHaveText("5s")
+  await expect(runtime.locator(".drop-object")).toBeVisible()
+  await runtime.locator("[data-move='1']").click()
+  await expect(runtime.locator(".catcher-player")).toHaveAttribute(
     "style",
     /62\.5%/
   )
 }
 
-async function proveRadio(page: Page) {
-  await page.locator("[data-action='toggle-radio']").click()
-  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible()
-  await expect(page.locator(".radio-wave i").first()).toHaveCSS(
+async function proveRadio(runtime: FrameLocator) {
+  await runtime.locator("[data-action='toggle-radio']").click()
+  await expect(runtime.getByRole("button", { name: "Pause" })).toBeVisible()
+  await expect(runtime.locator(".radio-wave i").first()).toHaveCSS(
     "animation-play-state",
     "running"
   )
 }
 
-async function proveTelegramSetup(page: Page) {
-  await expect(page.locator(".tg-avatar img[alt='Drops Bot']").first()).toBeVisible()
+async function proveTelegramSetup(runtime: FrameLocator, page: Page) {
+  await expect(runtime.locator(".tg-avatar img[alt='Drops Bot']").first()).toBeVisible()
   await expect(
-    page.locator(".tg-message-source img[alt='DropsTab source']").first()
+    runtime.locator(".tg-message-source img[alt='DropsTab source']").first()
   ).toBeVisible()
   await expect(
-    page.getByText("PREVIEW · NOT PUBLISHED", { exact: true }).first()
+    runtime.getByText("PREVIEW · NOT PUBLISHED", { exact: true }).first()
   ).toBeVisible()
-  await page.locator("[data-action='compose-post']").click()
-  await expect(page.locator(".tg-story")).toContainText(
+  await runtime.locator("[data-action='compose-post']").click()
+  await expect(runtime.locator(".tg-story")).toContainText(
     "Wallet source setup required"
   )
-  await expect(page.locator(".tg-story")).toContainText(
+  await expect(runtime.locator(".tg-story")).toContainText(
     "Connect a verified Drops Bot wallet or swap alert"
   )
-  await expect(page.locator(".tg-story")).toContainText(
+  await expect(runtime.locator(".tg-story")).toContainText(
     "available price snapshot is shown separately"
   )
-  const setupTrigger = page.locator("[data-action='dropsbot-setup']").first()
+  const setupTrigger = runtime.locator("[data-action='dropsbot-setup']").first()
   await setupTrigger.click()
-  const dialog = page.getByRole("dialog")
+  const dialog = runtime.getByRole("dialog")
   await expect(dialog).toBeVisible()
   await expect(dialog).toHaveAttribute("aria-modal", "true")
   await expect(dialog.locator(".integration-card")).toBeFocused()
@@ -293,7 +299,7 @@ async function proveTelegramSetup(page: Page) {
   await expect(dialog).toContainText(
     "external action happens only after your explicit approval"
   )
-  await expect(page.locator("[data-studio-telegram='true']")).toHaveAttribute(
+  await expect(runtime.locator("[data-studio-telegram='true']")).toHaveAttribute(
     "href",
     /connections=1.*flow=telegram-channel/
   )
@@ -354,23 +360,24 @@ test("publishes and anonymously proves game, radio and Telegram setup products",
     })
     expect(response?.status()).toBe(200)
     expect(response?.headers()["content-type"]).toMatch(/^text\/html\b/)
-    await expect(page.locator("html")).toHaveAttribute(
+    const runtime = page.frameLocator("#projectRuntime")
+    await expect(runtime.locator("html")).toHaveAttribute(
       "data-project-kind",
       definition.presetId
     )
-    await expect(page.locator(definition.nativeSelector).first()).toBeVisible()
-    await expect(page.locator("#liveStatus")).toHaveText("SNAPSHOT")
-    await expect(page.locator("#appRoot")).not.toContainText(
+    await expect(runtime.locator(definition.nativeSelector).first()).toBeVisible()
+    await expect(runtime.locator("#liveStatus")).toHaveText("SNAPSHOT")
+    await expect(runtime.locator("#appRoot")).not.toContainText(
       /Unsupported product type|generic dashboard/i
     )
 
-    if (definition.presetId === "crypto-game") await proveGame(page)
-    if (definition.presetId === "crypto-radio") await proveRadio(page)
+    if (definition.presetId === "crypto-game") await proveGame(runtime)
+    if (definition.presetId === "crypto-radio") await proveRadio(runtime)
     if (definition.presetId === "alpha-channel") {
-      await proveTelegramSetup(page)
+      await proveTelegramSetup(runtime, page)
     }
 
-    const toast = page.locator("#toast")
+    const toast = runtime.locator("#toast")
     if (await toast.count()) {
       await expect(toast).not.toHaveClass(/show/, { timeout: 5_000 })
     }
@@ -394,7 +401,7 @@ test("publishes and anonymously proves game, radio and Telegram setup products",
       url: published.url,
       publishStatus: publish.status(),
       anonymousCookies: (await context.cookies()).length,
-      documentKind: await page.locator("html").getAttribute("data-project-kind"),
+      documentKind: await runtime.locator("html").getAttribute("data-project-kind"),
       nativeSelector: definition.nativeSelector,
       interaction: definition.proofLabel,
       externalRequests,

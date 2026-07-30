@@ -27,9 +27,10 @@ The current rebuilt product architecture is the source of truth. Do not restore 
 - Native size: 1280 x 790
 - SHA-256: `8781ecdb749449b31f48935a8918c852ebeeeb6f5e59686cfa91aa5df1ec26c6`
 - Captured from the current rebuilt editor on 2026-07-29 before the premium UI correction.
-- Preserve: one unified left workspace navigation with its contextual inspector, the central live product canvas, the current Design Mode/direct element editing, the right AI Director conversation when space permits, top Run/Connections/Share/Publish actions, and the persistent status bar.
-- Correct in place: unreadable microcopy, cramped controls, panel sizing, responsive collapse, proposal quality, category-specific editing depth, and publish/connection clarity.
+- Preserve: one unified left workspace navigation with its contextual inspector, the central live product canvas, the current Design Mode/direct element editing, Director inside the existing left tool (or an intentional overlay/sheet), top Run/Connections/Share/Publish actions, and the persistent status bar.
+- Correct in place: unreadable microcopy, cramped controls, contextual-surface sizing, responsive collapse, proposal quality, category-specific editing depth, and publish/connection clarity.
 - Do not restore the earlier separate fixed publish sidebar or the older Project/AI brain/Branding rail. Publish and connections remain current actions and contextual surfaces.
+- Never render Director as a persistent right-side column at any viewport width. A wide viewport may enlarge the canvas, but it must not make the right-side panel reappear.
 
 The older `docs/design/project-studio-spec.png` and `docs/screenshots/*` files are historical evidence only. They are explicitly forbidden as new visual baselines. Current-state references define architecture; the accessibility and readability rules below intentionally change their undersized text.
 
@@ -63,7 +64,7 @@ No 5–11 px text is permitted in source or computed styles.
 ### 1440+
 
 - Start builder: two balanced columns, builder 56–60%, preview 40–44%, maximum content width 1500 px.
-- Project Studio: one 72–400 px unified left navigation/inspector surface depending on the selected tool, flexible live canvas, and a 340–400 px AI Director panel. Publish is a current contextual dialog/sheet, not a permanently restored legacy column.
+- Project Studio: one 72–540 px unified left navigation/context surface depending on the selected tool and a flexible live canvas. Director occupies that existing left tool or an intentional overlay/sheet; it is never a persistent right column. Publish remains a contextual dialog/sheet.
 - Never scale the entire UI down to fit. Panels scroll independently where appropriate.
 
 ### 1024
@@ -97,6 +98,20 @@ No 5–11 px text is permitted in source or computed styles.
 ## Components
 
 New components use Base UI 1.6 via shadcn CLI v4 and remain editable under `components/ui`. Use Lucide icons. Existing Radix Dialog, Select, and Switch may remain only until their bounded migration passes keyboard, Axe, and visual tests.
+
+`app/globals.css` is an import-only manifest and must remain below 4 KiB. New
+product surfaces belong in local React components using Tailwind CSS v4 and the
+shared Base UI primitives; do not add another monolithic hand-written CSS file.
+The release guardrail rejects any source declaration below 12 px and any manual
+style block added back to `globals.css`. It also rejects any individual manual
+stylesheet above 48 KiB so a new monolithic CSS surface cannot silently return.
+
+`app/styles/project-studio.runtime.css` is a bounded legacy exception for the
+existing Studio runtime canvas and portalled publish dialog. Targeted
+accessibility and regression fixes may update those existing selectors, but no
+new product surface or component may be added there; new UI stays in local
+Tailwind CSS v4 and Base UI components. The file remains subject to the 48 KiB
+stylesheet cap and is migrated only in reviewed, browser-tested slices.
 
 Storybook 10.5.5 must cover primitives and important product states: default, hover, focus, disabled, loading, error, connected, disconnected, empty, populated, desktop, and mobile.
 

@@ -1,4 +1,5 @@
 import type { PresetId } from "@/lib/presets";
+import type { ProjectWorkspace } from "./project-workspace.ts";
 
 export type ProjectProvider = "free" | "gateway" | "openai" | "anthropic" | "openrouter" | "kimi" | "custom";
 
@@ -254,8 +255,10 @@ export interface GeneratedProject {
   publishCapability?: string;
   checkpoints?: ProjectCheckpoint[];
   futureCheckpoints?: ProjectCheckpoint[];
-  /** Browser-owned manual source state. Cloud sync intentionally omits it. */
+  /** Local marker for manually edited or explicitly applied shared source state. */
   sourceEditedAt?: string;
+  /** Canonical multi-file source. Sync/share boundaries validate and strip runtime evidence. */
+  workspace?: ProjectWorkspace;
   conversation?: ProjectChatMessage[];
   quality?: ProjectQualityReport;
 }
@@ -282,7 +285,7 @@ export interface ProjectQualityReport {
 }
 
 export interface ProjectRuntimeSmokeResult {
-  mode?: "browser" | "server-artifact";
+  mode?: "browser" | "server-artifact" | "server-inspection";
   dataProvider?: "dropstab" | "fallback" | "unverified" | (string & {});
   executed: boolean;
   runtime: boolean;
@@ -302,6 +305,8 @@ export interface ProjectCheckpoint {
   spec: GeneratedProjectSpec;
   /** Validated standalone source for a manual Code workspace checkpoint. */
   runtimeHtml?: string;
+  /** Validated canonical file graph for a multi-file Code workspace checkpoint. */
+  workspace?: ProjectWorkspace;
   branch?: {
     fromCheckpointId: string;
     replacedCheckpointCount: number;

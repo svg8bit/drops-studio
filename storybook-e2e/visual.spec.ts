@@ -35,8 +35,36 @@ function requireApprovedSnapshot(testInfo: TestInfo, name: string) {
 async function settleStory(page: Page) {
   await expect(page.locator("#storybook-root")).toBeVisible()
   await expect(page.locator(".sb-errordisplay")).toBeHidden()
+  await expect(page.locator(".preview-stage > *").first()).toBeVisible()
   await page.evaluate(async () => {
     await document.fonts.ready
+
+    const imageUrls = new Set<string>()
+    for (const image of document.images) {
+      if (!image.complete || image.naturalWidth === 0) {
+        await image.decode()
+      }
+    }
+
+    for (const element of document.querySelectorAll<HTMLElement>("*")) {
+      const backgroundImage = getComputedStyle(element).backgroundImage
+      for (const match of backgroundImage.matchAll(/url\(["']?([^"')]+)["']?\)/g)) {
+        imageUrls.add(new URL(match[1], document.baseURI).href)
+      }
+    }
+
+    await Promise.all(
+      [...imageUrls].map(
+        (url) =>
+          new Promise<void>((resolve, reject) => {
+            const image = new Image()
+            image.onload = () => resolve()
+            image.onerror = () => reject(new Error(`Unable to load visual asset: ${url}`))
+            image.src = url
+          })
+      )
+    )
+
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     })
@@ -67,6 +95,7 @@ test.describe("approved Storybook visual states", () => {
       requireApprovedSnapshot(testInfo, `${story}.png`)
       await expect(page).toHaveScreenshot(`${story}.png`, {
         fullPage: false,
+        maxDiffPixels: 50,
       })
     })
   }

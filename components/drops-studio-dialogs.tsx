@@ -82,7 +82,6 @@ interface DropsStudioDialogsProps {
   projectSyncAvailable: boolean;
   onDisconnectOpenRouter: () => void;
   onConnectProvider: () => void;
-  onTelegramConnected: (connected: boolean) => void;
   onOpenProject: (id: string) => void;
 }
 
@@ -113,7 +112,6 @@ export function DropsStudioDialogs({
   projectSyncAvailable,
   onDisconnectOpenRouter,
   onConnectProvider,
-  onTelegramConnected,
   onOpenProject,
 }: DropsStudioDialogsProps) {
   return (
@@ -191,15 +189,14 @@ export function DropsStudioDialogs({
                     }
                     defaultAbout={
                       telegramProject?.spec.tagline ??
-                      "Sourced crypto intelligence powered by DropsTab and automated with Drops Bot."
+                      "Sourced crypto intelligence prepared in Drops Studio with DropsTab context."
                     }
                     defaultFirstPost={
                       telegramProject
                         ? `${telegramProject.spec.blueprint.content.headline}\n\n${telegramProject.spec.blueprint.content.subheadline}\n\nDraft prepared in Drops Studio. Verify live DropsTab context before publishing.`
-                        : "Channel created with Drops Studio. DropsTab market context and Drops Bot automation are ready to configure."
+                        : "Channel created with Drops Studio. DropsTab context is attributable; Drops Bot Profile linking remains separate setup."
                     }
                     projectContext={telegramProjectSlug ?? undefined}
-                    onConnected={onTelegramConnected}
                   />
                 ) : (
                   <>

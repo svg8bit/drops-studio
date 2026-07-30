@@ -2,7 +2,7 @@
 
 ## Product promise
 
-Drops Studio turns a crypto idea into a working, editable and publishable product powered by DropsTab data/research primitives and Drops Bot automation/action primitives. It is not a gallery of mockups and it is not a generic prompt wrapper.
+Drops Studio turns a crypto idea into a working, editable and publishable product powered by DropsTab data/research primitives, real Telegram delivery, and explicit Drops Bot setup handoffs. It is not a gallery of mockups and it is not a generic prompt wrapper.
 
 ## Competitive product loop
 

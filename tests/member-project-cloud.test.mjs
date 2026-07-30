@@ -147,6 +147,79 @@ test("member cloud rejects credential fields before validator normalization can 
   );
 });
 
+test("member cloud normalizes native validation failures into its public validation error", async () => {
+  const {
+    MemberProjectValidationError,
+    sanitizeMemberProjectDraft,
+  } = await import("../lib/member-project-cloud.ts");
+
+  for (const NativeError of [TypeError, RangeError]) {
+    const draft = projectDraft();
+    let ownKeysCalls = 0;
+    const adversarialDraft = new Proxy(draft, {
+      ownKeys(target) {
+        ownKeysCalls += 1;
+        if (ownKeysCalls > 1) {
+          throw new NativeError("adversarial object traversal failed");
+        }
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    assert.throws(
+      () => sanitizeMemberProjectDraft(adversarialDraft),
+      (error) =>
+        error instanceof MemberProjectValidationError
+        && /adversarial object traversal failed/.test(error.message),
+      NativeError.name,
+    );
+  }
+});
+
+test("member cloud accepts only a strict validated workspace graph and rejects runtime evidence", async () => {
+  const {
+    MEMBER_PROJECT_BODY_LIMIT_BYTES,
+    sanitizeMemberProjectDraft,
+  } = await import("../lib/member-project-cloud.ts");
+  const { compileProject } = await import("../lib/project-compiler.ts");
+  const {
+    materializeProjectWorkspace,
+    PROJECT_WORKSPACE_BYTES_LIMIT,
+  } = await import("../lib/project-workspace.ts");
+  const draft = projectDraft("project-source-1", "Member Source Project");
+  draft.workspace = materializeProjectWorkspace({
+    id: draft.id,
+    spec: draft.spec,
+    html: compileProject(draft.spec),
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z",
+  });
+
+  const sanitized = sanitizeMemberProjectDraft(draft);
+  assert.equal(sanitized.workspace.files.length >= 10, true);
+  assert.equal(sanitized.workspace.runtime.provider, "unconfigured");
+  assert.equal(MEMBER_PROJECT_BODY_LIMIT_BYTES > PROJECT_WORKSPACE_BYTES_LIMIT, true);
+
+  for (const mutate of [
+    (value) => {
+      value.workspace.receipt = { id: "sandbox-receipt" };
+    },
+    (value) => {
+      value.workspace.files[0].stdout = "terminal output";
+    },
+    (value) => {
+      value.workspace.runtime.providerKey = "request-only-key";
+    },
+  ]) {
+    const invalid = structuredClone(draft);
+    mutate(invalid);
+    assert.throws(
+      () => sanitizeMemberProjectDraft(invalid),
+      /workspace|unsupported|credential|receipt|key/i,
+    );
+  }
+});
+
 test("member cloud keeps account ownership private and uses optimistic per-project revisions", async () => {
   await withLocalCloud(async () => {
     const {

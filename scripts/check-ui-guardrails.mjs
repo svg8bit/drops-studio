@@ -11,6 +11,7 @@ const SOURCE_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
 ])
+const MAX_MANUAL_STYLESHEET_BYTES = 48 * 1024
 const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`
 const FONT_PATTERNS = [
   {
@@ -113,6 +114,54 @@ export async function collectUiGuardrailViolations(projectRoot = process.cwd()) 
   return violations
 }
 
+export async function collectUiArchitectureViolations(
+  projectRoot = process.cwd()
+) {
+  const globalsPath = path.join(projectRoot, "app", "globals.css")
+
+  try {
+    const globals = await readFile(globalsPath, "utf8")
+    const violations = []
+    const byteLength = Buffer.byteLength(globals, "utf8")
+
+    if (byteLength > 4096) {
+      violations.push(
+        `app/globals.css is ${byteLength} bytes; keep the import manifest below 4096 bytes`
+      )
+    }
+    if (/\{/.test(globals)) {
+      violations.push(
+        "app/globals.css must remain an import-only manifest; put tokens in the token layer and new UI in local Tailwind/Base UI components"
+      )
+    }
+
+    const stylesDirectory = path.join(projectRoot, "app", "styles")
+    try {
+      const stylesheets = (await sourceFiles(stylesDirectory)).filter(
+        (file) => path.extname(file) === ".css"
+      )
+
+      for (const stylesheet of stylesheets) {
+        const source = await readFile(stylesheet, "utf8")
+        const stylesheetBytes = Buffer.byteLength(source, "utf8")
+
+        if (stylesheetBytes > MAX_MANUAL_STYLESHEET_BYTES) {
+          violations.push(
+            `${path.relative(projectRoot, stylesheet)} is ${stylesheetBytes} bytes; split manual CSS below ${MAX_MANUAL_STYLESHEET_BYTES} bytes and keep new product UI in local Tailwind/Base UI components`
+          )
+        }
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+
+    return violations
+  } catch (error) {
+    if (error?.code === "ENOENT") return ["app/globals.css is missing"]
+    throw error
+  }
+}
+
 function formatViolation(violation) {
   return `${violation.file}:${violation.line} ${violation.source} (${violation.value}px)`
 }
@@ -122,17 +171,24 @@ const isMainModule =
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 
 if (isMainModule) {
-  const violations = await collectUiGuardrailViolations()
+  const [violations, architectureViolations] = await Promise.all([
+    collectUiGuardrailViolations(),
+    collectUiArchitectureViolations(),
+  ])
 
-  if (violations.length > 0) {
+  if (violations.length > 0 || architectureViolations.length > 0) {
     console.error(
-      `UI font-size guardrail failed: ${violations.length} source declaration(s) below 12px.\n${violations
+      `UI guardrails failed: ${violations.length} source declaration(s) below 12px; ${architectureViolations.length} architecture violation(s).\n${[
+        ...violations
         .slice(0, 50)
-        .map(formatViolation)
-        .join("\n")}${violations.length > 50 ? "\n…output truncated" : ""}`
+        .map(formatViolation),
+        ...architectureViolations,
+      ].join("\n")}${violations.length > 50 ? "\n…output truncated" : ""}`
     )
     process.exitCode = 1
   } else {
-    console.log("UI font-size guardrail passed.")
+    console.log(
+      "UI guardrails passed: no sub-12px source declarations, globals.css is import-only, and manual stylesheets stay below 48 KiB."
+    )
   }
 }

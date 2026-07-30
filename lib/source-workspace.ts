@@ -1,4 +1,5 @@
 import { assertPublishedArtifactSafe } from "./artifact-security.ts";
+import { unexpectedRuntimeActiveContent } from "./runtime-active-content.ts";
 import { getProductReality } from "./product-reality.ts";
 import type { GeneratedProjectSpec } from "./project-types.ts";
 
@@ -59,6 +60,7 @@ export function validateEditableRuntimeHtml(
   if (/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?/i.test(source)) {
     issues.push("Runnable source cannot depend on a loopback URL.");
   }
+  issues.push(...unexpectedRuntimeActiveContent(source, "compiled-runtime"));
   try {
     assertPublishedArtifactSafe(spec, source);
   } catch (error) {

@@ -25,6 +25,23 @@ const presetIds = [
   "crypto-siri",
 ];
 
+function sourceBetween(source, startMarker, endMarker, label) {
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `${label}: missing start marker ${startMarker}`);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `${label}: missing end marker ${endMarker}`);
+  assert.ok(end > start, `${label}: end marker must follow start marker`);
+  return source.slice(start, end);
+}
+
+function assertMarkerOrder(source, firstMarker, secondMarker, label) {
+  const first = source.indexOf(firstMarker);
+  const second = source.indexOf(secondMarker);
+  assert.notEqual(first, -1, `${label}: missing first marker ${firstMarker}`);
+  assert.notEqual(second, -1, `${label}: missing second marker ${secondMarker}`);
+  assert.ok(first < second, `${label}: first marker must precede second marker`);
+}
+
 test("every preset declares an honest delivery contract", () => {
   for (const id of presetIds) {
     const contract = PRODUCT_REALITY[id];
@@ -106,7 +123,12 @@ test("generated products do not claim outcomes they cannot verify", async () => 
   assert.match(telegramWizard, /Create the channel — not a mockup/);
   assert.match(telegramWizard, /Create real Telegram channel/);
   assert.match(telegramWizard, /firstPostMessageId/);
+  assert.match(telegramWizard, /navigator\.clipboard\?\.writeText/);
+  assert.match(telegramWizard, /Copy this command manually: \$\{command\}/);
   assert.match(channelRoute, /createTelegramChannel/);
+  assert.match(channelRoute, /console\.error\("Telegram channel creation failed\.", error\)/);
+  assert.match(channelRoute, /Telegram could not create the channel\. Check the connected account, bot, and channel details before retrying\./);
+  assert.doesNotMatch(channelRoute, /error instanceof Error \? error\.message/);
   assert.match(telegramAccount, /firstPostMessageId: number/);
   assert.match(telegramAccount, /firstPostReceipt/);
   assert.match(telegramAccount, /Telegram message #\$\{firstPostMessageId\}/);
@@ -177,6 +199,7 @@ test("Telegram delivery verifies permissions, sends, and rejects a non-admin", a
 
   assert.match(compiler, /telegram\/verify/);
   assert.match(compiler, /new URL\("\/api\/telegram\/verify",location\.origin\)/);
+  assert.match(compiler, /location\.protocol==="https:"\?new URL\("\/api\/telegram\/verify",location\.origin\)\.href:""/);
   assert.doesNotMatch(compiler, /platform\.pathname="\/api\/telegram\/verify"/);
   assert.match(compiler, /BotFather token/);
   assert.match(compiler, /Send verified test post/);
@@ -191,6 +214,18 @@ test("Telegram delivery verifies permissions, sends, and rejects a non-admin", a
   assert.match(compiler, /closeIntegration\(\)/);
   assert.match(compiler, /crypto\.randomUUID/);
   assert.match(compiler, /sessionStore\.setItem\(key,next\)/);
+  const verificationFunction = sourceBetween(
+    compiler,
+    "async function verifyTelegram",
+    "function share",
+    "Telegram verification function",
+  );
+  assertMarkerOrder(
+    verificationFunction,
+    "if(!telegramEndpoint)",
+    "JSON.stringify({token:token.value",
+    "HTTPS endpoint validation must happen before the BotFather token is serialized",
+  );
   assert.match(route, /rightmostTrustedAddress/);
   assert.match(route, /ifMatch: current\.blob\.etag/);
   assert.match(route, /const signal = AbortSignal\.timeout\(8_000\)/);

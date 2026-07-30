@@ -47,7 +47,7 @@ test("signed-in member allowance and OpenRouter session state stay coherent in t
   }
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByText("Connections Hub", { exact: true })).toBeVisible()
-  await dialog.locator(".provider-list button").filter({ hasText: "OpenRouter Free" }).click()
+  await dialog.getByRole("button", { name: /^OpenRouter/ }).click()
   await expect(dialog.getByText("Studio member session connected", { exact: true })).toBeVisible()
   await expect(dialog.getByText(/key still stays only in this browser tab/i)).toBeVisible()
 

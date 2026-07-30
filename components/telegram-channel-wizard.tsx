@@ -59,16 +59,14 @@ function sessionHeaders() {
 
 export function TelegramChannelWizard({
   defaultTitle = "My Alpha Channel",
-  defaultAbout = "Crypto intelligence powered by DropsTab and Drops Bot.",
-  defaultFirstPost = "Welcome. This channel is live and ready for sourced DropsTab market posts and Drops Bot alerts.",
+  defaultAbout = "Crypto intelligence prepared with Drops Studio and DropsTab context.",
+  defaultFirstPost = "Welcome. This Telegram channel is live. Drops Bot alert Profiles remain a separate guided setup.",
   projectContext,
-  onConnected,
 }: {
   defaultTitle?: string;
   defaultAbout?: string;
   defaultFirstPost?: string;
   projectContext?: string;
-  onConnected?: (connected: boolean) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [checkingExisting, setCheckingExisting] = useState(true);
@@ -86,6 +84,8 @@ export function TelegramChannelWizard({
   const [ownBot, setOwnBot] = useState(false);
   const [botToken, setBotToken] = useState("");
   const [creationRequestId, setCreationRequestId] = useState("");
+  const [dropsBotProfile, setDropsBotProfile] = useState("Main");
+  const [profileCommandCopied, setProfileCommandCopied] = useState(false);
   const [result, setResult] = useState<ChannelResult | null>(null);
   const [error, setError] = useState("");
 
@@ -110,16 +110,14 @@ export function TelegramChannelWizard({
         setAccountToken(saved);
         setCheckingExisting(false);
         setPhase("connected");
-        onConnected?.(true);
       })
       .catch(() => {
         window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
         setAccountToken("");
         setCheckingExisting(false);
         setPhase("phone");
-        onConnected?.(false);
       });
-  }, [onConnected]);
+  }, []);
 
   async function sendCode() {
     setError("");
@@ -159,12 +157,10 @@ export function TelegramChannelWizard({
       }
       if (!payload.account || !payload.accountToken) throw new Error("Telegram did not return an account session.");
       window.sessionStorage.setItem(ACCOUNT_STORAGE_KEY, payload.accountToken);
-      window.sessionStorage.setItem("drops-studio:dropsbot", "account-connected");
       setAccount(payload.account);
       setAccountToken(payload.accountToken);
       setPassword("");
       setPhase("connected");
-      onConnected?.(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Telegram sign-in failed.");
       setPhase(includePassword ? "password" : "code");
@@ -205,7 +201,6 @@ export function TelegramChannelWizard({
 
   function disconnect() {
     window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
-    window.sessionStorage.removeItem("drops-studio:dropsbot");
     setAccount(null);
     setAccountToken("");
     setResult(null);
@@ -214,7 +209,6 @@ export function TelegramChannelWizard({
     setPassword("");
     setCreationRequestId("");
     setPhase("phone");
-    onConnected?.(false);
   }
 
   return (
@@ -226,9 +220,9 @@ export function TelegramChannelWizard({
       <div className="telegram-wizard-intro">
         <span><RadioTower /></span>
         <div>
-          <b>REAL TELEGRAM AUTOMATION</b>
+          <b>REAL TELEGRAM DELIVERY</b>
           <h3>Create the channel — not a mockup</h3>
-          <p>Drops Studio creates a real channel from your connected Telegram account, adds the bot as an admin and publishes the first post.</p>
+          <p>Drops Studio creates a real channel from your connected Telegram account, adds the selected Telegram bot as an admin and publishes the first post. Official Drops Bot Profiles are linked separately.</p>
         </div>
       </div>
 
@@ -278,11 +272,11 @@ export function TelegramChannelWizard({
           <label><span>Channel description</span><textarea rows={2} maxLength={255} value={about} onChange={(event) => setAbout(event.target.value)} /></label>
           <label><span>First real post</span><textarea rows={5} maxLength={3500} value={firstPost} onChange={(event) => setFirstPost(event.target.value)} /></label>
           <div className="telegram-bot-choice">
-            <button type="button" className={!ownBot ? "active" : ""} onClick={() => setOwnBot(false)}><Sparkles /><span><strong>Drops Studio bot</strong><small>Ready on the platform</small></span>{!ownBot && <Check />}</button>
+            <button type="button" className={!ownBot ? "active" : ""} onClick={() => setOwnBot(false)}><Sparkles /><span><strong>Drops Studio bot</strong><small>Uses the configured platform bot</small></span>{!ownBot && <Check />}</button>
             <button type="button" className={ownBot ? "active" : ""} onClick={() => setOwnBot(true)}><Bot /><span><strong>My BotFather bot</strong><small>Use your own identity</small></span>{ownBot && <Check />}</button>
           </div>
           {ownBot && <label><span>BotFather token</span><input type="password" autoComplete="off" value={botToken} onChange={(event) => setBotToken(event.target.value)} placeholder="123456789:AA…" /></label>}
-          <div className="telegram-dm-note"><Bot /><span><strong>Want the result in a bot DM?</strong><small>Start the platform bot once before creating the channel. Telegram blocks unsolicited bot messages.</small></span><a href="https://t.me/ColdMathAI_bot?start=drops_studio" target="_blank" rel="noreferrer">Start bot <ExternalLink /></a></div>
+          <div className="telegram-dm-note"><Bot /><span><strong>Want the result in a bot DM?</strong><small>After creation, use the returned link for the exact selected bot. Telegram blocks unsolicited bot messages.</small></span></div>
           <button type="button" className="telegram-create" onClick={() => void createChannel()} disabled={phase === "creating" || title.trim().length < 2 || !firstPost.trim() || ownBot && !botToken.trim()}>{phase === "creating" ? <><LoaderCircle className="spin" /> Creating channel, adding bot and publishing…</> : <><RadioTower /> Create real Telegram channel <ChevronRight /></>}</button>
           <p className="telegram-consent">This creates an external Telegram channel and adds the selected bot as administrator only when you press the button.</p>
         </div>
@@ -293,6 +287,41 @@ export function TelegramChannelWizard({
           <div className="telegram-success-hero"><span><BadgeCheck /></span><div><b>CHANNEL IS LIVE</b><h3>{result.title}</h3><p>{result.username || "Private channel with shareable invite"}</p></div></div>
           <div className="telegram-success-checks"><span><Check /> Real channel created</span><span><Check /> {result.botUsername} is admin</span><span><Check /> First post #{result.firstPostMessageId} confirmed by Telegram</span><span className={result.dmSent ? "" : "pending"}>{result.dmSent ? <Check /> : <CircleAlert />} {result.dmSent ? "Result sent in DM" : "Start bot to receive future DMs"}</span></div>
           {result.warnings?.map((warning) => <div className="telegram-success-warning" key={warning}><CircleAlert /><span>{warning}</span></div>)}
+          <div className="telegram-dm-note">
+            <Bot />
+            <span>
+              <strong>Optional official Drops Bot Profile</strong>
+              <small>Open your active Drops Bot, send /profiles in its private chat, add that same bot to this channel, then send the command below. Only the user who added the bot can link their Profiles. Copying the command does not claim configuration succeeded.</small>
+              <label>
+                <span>Profile name</span>
+                <input value={dropsBotProfile} maxLength={64} onChange={(event) => { setDropsBotProfile(event.target.value.replace(/[\r\n]/g, "")); setProfileCommandCopied(false); }} />
+              </label>
+            </span>
+            <a href="https://t.me/Drops" target="_blank" rel="noreferrer">Open @Drops <ExternalLink /></a>
+            <button
+              type="button"
+              disabled={!dropsBotProfile.trim()}
+              onClick={() => {
+                const command = `/use_thread ${dropsBotProfile.trim()}`;
+                if (!navigator.clipboard?.writeText) {
+                  setProfileCommandCopied(false);
+                  setError(`Clipboard access is unavailable. Copy this command manually: ${command}`);
+                  return;
+                }
+                void navigator.clipboard.writeText(command)
+                  .then(() => {
+                    setProfileCommandCopied(true);
+                    setError("");
+                  })
+                  .catch(() => {
+                    setProfileCommandCopied(false);
+                    setError(`Automatic copy failed. Copy this command manually: ${command}`);
+                  });
+              }}
+            >
+              {profileCommandCopied ? <Check /> : <Bot />} {profileCommandCopied ? "Command copied" : "Copy /use_thread command"}
+            </button>
+          </div>
           <div className="telegram-success-actions"><a href={result.url} target="_blank" rel="noreferrer"><ExternalLink /> Open live channel</a>{!result.dmSent && <a className="secondary" href={result.dmStartUrl} target="_blank" rel="noreferrer"><Bot /> Start bot</a>}<button type="button" onClick={() => { setCreationRequestId(""); setResult(null); setPhase("connected"); }}>Create another</button></div>
         </div>
       )}

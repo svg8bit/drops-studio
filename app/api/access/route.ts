@@ -3,9 +3,9 @@ import {
   accessMetadata,
   GUEST_IDENTITY_COOKIE,
   GUEST_USAGE_COOKIE,
-  MEMBER_DAILY_LIMIT,
   memberProjectSyncReadiness,
   platformAiReadiness,
+  resolveFundedBuildQuota,
   resolveGuestAccess,
   resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
@@ -18,12 +18,15 @@ export async function GET(request: NextRequest) {
   const date = new Date().toISOString().slice(0, 10);
   const account = resolveStudioAccount(request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value);
   if (account) {
+    const fundedQuota = await resolveFundedBuildQuota({ kind: "account", account });
+    const memberTier = fundedQuota.tier;
+    const memberLimit = fundedQuota.limit;
     const readiness = platformAiReadiness("member");
     const quota = readiness.available
       ? await readRequestLimitState({
           identity: account.identity,
           namespace: "member-ai-plan",
-          max: MEMBER_DAILY_LIMIT,
+          max: memberLimit,
           windowMs: 24 * 60 * 60 * 1_000,
         })
       : { status: "unavailable" as const, count: null, remaining: null };
@@ -31,10 +34,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         access: accessMetadata({
-          tier: platformAvailable ? "member" : "fallback",
+          tier: platformAvailable ? memberTier : "fallback",
           used: quota.count ?? 0,
           account,
           projectSyncAvailable: memberProjectSyncReadiness(),
+          platformLimit: memberLimit,
         }),
         quotaSigningConfigured: readiness.signingConfigured,
       },

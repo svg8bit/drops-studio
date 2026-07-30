@@ -1,5 +1,9 @@
 import { Script } from "node:vm";
 
+import {
+  findHtmlOpeningTag,
+  stripHtmlOpeningTagAttribute,
+} from "./html-opening-tag.ts";
 import { evaluateProjectQuality } from "./project-quality.ts";
 import type { GeneratedProjectSpec, ProjectQualityReport, ProjectRuntimeSmokeResult } from "./project-types.ts";
 
@@ -54,9 +58,9 @@ export function inspectServerReleaseRuntime(
   const hasUnsafeExecution = /<button[^>]*data-action=["'](?:execute-trade|auto-trade)["']/i.test(html);
   const hasApprovalBoundary = /Nothing was executed|no trade executed|approve|approval/i.test(html);
   return {
-    mode: "server-artifact",
+    mode: "server-inspection",
     dataProvider: normalizeProvider(provider),
-    executed: true,
+    executed: false,
     runtime: scripts.length > 0 && errors.length === 0 && categoryRuntime,
     interactions: hasClickContract,
     dropstab: hasAdapterContract,
@@ -78,5 +82,14 @@ export function evaluateServerReleaseQuality(
 
 export function stampProviderEvidence(html: string, provider: ReleaseProviderEvidence | string): string {
   const evidence = normalizeProvider(provider);
-  return html.replace(/<html\b(?![^>]*\bdata-provider-evidence=)/i, `<html data-provider-evidence="${evidence}"`);
+  const root = findHtmlOpeningTag(html, "html");
+  if (!root) {
+    throw new Error("Provider evidence requires a complete html opening tag.");
+  }
+  const sanitized = stripHtmlOpeningTagAttribute(
+    root.source,
+    "data-provider-evidence",
+  );
+  const stamped = `${sanitized.slice(0, -1)} data-provider-evidence="${evidence}">`;
+  return `${html.slice(0, root.start)}${stamped}${html.slice(root.end)}`;
 }

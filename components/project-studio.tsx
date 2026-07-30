@@ -16,7 +16,6 @@ import {
   ChevronRight,
   Cloud,
   Code2,
-  Copy,
   Database,
   Download,
   ExternalLink,
@@ -58,7 +57,15 @@ import {
   undoProjectCheckpoint,
 } from "@/lib/project-history";
 import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
+import { DropsBotWebhookConnection } from "@/components/dropsbot-webhook-connection";
+import { StudioAccountTeamPanel } from "@/components/studio-account-team-panel";
 import { DropsBrand } from "@/components/drops-brand";
+import {
+  ProjectWorkspaceDialog,
+  type WorkspaceAiEvidenceView,
+  type WorkspaceAiQuotaView,
+  type WorkspaceRunReceiptView,
+} from "@/components/project-workspace-dialog";
 import {
   createFreeDirectorProposal,
   createFreeElementDirectorProposal,
@@ -73,6 +80,12 @@ import {
   publishMutationForProject,
 } from "@/lib/publish-lifecycle";
 import { getProductReality } from "@/lib/product-reality";
+import { acceptPublishedQuality } from "@/lib/published-quality-evidence";
+import { approvedPreviewExternalUrl } from "@/lib/runtime-external-link";
+import {
+  createIsolatedRuntimeFullscreenDocument,
+  secureEditableRuntimeSrcDoc,
+} from "@/lib/runtime-srcdoc-security";
 import {
   readProjectsFromStore,
   saveProjectSafely,
@@ -95,10 +108,18 @@ import {
   MemberProjectSyncError,
   saveMemberProjectToCloud,
 } from "@/lib/member-project-sync-client";
+import { validateEditableRuntimeHtml } from "@/lib/source-workspace";
 import {
-  prepareEditableRuntimeHtml,
-  validateEditableRuntimeHtml,
-} from "@/lib/source-workspace";
+  addWorkspaceFile,
+  compileWorkspaceRuntime,
+  deleteWorkspaceFile,
+  materializeProjectWorkspace,
+  updateWorkspaceFile,
+  validateProjectWorkspace,
+  type ProjectWorkspace,
+  type ProjectWorkspaceTask,
+} from "@/lib/project-workspace";
+import { createWorkspaceRunDigest } from "@/lib/workspace-run-digest";
 
 type InspectorTab =
   | "project"
@@ -113,7 +134,7 @@ type InspectorTab =
   | "history";
 type HostingProvider = "vercel" | "cloudflare" | "netlify" | "github";
 type DeviceMode = "desktop" | "mobile";
-type SourceFile = "index.html" | "project.json" | "quality-report.json";
+type SourceFile = string;
 type ProjectSyncStatus =
   | "loading"
   | "local"
@@ -331,13 +352,11 @@ function normalizeRuntimeSmoke(
   const errors = Array.isArray(input.errors)
     ? input.errors.map((item) => String(item).slice(0, 160)).slice(0, 5)
     : [];
-  const provider = String(input.dataProvider || "").trim().toLowerCase();
   return {
-    mode: input.mode === "server-artifact" ? "server-artifact" : "browser",
-    dataProvider:
-      provider === "dropstab" || provider === "fallback"
-        ? provider
-        : "unverified",
+    // Every value here originates inside editable srcdoc code. Preserve it as
+    // browser telemetry only; the iframe cannot mint host/provider evidence.
+    mode: "browser",
+    dataProvider: "unverified",
     executed: input.executed === true,
     runtime: input.runtime === true,
     interactions: input.interactions === true,
@@ -350,6 +369,14 @@ function normalizeRuntimeSmoke(
         ? input.checkedAt.slice(0, 40)
         : new Date().toISOString(),
   };
+}
+
+function normalizeHostDataProvider(
+  value: unknown,
+): "dropstab" | "fallback" | "unverified" {
+  return value === "dropstab" || value === "fallback"
+    ? value
+    : "unverified";
 }
 
 function downloadBlob(filename: string, blob: Blob): void {
@@ -516,6 +543,24 @@ export function ProjectStudio() {
   const [sourceFile, setSourceFile] = useState<SourceFile>("index.html");
   const [sourceDraft, setSourceDraft] = useState("");
   const [sourceIssues, setSourceIssues] = useState<string[]>([]);
+  const [workspaceRunningTask, setWorkspaceRunningTask] =
+    useState<ProjectWorkspaceTask["id"] | null>(null);
+  const [workspaceRunReceipt, setWorkspaceRunReceipt] =
+    useState<WorkspaceRunReceiptView | null>(null);
+  const [workspaceRunDigestEvidence, setWorkspaceRunDigestEvidence] =
+    useState<{
+      project: GeneratedProject;
+      receipt: WorkspaceRunReceiptView;
+      digest: string;
+    } | null>(null);
+  const [workspaceRunError, setWorkspaceRunError] = useState("");
+  const [workspaceAiPrompt, setWorkspaceAiPrompt] = useState("");
+  const [workspaceAiRunning, setWorkspaceAiRunning] = useState(false);
+  const [workspaceAiError, setWorkspaceAiError] = useState("");
+  const [workspaceAiEvidence, setWorkspaceAiEvidence] =
+    useState<WorkspaceAiEvidenceView | null>(null);
+  const [workspaceAiQuota, setWorkspaceAiQuota] =
+    useState<WorkspaceAiQuotaView | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [newModule, setNewModule] = useState("");
@@ -525,6 +570,8 @@ export function ProjectStudio() {
   });
   const [runtimeSmoke, setRuntimeSmoke] =
     useState<ProjectRuntimeSmokeResult | null>(null);
+  const [hostDataProvider, setHostDataProvider] =
+    useState<"dropstab" | "fallback" | "unverified">("unverified");
   const [projectSyncStatus, setProjectSyncStatus] =
     useState<ProjectSyncStatus>("loading");
 
@@ -552,11 +599,6 @@ export function ProjectStudio() {
         }
 
         if (!cloudSyncAvailableRef.current) {
-          setProjectSyncStatus("local");
-          return true;
-        }
-
-        if (next.sourceEditedAt) {
           setProjectSyncStatus("local");
           return true;
         }
@@ -665,11 +707,24 @@ export function ProjectStudio() {
           found.sourceEditedAt &&
             validateEditableRuntimeHtml(spec, found.html).valid,
         );
-        const html = storedSourceIsValid ? found.html : compiledHtml;
+        const storedHtml = storedSourceIsValid ? found.html : compiledHtml;
+        const storedWorkspaceValid = Boolean(
+          found.workspace &&
+            validateProjectWorkspace(spec, found.workspace).valid,
+        );
+        const workspace = storedWorkspaceValid
+          ? found.workspace!
+          : materializeProjectWorkspace({
+              ...found,
+              spec,
+              html: storedHtml,
+            });
+        const html = compileWorkspaceRuntime(spec, workspace);
         const migrated: GeneratedProject = {
           ...found,
           spec,
           html,
+          workspace,
           sourceEditedAt: storedSourceIsValid
             ? found.sourceEditedAt
             : undefined,
@@ -769,43 +824,55 @@ export function ProjectStudio() {
         )
           return;
         setRuntimeSmoke(smoke);
-        const quality = evaluateProjectQuality(
-          committed.spec,
-          committed.html,
-          smoke,
-        );
-        const nextCommitted = { ...committed, quality };
-        committedProjectRef.current = nextCommitted;
-        setRuntimeProject(nextCommitted);
-        const current = projectRef.current;
-        if (current && !pendingSpecRef.current) {
-          const next = { ...current, quality };
-          projectRef.current = next;
-          void persistProject(next, current.updatedAt);
-          setProject(next);
+        return;
+      }
+      if (event.data.type === "drops-studio-open-external") {
+        const committed = committedProjectRef.current;
+        if (
+          !committed
+          || String(event.data.slug || "") !== committed.spec.slug
+        ) {
+          return;
         }
+        const approvedUrl = approvedPreviewExternalUrl(
+          event.data.url,
+          window.location.origin,
+        );
+        if (!approvedUrl) {
+          setToast(
+            "Preview blocked an unapproved external link. Use Fullscreen for standalone navigation.",
+          );
+          return;
+        }
+        window.open(approvedUrl, "_blank", "noopener,noreferrer");
         return;
       }
       if (event.data.type === "drops-studio-data-request") {
+        const source = event.source as Window;
         void fetch("/api/public-data", {
           headers: { accept: "application/json" },
         })
-          .then((response) => response.json())
-          .then((payload) =>
-            (event.source as Window).postMessage(
+          .then(async (response) => {
+            const payload = (await response.json()) as Record<string, unknown>;
+            const provider = response.ok
+              ? normalizeHostDataProvider(payload.provider)
+              : "unverified";
+            setHostDataProvider(provider);
+            source.postMessage(
               { type: "drops-studio-data-response", payload },
               "*",
-            ),
-          )
-          .catch(() =>
-            (event.source as Window).postMessage(
+            );
+          })
+          .catch(() => {
+            setHostDataProvider("unverified");
+            source.postMessage(
               {
                 type: "drops-studio-data-response",
                 payload: { source: "Saved DropsTab-compatible snapshot" },
               },
               "*",
-            ),
-          );
+            );
+          });
       }
       if (event.data.type === "drops-studio-product-hunt-request") {
         const source = event.source as Window;
@@ -904,6 +971,39 @@ export function ProjectStudio() {
   }, [persistProject]);
 
   useEffect(() => {
+    let cancelled = false;
+    if (!project || !workspaceRunReceipt) return;
+    const workspace = project.workspace ?? materializeProjectWorkspace(project);
+    const task = workspace.tasks.find(
+      (candidate) => candidate.id === workspaceRunReceipt.task,
+    );
+    if (!task) return;
+    void createWorkspaceRunDigest({
+      files: workspace.files,
+      task: {
+        id: task.id,
+        argv: [task.command, ...task.args],
+        cwd: task.cwd ?? ".",
+        timeoutMs: 15_000,
+        previewPort: task.port,
+      },
+    })
+      .then((digest) => {
+        if (!cancelled) {
+          setWorkspaceRunDigestEvidence({
+            project,
+            receipt: workspaceRunReceipt,
+            digest,
+          });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [project, workspaceRunReceipt]);
+
+  useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
       { type: "drops-studio-design-mode", enabled: designMode },
       "*",
@@ -965,19 +1065,31 @@ export function ProjectStudio() {
         `src="${previewGameAssets.sprite || transparentPixel}"`,
       );
   }, [previewGameAssets, runtimeProject]);
+  const runtimeSrcDoc = useMemo(
+    () => secureEditableRuntimeSrcDoc(runtimeHtml),
+    [runtimeHtml],
+  );
+  const trustedRuntimeSmoke =
+    (runtimeProject?.quality?.runtimeSmoke?.mode === "server-artifact"
+      || runtimeProject?.quality?.runtimeSmoke?.mode === "server-inspection")
+      ? runtimeProject.quality.runtimeSmoke
+      : null;
   const qualityReport = useMemo(
     () =>
       runtimeProject
         ? evaluateProjectQuality(
             runtimeProject.spec,
             runtimeProject.html,
-            runtimeSmoke,
+            trustedRuntimeSmoke ?? runtimeSmoke,
+            { dataProvider: hostDataProvider },
           )
         : null,
-    [runtimeProject, runtimeSmoke],
+    [hostDataProvider, runtimeProject, runtimeSmoke, trustedRuntimeSmoke],
   );
-  const runtimeReady = Boolean(
-    runtimeSmoke?.executed && runtimeSmoke.runtime,
+  const browserTelemetryReady = Boolean(
+    runtimeSmoke?.mode === "browser"
+      && runtimeSmoke.executed
+      && runtimeSmoke.runtime,
   );
   const activeProvider = useMemo(() => {
     if (!project) return "free" as ProjectProvider;
@@ -986,24 +1098,70 @@ export function ProjectStudio() {
       "free") as ProjectProvider;
   }, [project]);
 
+  const adoptProject = useCallback((next: GeneratedProject) => {
+    if (quietCommitTimerRef.current !== null) {
+      window.clearTimeout(quietCommitTimerRef.current);
+      quietCommitTimerRef.current = null;
+    }
+    pendingSpecRef.current = null;
+    projectRef.current = next;
+    committedProjectRef.current = next;
+    setRuntimeSmoke(null);
+    setProject(next);
+    setRuntimeProject(next);
+    setRuntimeRevision((revision) => revision + 1);
+    setDirty(true);
+  }, []);
+
   const replaceProject = useCallback(
     (next: GeneratedProject) => {
       const current = projectRef.current;
-      if (quietCommitTimerRef.current !== null) {
-        window.clearTimeout(quietCommitTimerRef.current);
-        quietCommitTimerRef.current = null;
-      }
-      pendingSpecRef.current = null;
-      projectRef.current = next;
-      committedProjectRef.current = next;
-      setRuntimeSmoke(null);
+      adoptProject(next);
       void persistProject(next, current?.updatedAt ?? null);
-      setProject(next);
-      setRuntimeProject(next);
-      setRuntimeRevision((revision) => revision + 1);
-      setDirty(true);
     },
-    [persistProject],
+    [adoptProject, persistProject],
+  );
+
+  const applyTeamProject = useCallback(
+    async function applyTeamProject(
+      sharedProject: GeneratedProject,
+    ): Promise<boolean> {
+      const appliedAt = new Date().toISOString();
+      const localProject: GeneratedProject = {
+        ...sharedProject,
+        sourceEditedAt: appliedAt,
+        updatedAt: appliedAt,
+      };
+      const existing = readProjectsFromStore().find(
+        (item) => item.id === localProject.id,
+      );
+      try {
+        const saved = await saveProjectSafely(localProject, {
+          expectedUpdatedAt: existing?.updatedAt ?? null,
+        });
+        if (saved.status === "conflict") {
+          setToast(
+            "A newer browser copy of this shared project already exists. Reload before applying the team revision.",
+          );
+          return false;
+        }
+        if (localProject.id === params.id) {
+          adoptProject(localProject);
+          setProjectSyncStatus("local");
+          return true;
+        }
+        window.location.assign(
+          `/studio/${encodeURIComponent(localProject.id)}`,
+        );
+        return true;
+      } catch {
+        setToast(
+          "The shared project could not be saved locally. Free browser storage, then retry.",
+        );
+        return false;
+      }
+    },
+    [adoptProject, params.id],
   );
 
   const persistPendingSpec = useCallback(() => {
@@ -1705,7 +1863,9 @@ export function ProjectStudio() {
       );
     else {
       const url = URL.createObjectURL(
-        new Blob([currentProject.html], { type: "text/html" }),
+        new Blob([createIsolatedRuntimeFullscreenDocument(currentProject.html)], {
+          type: "text/html",
+        }),
       );
       window.open(url, "_blank", "noopener,noreferrer");
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -1754,12 +1914,21 @@ export function ProjectStudio() {
     const currentProject =
       commitPendingSpec() ?? projectRef.current ?? project;
     if (!currentProject || publishing || unpublishing) return null;
+    const trustedPublishSmoke =
+      (currentProject.quality?.runtimeSmoke?.mode === "server-artifact"
+        || currentProject.quality?.runtimeSmoke?.mode === "server-inspection")
+        ? currentProject.quality.runtimeSmoke
+        : null;
     const quality = evaluateProjectQuality(
       currentProject.spec,
       currentProject.html,
-      runtimeSmoke,
+      trustedPublishSmoke,
+      { dataProvider: hostDataProvider },
     );
-    if (!quality.readyToPublish) {
+    // Browser postMessage telemetry is never an authorization gate. When an
+    // edited workspace has no bound server inspection yet, the publish API is
+    // still reached and performs the authoritative release inspection.
+    if (trustedPublishSmoke && !quality.readyToPublish) {
       const next = { ...currentProject, quality };
       projectRef.current = next;
       setProject(next);
@@ -1798,6 +1967,7 @@ export function ProjectStudio() {
         url?: string;
         slug?: string;
         capability?: string;
+        quality?: unknown;
         code?: string;
         error?: string;
       };
@@ -1829,9 +1999,19 @@ export function ProjectStudio() {
           "The public app was created without a browser management capability. Reload before publishing again.",
         );
       }
+      const publishedQuality = acceptPublishedQuality(
+        payload.quality,
+        currentProject.spec.presetId,
+      );
+      if (!publishedQuality) {
+        throw new Error(
+          "The publish service did not return valid server inspection evidence for this product.",
+        );
+      }
       const publishedAt = new Date().toISOString();
       const next = {
         ...currentProject,
+        quality: publishedQuality,
         publishedUrl: payload.url,
         publishedSlug: payload.slug,
         publishedAt,
@@ -1860,7 +2040,7 @@ export function ProjectStudio() {
       setToast(
         publishMutation === "update"
           ? "Public app updated at the same URL"
-          : quality.externalSetupRequired
+          : publishedQuality.externalSetupRequired
           ? "Setup app published — connect and verify the external destination next"
           : "Working public app published",
       );
@@ -2024,19 +2204,32 @@ export function ProjectStudio() {
     const currentProject =
       commitPendingSpec() ?? projectRef.current ?? project;
     if (!currentProject) return;
+    const workspace =
+      currentProject.workspace ?? materializeProjectWorkspace(currentProject);
+    const selectedFile =
+      file === "quality-report.json"
+        ? file
+        : workspace.files.some((item) => item.path === file)
+          ? file
+          : "index.html";
     sourceReturnFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    setSourceFile(file);
+    if (!currentProject.workspace) {
+      const next = { ...currentProject, workspace };
+      projectRef.current = next;
+      committedProjectRef.current = next;
+      setProject(next);
+      setRuntimeProject(next);
+      void persistProject(next, currentProject.updatedAt);
+    }
+    setSourceFile(selectedFile);
     setSourceDraft(
-      file === "index.html"
-        ? prepareEditableRuntimeHtml(currentProject.html)
-        : file === "project.json"
-        ? JSON.stringify(currentProject.spec, null, 2)
-        : "",
+      workspace.files.find((item) => item.path === selectedFile)?.content ?? "",
     );
     setSourceIssues([]);
+    setWorkspaceRunError("");
     setSourceOpen(true);
   }
 
@@ -2050,11 +2243,29 @@ export function ProjectStudio() {
   }
 
   function applyProjectJson() {
-    if (!project) return;
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject) return;
     try {
       const spec = validateProjectSpec(JSON.parse(sourceDraft));
-      commitSpec(spec, "Edited project.json", "manual");
-      setSourceDraft(JSON.stringify(spec, null, 2));
+      const baseWorkspace =
+        currentProject.workspace ?? materializeProjectWorkspace(currentProject);
+      const normalized = JSON.stringify(spec, null, 2);
+      const workspace = updateWorkspaceFile(
+        spec,
+        baseWorkspace,
+        "project.json",
+        normalized,
+      );
+      const transition = commitProjectCheckpoint(currentProject, {
+        id: nowId("checkpoint"),
+        label: "Edited project.json",
+        createdAt: new Date().toISOString(),
+        source: "manual",
+        spec,
+        workspace,
+      });
+      replaceProject(transition.project);
+      setSourceDraft(normalized);
       setSourceIssues([]);
       setToast("Validated project.json applied — checkpoint created");
     } catch (error) {
@@ -2070,28 +2281,306 @@ export function ProjectStudio() {
   function applyRuntimeHtml() {
     const currentProject = projectRef.current ?? project;
     if (!currentProject) return;
-    const validation = validateEditableRuntimeHtml(
-      currentProject.spec,
-      sourceDraft,
-    );
-    if (!validation.valid) {
-      setSourceIssues(validation.issues);
-      setToast(validation.issues[0] ?? "index.html did not pass validation");
-      return;
+    try {
+      const baseWorkspace =
+        currentProject.workspace ?? materializeProjectWorkspace(currentProject);
+      const workspace = updateWorkspaceFile(
+        currentProject.spec,
+        baseWorkspace,
+        sourceFile,
+        sourceDraft,
+      );
+      const transition = commitProjectCheckpoint(currentProject, {
+        id: nowId("checkpoint"),
+        label: `Edited ${sourceFile}`,
+        createdAt: new Date().toISOString(),
+        source: "manual",
+        spec: currentProject.spec,
+        workspace,
+      });
+      replaceProject(transition.project);
+      setSourceIssues([]);
+      setToast(
+        sourceFile === "index.html"
+          ? "Validated index.html applied — preview updated and checkpoint created"
+          : `Validated ${sourceFile} applied — preview and revision updated`,
+      );
+    } catch (error) {
+      const issue =
+        error instanceof Error ? error.message : `${sourceFile} is invalid`;
+      setSourceIssues([issue]);
+      setToast(issue);
     }
-    const transition = commitProjectCheckpoint(currentProject, {
-      id: nowId("checkpoint"),
-      label: "Edited runnable index.html",
-      createdAt: new Date().toISOString(),
-      source: "manual",
-      spec: currentProject.spec,
-      runtimeHtml: sourceDraft,
-    });
-    replaceProject(transition.project);
-    setSourceIssues([]);
-    setToast(
-      "Validated index.html applied — preview updated and checkpoint created",
-    );
+  }
+
+  async function runWorkspaceTask(task: ProjectWorkspaceTask) {
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject || workspaceRunningTask) return;
+    const workspace =
+      currentProject.workspace ?? materializeProjectWorkspace(currentProject);
+    setWorkspaceRunningTask(task.id);
+    setWorkspaceRunError("");
+    try {
+      const submittedArgv = [task.command, ...task.args];
+      const submittedDigest = await createWorkspaceRunDigest({
+        files: workspace.files,
+        task: {
+          id: task.id,
+          argv: submittedArgv,
+          cwd: task.cwd ?? ".",
+          timeoutMs: 15_000,
+          previewPort: task.port,
+        },
+      });
+      const response = await fetch("/api/workspace/run", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: studioRequestHeaders(),
+        body: JSON.stringify({
+          workspaceId: currentProject.id,
+          workspace,
+          taskId: task.id,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        receipt?: WorkspaceRunReceiptView;
+        error?: string;
+      } & Partial<WorkspaceRunReceiptView>;
+      if (!response.ok) {
+        throw new Error(payload.error || "The isolated workspace task failed.");
+      }
+      const receipt = payload.receipt ??
+        (payload.providerRunId ? (payload as WorkspaceRunReceiptView) : null);
+      if (
+        !receipt ||
+        receipt.provider !== "vercel-sandbox" ||
+        receipt.workspaceId !== currentProject.id ||
+        receipt.workspaceRevision !== workspace.revision ||
+        receipt.workspaceDigest !== submittedDigest ||
+        receipt.task !== task.id ||
+        !Array.isArray(receipt.argv) ||
+        receipt.argv.length !== submittedArgv.length ||
+        receipt.argv.some((value, index) => value !== submittedArgv[index])
+      ) {
+        throw new Error(
+          "The sandbox did not return a verifiable receipt for the submitted workspace revision.",
+        );
+      }
+      setWorkspaceRunReceipt(receipt);
+      setToast(
+        receipt.exitCode === 0 || receipt.exitCode === null
+          ? `${task.label} completed in the isolated workspace`
+          : `${task.label} exited with code ${receipt.exitCode}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Workspace task failed.";
+      setWorkspaceRunError(message);
+      setToast(message);
+    } finally {
+      setWorkspaceRunningTask(null);
+    }
+  }
+
+  async function generateWorkspacePatch() {
+    const currentProject = projectRef.current ?? project;
+    const prompt = workspaceAiPrompt.trim();
+    if (!currentProject || workspaceAiRunning || prompt.length < 3) return;
+    const workspace =
+      currentProject.workspace ?? materializeProjectWorkspace(currentProject);
+    const selectedProvider = activeProvider;
+    const provider = ["openrouter", "openai", "anthropic", "kimi"].includes(
+      selectedProvider,
+    )
+      ? (selectedProvider as "openrouter" | "openai" | "anthropic" | "kimi")
+      : "platform";
+    const model =
+      provider === "platform"
+        ? undefined
+        : window.sessionStorage.getItem(
+            `drops-studio:${selectedProvider}:model`,
+          ) || currentProject.spec.brain.model;
+    const headers = studioRequestHeaders();
+    if (provider === "openrouter") {
+      const key = window.sessionStorage.getItem("drops-studio:openrouter");
+      if (key) headers["x-openrouter-key"] = key;
+    } else if (["openai", "anthropic", "kimi"].includes(provider)) {
+      const key = window.sessionStorage.getItem(`drops-studio:${provider}`);
+      if (key) headers["x-provider-key"] = key;
+    }
+
+    setWorkspaceAiRunning(true);
+    setWorkspaceAiError("");
+    try {
+      const response = await fetch("/api/workspace/patch", {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+        body: JSON.stringify({
+          prompt,
+          baseRevision: workspace.revision,
+          workspace,
+          provider,
+          ...(model ? { model } : {}),
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        workspace?: ProjectWorkspace;
+        spec?: unknown;
+        change?: {
+          revision?: number;
+          summary?: string;
+          created?: number;
+          updated?: number;
+          deleted?: number;
+        };
+        providerEvidence?: WorkspaceAiEvidenceView;
+        quota?: WorkspaceAiQuotaView | null;
+        error?: string;
+      };
+      if (!response.ok || !payload.workspace) {
+        throw new Error(
+          payload.error ||
+            "The AI provider could not create a valid source revision.",
+        );
+      }
+      const projectFile = payload.workspace.files.find(
+        (file) => file.path === "project.json",
+      );
+      const nextSpec = validateProjectSpec(
+        payload.spec ?? JSON.parse(projectFile?.content ?? "null"),
+      );
+      if (nextSpec.presetId !== currentProject.spec.presetId) {
+        throw new Error(
+          "AI source changes cannot switch this project's product category.",
+        );
+      }
+      const validation = validateProjectWorkspace(nextSpec, payload.workspace);
+      if (!validation.valid) {
+        throw new Error(
+          validation.issues[0] || "The returned workspace revision is invalid.",
+        );
+      }
+      compileWorkspaceRuntime(nextSpec, payload.workspace);
+      const transition = commitProjectCheckpoint(currentProject, {
+        id: nowId("checkpoint"),
+        label: payload.change?.summary || "AI source revision",
+        createdAt: new Date().toISOString(),
+        source: "director",
+        spec: nextSpec,
+        workspace: payload.workspace,
+      });
+      replaceProject(transition.project);
+      setSourceFile("index.html");
+      setSourceDraft(
+        payload.workspace.files.find((file) => file.path === "index.html")
+          ?.content ?? "",
+      );
+      setSourceIssues([]);
+      setWorkspaceRunError("");
+      setWorkspaceAiEvidence(payload.providerEvidence ?? null);
+      setWorkspaceAiQuota(payload.quota ?? null);
+      setWorkspaceAiPrompt("");
+      const operations = [
+        payload.change?.created ? `${payload.change.created} created` : "",
+        payload.change?.updated ? `${payload.change.updated} updated` : "",
+        payload.change?.deleted ? `${payload.change.deleted} deleted` : "",
+      ].filter(Boolean);
+      setToast(
+        `AI workspace revision ${payload.workspace.revision} applied${
+          operations.length ? ` · ${operations.join(", ")}` : ""
+        }`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "AI workspace generation failed safely.";
+      setWorkspaceAiError(message);
+      setToast(message);
+    } finally {
+      setWorkspaceAiRunning(false);
+    }
+  }
+
+  function createWorkspaceFile(path: string) {
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject) return;
+    try {
+      const workspace = addWorkspaceFile(
+        currentProject.spec,
+        currentProject.workspace ?? materializeProjectWorkspace(currentProject),
+        {
+          path,
+          content: path.endsWith(".json")
+            ? "{}\n"
+            : path.endsWith(".css")
+              ? "/* Workspace styles */\n"
+              : path.endsWith(".md")
+                ? "# Workspace note\n"
+                : "export {};\n",
+          language: path.endsWith(".json")
+            ? "json"
+            : path.endsWith(".css")
+              ? "css"
+              : path.endsWith(".md")
+                ? "markdown"
+                : "javascript",
+          role: path.startsWith("tests/") ? "test" : "client",
+        },
+      );
+      const transition = commitProjectCheckpoint(currentProject, {
+        id: nowId("checkpoint"),
+        label: `Created ${path}`,
+        createdAt: new Date().toISOString(),
+        source: "manual",
+        spec: currentProject.spec,
+        workspace,
+      });
+      replaceProject(transition.project);
+      setSourceFile(path);
+      setSourceDraft(
+        workspace.files.find((file) => file.path === path)?.content ?? "",
+      );
+      setSourceIssues([]);
+      setToast(`${path} created in workspace revision ${workspace.revision}`);
+    } catch (error) {
+      const issue = error instanceof Error ? error.message : "Could not create file.";
+      setSourceIssues([issue]);
+      setToast(issue);
+    }
+  }
+
+  function removeWorkspaceFile(path: string) {
+    const currentProject = projectRef.current ?? project;
+    if (!currentProject) return;
+    try {
+      const workspace = deleteWorkspaceFile(
+        currentProject.spec,
+        currentProject.workspace ?? materializeProjectWorkspace(currentProject),
+        path,
+      );
+      const transition = commitProjectCheckpoint(currentProject, {
+        id: nowId("checkpoint"),
+        label: `Deleted ${path}`,
+        createdAt: new Date().toISOString(),
+        source: "manual",
+        spec: currentProject.spec,
+        workspace,
+      });
+      replaceProject(transition.project);
+      setSourceFile("index.html");
+      setSourceDraft(
+        workspace.files.find((file) => file.path === "index.html")?.content ??
+          "",
+      );
+      setSourceIssues([]);
+      setToast(`${path} removed from workspace`);
+    } catch (error) {
+      const issue = error instanceof Error ? error.message : "Could not delete file.";
+      setSourceIssues([issue]);
+      setToast(issue);
+    }
   }
 
   if (!loaded)
@@ -2147,24 +2636,16 @@ export function ProjectStudio() {
   ];
   const game = project.spec.gameDirection;
   const quickPrompts = categoryPrompts[project.spec.presetId];
-  const activeSourceContent =
-    sourceFile === "index.html"
-      ? sourceDraft || project.html
-      : sourceFile === "project.json"
-        ? sourceDraft || JSON.stringify(project.spec, null, 2)
-        : JSON.stringify(quality, null, 2);
+  const activeWorkspace =
+    project.workspace ?? materializeProjectWorkspace(project);
 
   const openInspectorTab = (nextTab: InspectorTab) => {
-    if (
-      nextTab === "director" &&
-      window.matchMedia("(min-width: 1600px)").matches
-    ) {
+    setTab(nextTab);
+    if (nextTab === "director") {
       window.requestAnimationFrame(() => {
         document.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus();
       });
-      return;
     }
-    setTab(nextTab);
   };
 
   return (
@@ -2299,7 +2780,7 @@ export function ProjectStudio() {
             <span title="DropsTab attached">
               <Database />
             </span>
-            <span title="Drops Bot attached">
+            <span title="Drops Bot setup available">
               <Bot />
             </span>
           </div>
@@ -2334,7 +2815,7 @@ export function ProjectStudio() {
                 <span className="done">
                   <i>3</i>
                   <b>Foundation</b>
-                  <small>DropsTab × Drops Bot</small>
+                  <small>DropsTab × guided Drops Bot setup</small>
                 </span>
                 <span className={quality.readyToPublish ? "done" : ""}>
                   <i>4</i>
@@ -2417,7 +2898,7 @@ export function ProjectStudio() {
                     <dd>{project.spec.blueprint.dropsTabUse.join(" · ")}</dd>
                   </div>
                   <div>
-                    <dt>Drops Bot automation</dt>
+                    <dt>Drops Bot setup recipe</dt>
                     <dd>{project.spec.blueprint.dropsBotUse.join(" · ")}</dd>
                   </div>
                   {project.spec.blueprint.revisionNotes?.length ? (
@@ -3403,10 +3884,19 @@ export function ProjectStudio() {
                   <ChevronRight />
                 </button>
               </div>
+              <StudioAccountTeamPanel
+                project={project}
+                onApplyProject={applyTeamProject}
+                onToast={setToast}
+              />
+              <DropsBotWebhookConnection
+                projectId={project.id}
+                onToast={setToast}
+              />
               <TelegramChannelWizard
                 defaultTitle={project.spec.name}
-                defaultAbout={`${project.spec.tagline} Powered by DropsTab and Drops Bot.`}
-                defaultFirstPost={`${project.spec.name}\n\n${project.spec.tagline}\n\nBuilt with Drops Studio on DropsTab × Drops Bot.`}
+                defaultAbout={`${project.spec.tagline} Prepared with Drops Studio and DropsTab context.`}
+                defaultFirstPost={`${project.spec.name}\n\n${project.spec.tagline}\n\nTelegram delivery by the selected bot. Official Drops Bot Profiles require separate setup.`}
               />
             </section>
           )}
@@ -3668,12 +4158,14 @@ export function ProjectStudio() {
               <b
                 role="status"
                 aria-live="polite"
-                data-runtime-ready={runtimeReady ? "true" : "false"}
+                data-runtime-ready={browserTelemetryReady ? "true" : "false"}
               >
                 <i />
                 <span className="runtime-preview-label">Live preview</span>
                 <span className="runtime-ready-label">
-                  {runtimeReady ? "Runtime ready" : "Loading runtime"}
+                  {browserTelemetryReady
+                    ? "Browser telemetry"
+                    : "Loading preview"}
                 </span>
               </b>
             </div>
@@ -3681,8 +4173,8 @@ export function ProjectStudio() {
               ref={iframeRef}
               key={`${runtimeRevision}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
               title={`${project.spec.name} live application`}
-              srcDoc={runtimeHtml}
-              sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+              srcDoc={runtimeSrcDoc}
+              sandbox="allow-scripts allow-forms allow-downloads"
               onLoad={() =>
                 iframeRef.current?.contentWindow?.postMessage(
                   { type: "drops-studio-design-mode", enabled: designMode },
@@ -3894,7 +4386,7 @@ export function ProjectStudio() {
           <Database /> DropsTab data <b>15 min</b>
         </span>
         <span>
-          <Bot /> Drops Bot <strong>{externalSetup ? "Needs connection" : "Ready"}</strong>
+          <Bot /> Drops Bot <strong>{externalSetup ? "Needs setup" : "Guided handoff"}</strong>
         </span>
         <span>
           <ShieldCheck /> Quality <strong>{quality.score}/100</strong>
@@ -3904,131 +4396,59 @@ export function ProjectStudio() {
         </span>
       </footer>
 
-      <Dialog.Root open={sourceOpen} onOpenChange={setSourceOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="studio-dialog-overlay" />
-          <Dialog.Content
-            className="source-dialog"
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              sourceReturnFocusRef.current?.focus();
-            }}
-          >
-            <div>
-              <div>
-                <Dialog.Title>Owned source workspace</Dialog.Title>
-                <Dialog.Description>
-                  Edit the exact runnable HTML or project graph, validate it,
-                  and export the same files you run.
-                </Dialog.Description>
-              </div>
-              <Dialog.Close aria-label="Close source workspace">
-                <X />
-              </Dialog.Close>
-            </div>
-            <nav className="source-tabs" aria-label="Source files">
-              {(
-                [
-                  "index.html",
-                  "project.json",
-                  "quality-report.json",
-                ] as SourceFile[]
-              ).map((file) => (
-                <button
-                  type="button"
-                  className={sourceFile === file ? "active" : ""}
-                  key={file}
-                  onClick={() => {
-                    setSourceFile(file);
-                    setSourceIssues([]);
-                    if (file === "index.html")
-                      setSourceDraft(prepareEditableRuntimeHtml(project.html));
-                    if (file === "project.json")
-                      setSourceDraft(JSON.stringify(project.spec, null, 2));
-                  }}
-                >
-                  {file === "index.html" ? (
-                    <Code2 />
-                  ) : file === "project.json" ? (
-                    <Settings2 />
-                  ) : (
-                    <ShieldCheck />
-                  )}
-                  {file}
-                </button>
-              ))}
-            </nav>
-            {sourceFile === "index.html" || sourceFile === "project.json" ? (
-              <textarea
-                className="source-editor"
-                spellCheck={false}
-                value={
-                  sourceDraft ||
-                  (sourceFile === "project.json"
-                    ? JSON.stringify(project.spec, null, 2)
-                    : project.html)
-                }
-                onChange={(event) => {
-                  setSourceDraft(event.target.value);
-                  setSourceIssues([]);
-                }}
-                aria-label={
-                  sourceFile === "index.html"
-                    ? "Editable runnable HTML"
-                    : "Editable project JSON"
-                }
-              />
-            ) : (
-              <pre tabIndex={0} aria-label={`${sourceFile} contents`}>
-                {activeSourceContent}
-              </pre>
-            )}
-            {sourceIssues.length > 0 ? (
-              <div className="source-validation" role="alert">
-                <strong>Validation stopped this change</strong>
-                <ul>
-                  {sourceIssues.slice(0, 4).map((issue) => (
-                    <li key={issue}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <footer>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!navigator.clipboard?.writeText) {
-                    setToast("Copy is unavailable in this browser");
-                    return;
-                  }
-                  void navigator.clipboard
-                    .writeText(activeSourceContent)
-                    .then(() => setToast(`${sourceFile} copied`))
-                    .catch(() => setToast("Could not copy this file"));
-                }}
-              >
-                <Copy /> Copy file
-              </button>
-              {(sourceFile === "index.html" ||
-                sourceFile === "project.json") && (
-                <button
-                  type="button"
-                  onClick={
-                    sourceFile === "index.html"
-                      ? applyRuntimeHtml
-                      : applyProjectJson
-                  }
-                >
-                  <Check /> Validate & apply
-                </button>
-              )}
-              <button type="button" onClick={() => downloadSource()}>
-                <Download /> Download full ZIP
-              </button>
-            </footer>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <ProjectWorkspaceDialog
+        open={sourceOpen}
+        workspaceId={project.id}
+        workspace={activeWorkspace}
+        activePath={sourceFile}
+        draft={sourceDraft}
+        qualityReport={JSON.stringify(quality, null, 2)}
+        issues={sourceIssues}
+        runningTask={workspaceRunningTask}
+        receipt={workspaceRunReceipt}
+        currentWorkspaceDigest={
+          workspaceRunDigestEvidence?.project === project
+            && workspaceRunDigestEvidence.receipt === workspaceRunReceipt
+            ? workspaceRunDigestEvidence.digest
+            : null
+        }
+        runError={workspaceRunError}
+        aiPrompt={workspaceAiPrompt}
+        aiRunning={workspaceAiRunning}
+        aiError={workspaceAiError}
+        aiEvidence={workspaceAiEvidence}
+        aiQuota={workspaceAiQuota}
+        onOpenChange={(open) => {
+          setSourceOpen(open);
+          if (!open) {
+            window.requestAnimationFrame(() =>
+              sourceReturnFocusRef.current?.focus(),
+            );
+          }
+        }}
+        onSelectPath={(path) => {
+          setSourceFile(path);
+          setSourceIssues([]);
+          setSourceDraft(
+            activeWorkspace.files.find((file) => file.path === path)?.content ??
+              "",
+          );
+        }}
+        onDraftChange={(value) => {
+          setSourceDraft(value);
+          setSourceIssues([]);
+        }}
+        onApply={
+          sourceFile === "project.json" ? applyProjectJson : applyRuntimeHtml
+        }
+        onCreateFile={createWorkspaceFile}
+        onDeleteFile={removeWorkspaceFile}
+        onRunTask={(task) => void runWorkspaceTask(task)}
+        onAiPromptChange={setWorkspaceAiPrompt}
+        onGenerateAiPatch={() => void generateWorkspacePatch()}
+        onDownload={() => void downloadSource()}
+        onToast={setToast}
+      />
 
       <Dialog.Root open={publishOpen} onOpenChange={setPublishOpen}>
         <Dialog.Portal>

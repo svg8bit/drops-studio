@@ -61,12 +61,12 @@ test("server publish fails closed when category contract is tampered", async ({ 
   expect(response.status()).toBe(422)
   const payload = await response.json()
   expect(payload.criticalFailures).toContain("category")
-  expect(payload.quality.runtimeSmoke.mode).toBe("server-artifact")
+  expect(payload.quality.runtimeSmoke.mode).toBe("server-inspection")
   expect(payload.quality.runtimeSmoke.dataProvider).toBe("unverified")
 })
 
 for (const evidence of ["dropstab", "fallback"] as const) {
-  test(`browser runtime preserves ${evidence} provider evidence without overstating fallback`, async ({ page }, testInfo) => {
+  test(`browser runtime cannot mint ${evidence} provider evidence`, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "chromium-1440")
     await page.route("**/api/public-data", async (route) => {
       await route.fulfill({
@@ -94,10 +94,10 @@ for (const evidence of ["dropstab", "fallback"] as const) {
         }
       }, PROJECTS_STORAGE_KEY),
     ).toEqual({
-      provider: evidence,
-      providerPassed: evidence === "dropstab",
-      adapterPassed: true,
-      ready: true,
+      provider: null,
+      providerPassed: false,
+      adapterPassed: false,
+      ready: false,
     })
   })
 }

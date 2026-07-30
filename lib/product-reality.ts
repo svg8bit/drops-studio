@@ -57,7 +57,7 @@ export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
     externalSetupRequired: true,
     deliverable: "A runnable Telegram setup product with a sourced post composer, a Studio MTProto provisioning handoff and an existing-channel verified-send fallback.",
     worksNow: ["Market signal selection", "Sourced post composer", "Truthful Telegram preview", "Studio MTProto connection handoff", "Existing-channel bot verification"],
-    requires: ["A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "Explicit approval to create or select the destination", "Drops Bot or a BotFather bot with administrator access", "Telegram provider evidence for completion"],
+    requires: ["A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "Explicit approval to create or select the destination", "A selected platform or BotFather bot with administrator access for delivery", "Separate official Drops Bot Profile linking when Drops Bot alerts are required", "Telegram provider evidence for completion"],
     forbiddenClaims: ["already on air", "channel created", "subscribers", "preview is the channel"],
   },
   "morning-alpha": {
@@ -65,7 +65,7 @@ export const PRODUCT_REALITY: Record<PresetId, ProjectRealityContract> = {
     externalSetupRequired: true,
     deliverable: "A runnable daily brief builder with real market sections, a Studio MTProto provisioning handoff and verified existing-channel delivery.",
     worksNow: ["Live price brief", "Watchlist settings", "Truthful Telegram preview", "Studio MTProto connection handoff", "Existing-channel test delivery"],
-    requires: ["DropsTab API for unlocks and funding", "A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "Drops Bot or a BotFather bot with administrator access", "A scheduler for recurring delivery"],
+    requires: ["DropsTab API for unlocks and funding", "A Telegram user account connected in Drops Studio to create a new channel, or an existing channel", "A selected platform or BotFather bot with administrator access for delivery", "Separate official Drops Bot Profile linking when Drops Bot alerts are required", "A scheduler for recurring delivery"],
     forbiddenClaims: ["online", "scheduled delivery active", "subscribers", "preview is the channel"],
   },
   "prediction-impact": {

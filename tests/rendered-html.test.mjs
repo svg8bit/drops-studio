@@ -2,24 +2,11 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render(path = "/") {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
+test("Next production build emits the complete Drops Studio builder HTML", async () => {
+  const html = await readFile(
+    new URL("../.next/server/app/index.html", import.meta.url),
+    "utf8",
   );
-}
-
-test("server-renders the complete Drops Studio builder", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
   assert.match(html, /<title>Drops Studio/);
   assert.match(html, /Turn a crypto idea/);
   assert.match(html, /AI Morning Alpha/);
@@ -75,7 +62,13 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(setup, /Start from a blank canvas/);
   assert.match(component, /readProjectsFromStore/);
   assert.match(component, /saveProjectSafely/);
-  assert.match(component, /marker === "account-connected"/);
+  assert.match(component, /item\.id !== "dropsbot"/);
+  assert.doesNotMatch(component, /marker === "account-connected"/);
+  assert.doesNotMatch(component, /drops-studio:dropsbot.*account-connected/);
+  assert.match(telegramWizard, /Drops Studio bot/);
+  assert.match(telegramWizard, /My BotFather bot/);
+  assert.match(telegramWizard, /\/use_thread/);
+  assert.doesNotMatch(telegramWizard, /ColdMathAI_bot/);
   assert.doesNotMatch(component, /telegram-setup-started/);
   assert.equal(
     component.match(/Array\.isArray\(payload\.coins\)/g)?.length,

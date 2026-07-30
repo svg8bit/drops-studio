@@ -77,13 +77,13 @@ const seeds: Record<PresetId, BlueprintSeed> = {
     productType: "Telegram channel creator and publishing tool",
     visualConcept: "A sourced signal inbox, native Telegram composer and an explicit account connection flow that creates a real channel, adds the bot and verifies the first post.",
     primaryLoop: "Connect a Telegram user account → create or select a real channel → discover a sourced signal → enrich it with DropsTab context → approve and publish through the bot.",
-    modules: ["Signal inbox", "Post composer", "Native Telegram preview", "Channel creator", "Drops Bot automation", "Growth and monetization"],
+    modules: ["Signal inbox", "Post composer", "Native Telegram preview", "Channel creator", "Drops Bot setup", "Growth and monetization"],
     screens: ["Signal inbox", "Composer", "Telegram preview", "Account connection", "Live channel result"],
     interactions: ["Filter signals", "Generate sourced post", "Edit voice", "Connect Telegram account", "Create channel", "Add bot", "Publish first post", "Open live channel"],
     dropsTabUse: ["Token pages", "Price and market-cap context", "Unlocks", "Funding and activities"],
     dropsBotUse: ["Wallet and coin alerts", "Channel delivery", "Caller links", "Telegram profiles"],
     acceptanceChecks: ["Preview visibly looks like Telegram and is marked preview until creation succeeds", "Every post contains a DropsTab source handoff", "Only a connected Telegram user account creates the channel", "The UI reports success only after Telegram returns the channel and the bot publishes the first post"],
-    content: { headline: "Create your sourced alpha channel", subheadline: "Compose with DropsTab, then launch a real Telegram channel with Drops Bot.", primaryAction: "Create live channel", emptyState: "Choose a niche, then connect your Telegram account to create the channel." },
+    content: { headline: "Create your sourced alpha channel", subheadline: "Compose with DropsTab, then launch a real Telegram channel with your selected bot.", primaryAction: "Create live channel", emptyState: "Choose a niche, then connect your Telegram account to create the channel." },
   },
   "morning-alpha": {
     productType: "personal daily Telegram brief",
@@ -223,7 +223,7 @@ const seeds: Record<PresetId, BlueprintSeed> = {
     dropsTabUse: ["Market prices and performance", "Asset research handoffs", "Optional unlock, funding and activity context"],
     dropsBotUse: ["Explicit alert recipe setup", "Telegram delivery handoff"],
     acceptanceChecks: ["Every screen is assembled from validated components", "Stateful interactions persist locally", "No model-authored executable code is accepted", "External actions require an explicit handoff"],
-    content: { headline: "Your custom crypto product", subheadline: "A real modular app built around your workflow, DropsTab context and Drops Bot automation.", primaryAction: "Open workspace", emptyState: "Describe the workflow, audience and outcome you want to create." },
+    content: { headline: "Your custom crypto product", subheadline: "A real modular app built around your workflow, DropsTab context and explicit Drops Bot setup.", primaryAction: "Open workspace", emptyState: "Describe the workflow, audience and outcome you want to create." },
   },
 };
 
@@ -299,7 +299,7 @@ export function createDefaultCustomGraph(prompt = ""): ProjectCustomGraph {
     modules: [
       { id: "market-intelligence", title: "Market intelligence", description: "DropsTab-compatible market and research context.", componentIds: componentIds.filter((id) => ["market-pulse", "market-workspace", "asset-comparison", "event-timeline", "research-stream"].includes(id)) },
       { id: "personal-workspace", title: "Personal workspace", description: "Browser-local inputs and saved state.", componentIds: componentIds.filter((id) => ["portfolio-model", "saved-watchlist", "workspace-notes"].includes(id)) },
-      { id: "action-handoff", title: "Action handoff", description: "Consent-based Drops Bot automation setup.", componentIds: ["alert-workflow"] },
+      { id: "action-handoff", title: "Action handoff", description: "Consent-based Drops Bot setup recipe.", componentIds: ["alert-workflow"] },
     ],
     components: components.slice(0, 18),
   };

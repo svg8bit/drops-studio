@@ -10,9 +10,9 @@ import {
   GUEST_DAILY_LIMIT,
   GUEST_IDENTITY_COOKIE,
   GUEST_USAGE_COOKIE,
-  MEMBER_DAILY_LIMIT,
   MEMBER_USAGE_COOKIE,
   platformAiReadiness,
+  consumeFundedBuildQuota,
   resolveAccountCookieSecret,
   resolveGuestAccess,
   resolveStudioAccount,
@@ -455,20 +455,23 @@ export async function POST(request: NextRequest) {
         warning: "Signed-in platform AI is not fully configured. The local product compiler created this build without consuming a model allowance.",
       }, account, 0);
     }
-    const quota = await consumeRequestLimitState({
-      identity: account.identity,
-      namespace: "member-ai-plan",
-      max: MEMBER_DAILY_LIMIT,
-      windowMs: 24 * 60 * 60 * 1_000,
-    });
+    const quota = await consumeFundedBuildQuota({ kind: "account", account });
+    const memberTier = quota.tier;
+    const memberLimit = quota.limit;
     if (quota.status === "limited") {
       return responseWithMemberQuota({
         error: "Signed-in AI build limit reached.",
         code: "MEMBER_LIMIT",
         remaining: 0,
         connect: "openrouter",
-        access: accessMetadata({ tier: "member", used: quota.count ?? MEMBER_DAILY_LIMIT, account }),
-      }, account, quota.count ?? MEMBER_DAILY_LIMIT, 429);
+        tier: memberTier,
+        access: accessMetadata({
+          tier: memberTier,
+          used: quota.count ?? memberLimit,
+          account,
+          platformLimit: memberLimit,
+        }),
+      }, account, quota.count ?? memberLimit, 429);
     }
     if (quota.status === "unavailable" || quota.count === null) {
       const fallback = fallbackAgentPlan(prompt);
@@ -486,11 +489,16 @@ export async function POST(request: NextRequest) {
       const plan = alignPlanToRequestedOutput(result.plan, prompt);
       return responseWithMemberQuota({
         plan,
-        tier: "member",
+        tier: memberTier,
         model: result.model,
         usage: result.usage,
         remaining: quota.remaining,
-        access: accessMetadata({ tier: "member", used: quota.count, account }),
+        access: accessMetadata({
+          tier: memberTier,
+          used: quota.count,
+          account,
+          platformLimit: memberLimit,
+        }),
       }, account, quota.count);
     } catch (error) {
       const fallback = fallbackAgentPlan(prompt);
@@ -555,11 +563,9 @@ export async function POST(request: NextRequest) {
     }, guest, used);
   }
 
-  const quota = await consumeRequestLimitState({
+  const quota = await consumeFundedBuildQuota({
+    kind: "guest",
     identity: guest.identity,
-    namespace: "guest-ai-plan",
-    max: GUEST_DAILY_LIMIT,
-    windowMs: 24 * 60 * 60 * 1_000,
   });
   if (quota.status === "limited") {
     return responseWithQuota({

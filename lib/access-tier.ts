@@ -1,13 +1,26 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  billingTierForAccount,
+  stripeProPriceId,
+} from "./billing.ts";
+import {
+  billingStorageConfigured,
+  readBillingAccount,
+} from "../db/billing.ts";
+import {
+  consumeRequestLimitState,
+  type RequestLimitState,
+} from "./request-rate-limit.ts";
 
 export const GUEST_DAILY_LIMIT = 3;
 export const MEMBER_DAILY_LIMIT = 10;
+export const PRO_DAILY_LIMIT = 100;
 export const GUEST_IDENTITY_COOKIE = "drops_guest_identity";
 export const GUEST_USAGE_COOKIE = "drops_guest_builds";
 export const STUDIO_ACCOUNT_COOKIE = "drops_studio_account";
 export const MEMBER_USAGE_COOKIE = "drops_member_builds";
 
-export type WorkingAccessTier = "guest" | "member" | "fallback" | "byok";
+export type WorkingAccessTier = "guest" | "member" | "pro" | "fallback" | "byok";
 
 export interface StudioAccount {
   provider: "openrouter";
@@ -15,6 +28,29 @@ export interface StudioAccount {
   identity: string;
   issuedAt: number;
 }
+
+export type FundedBuildSubject =
+  | { kind: "guest"; identity: string }
+  | { kind: "account"; account: StudioAccount };
+
+export interface FundedBuildQuota {
+  tier: "guest" | "member" | "pro";
+  identity: string;
+  namespace: "guest-ai-plan" | "member-ai-plan";
+  limit: number;
+  windowMs: number;
+}
+
+export interface ConsumedFundedBuildQuota extends FundedBuildQuota, RequestLimitState {}
+
+type FundedQuotaConsumer = {
+  consume(options: {
+    identity: string | null;
+    namespace: string;
+    max: number;
+    windowMs: number;
+  }): Promise<RequestLimitState>;
+};
 
 type EnvLike = Partial<Record<
   | "NODE_ENV"
@@ -89,6 +125,67 @@ export function memberProjectSyncReadiness(env: EnvLike = process.env): boolean 
       || env.BLOB_READ_WRITE_TOKEN?.trim()
       || (env.BLOB_STORE_ID?.trim() && env.VERCEL_OIDC_TOKEN?.trim()),
   );
+}
+
+/**
+ * Resolves the one authoritative daily platform-funded build boundary.
+ * Workspace patch/generate routes must reuse this policy and namespace instead
+ * of adding an endpoint-local allowance. BYOK calls do not use this counter.
+ */
+export async function resolveFundedBuildQuota(
+  subject: FundedBuildSubject,
+): Promise<FundedBuildQuota> {
+  const windowMs = 24 * 60 * 60 * 1_000;
+  if (subject.kind === "guest") {
+    if (!/^[a-f0-9-]{16,80}$/i.test(subject.identity)) {
+      throw new Error("A signed guest identity is required for funded quota.");
+    }
+    return {
+      tier: "guest",
+      identity: subject.identity,
+      namespace: "guest-ai-plan",
+      limit: GUEST_DAILY_LIMIT,
+      windowMs,
+    };
+  }
+  let billingPolicy: Pick<FundedBuildQuota, "tier" | "limit"> = {
+    tier: "member",
+    limit: MEMBER_DAILY_LIMIT,
+  };
+  const expectedPriceId = stripeProPriceId();
+  if (expectedPriceId && billingStorageConfigured()) {
+    try {
+      const billing = await readBillingAccount(subject.account.identity);
+      const tier = billingTierForAccount(billing, expectedPriceId);
+      billingPolicy = {
+        tier,
+        limit: tier === "pro" ? PRO_DAILY_LIMIT : MEMBER_DAILY_LIMIT,
+      };
+    } catch {
+      // Paid access is fail-closed; storage failure preserves the free member boundary.
+    }
+  }
+  return {
+    tier: billingPolicy.tier,
+    identity: subject.account.identity,
+    namespace: "member-ai-plan",
+    limit: billingPolicy.limit,
+    windowMs,
+  };
+}
+
+export async function consumeFundedBuildQuota(
+  subject: FundedBuildSubject,
+  options: FundedQuotaConsumer = { consume: consumeRequestLimitState },
+): Promise<ConsumedFundedBuildQuota> {
+  const policy = await resolveFundedBuildQuota(subject);
+  const state = await options.consume({
+    identity: policy.identity,
+    namespace: policy.namespace,
+    max: policy.limit,
+    windowMs: policy.windowMs,
+  });
+  return { ...policy, ...state };
 }
 
 function validAccountSubject(value: string): boolean {
@@ -215,9 +312,17 @@ export function accessMetadata(input: {
   used: number;
   account?: StudioAccount | null;
   projectSyncAvailable?: boolean;
+  platformLimit?: number;
 }) {
-  const usesPlatformAi = input.tier === "guest" || input.tier === "member";
-  const limit = input.tier === "member" ? MEMBER_DAILY_LIMIT : GUEST_DAILY_LIMIT;
+  const usesPlatformAi = input.tier === "guest" || input.tier === "member" || input.tier === "pro";
+  const authoritativeMemberLimit = Number.isSafeInteger(input.platformLimit)
+    && Number(input.platformLimit) >= MEMBER_DAILY_LIMIT
+    && Number(input.platformLimit) <= PRO_DAILY_LIMIT
+      ? Number(input.platformLimit)
+      : MEMBER_DAILY_LIMIT;
+  const limit = input.tier === "member" || input.tier === "pro"
+    ? authoritativeMemberLimit
+    : GUEST_DAILY_LIMIT;
   const remaining = Math.max(0, limit - Math.max(0, input.used));
   const authenticated = Boolean(input.account);
   return {
@@ -250,9 +355,18 @@ export function accessMetadata(input: {
           projectSync: false,
           note: "Continue with OpenRouter to unlock the signed-in daily AI allowance. API keys remain session-only.",
         },
-    pro: {
-      available: false,
-      reason: "Billing, subscription webhooks and paid entitlements are not configured.",
-    },
+    pro: input.tier === "pro"
+      ? {
+          available: true,
+          status: "active" as const,
+          reason: null,
+        }
+      : {
+          available: false,
+          status: "inactive" as const,
+          reason: !stripeProPriceId() || !billingStorageConfigured()
+            ? "Pro billing or the configured Pro Price is unavailable on this deployment."
+            : "An active subscription to the configured Pro Price is required.",
+        },
   };
 }

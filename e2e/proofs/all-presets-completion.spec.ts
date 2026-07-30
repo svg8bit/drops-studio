@@ -411,12 +411,6 @@ async function storedProject(page: Page, projectId: string) {
   )
 }
 
-async function waitForPublishReady(page: Page, projectId: string) {
-  await expect
-    .poll(async () => (await storedProject(page, projectId)).quality?.readyToPublish)
-    .toBe(true)
-}
-
 async function publishFromStudio(page: Page, projectId: string) {
   await page.locator(".workspace-actions .publish-top").click()
   const dialog = page.locator(".publish-dialog")
@@ -461,23 +455,28 @@ async function downloadProjectArchive(
     .locator(".stage-toolbar")
     .getByRole("button", { name: "Code", exact: true })
     .click()
-  const dialog = page.locator(".source-dialog")
+  const dialog = page.getByRole("dialog", { name: "Owned source workspace" })
   await expect(dialog).toBeVisible()
-  const [download] = await Promise.all([
-    page.waitForEvent("download"),
-    dialog.getByRole("button", { name: "Download full ZIP" }).click(),
-  ])
-  expect(download.suggestedFilename()).toBe(`${project.spec.slug}-source.zip`)
-  const downloadFailure = await download.failure()
+  const downloadButton = dialog.getByRole("button", { name: "Download full ZIP" })
   if (process.env.CI) {
-    expect(downloadFailure).toBeNull()
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      downloadButton.click(),
+    ])
+    expect(download.suggestedFilename()).toBe(`${project.spec.slug}-source.zip`)
+    expect(await download.failure()).toBeNull()
   } else {
-    // The confined snap Chromium available on this VPS reports Blob downloads
-    // as canceled after emitting the correct browser event. The byte-level ZIP
-    // proof below still validates the exact Blob produced by the UI; CI keeps
-    // the stronger native-download assertion with Playwright's bundled browser.
-    expect([null, "canceled"]).toContain(downloadFailure)
+    await downloadButton.click()
   }
+  // The confined snap Chromium available on this VPS does not surface Blob
+  // downloads through Playwright's native event. The byte-level proof below
+  // validates that exact Blob locally; CI keeps the native completion check.
+
+  await expect
+    .poll(() => page.evaluate(() => Boolean((
+      window as typeof window & { __completionArchiveBlob?: Blob }
+    ).__completionArchiveBlob)))
+    .toBe(true)
 
   const archiveBase64 = await page.evaluate(async () => {
     const blob = (
@@ -605,9 +604,13 @@ test("all 12 presets complete edit, publish, replay, share and browser ZIP bound
             ],
         )
         .toBe(definition.edit.value)
-      await waitForPublishReady(page, project.id)
-
       const publishedUrl = await publishFromStudio(page, project.id)
+      const publishedProject = await storedProject(page, project.id)
+      expect(publishedProject.quality).toMatchObject({
+        readyToPublish: true,
+        criticalFailures: [],
+        runtimeSmoke: { mode: "server-inspection" },
+      })
       anonymous.allowOrigin(publishedUrl)
       const response = await anonymous.page.goto(publishedUrl, {
         waitUntil: "domcontentloaded",
@@ -615,15 +618,16 @@ test("all 12 presets complete edit, publish, replay, share and browser ZIP bound
       expect(response?.status(), `${definition.presetId} anonymous replay`).toBe(
         200,
       )
-      await expect(anonymous.page.locator("html")).toHaveAttribute(
+      const anonymousRuntime = anonymous.page.frameLocator("#projectRuntime")
+      await expect(anonymousRuntime.locator("html")).toHaveAttribute(
         "data-project-kind",
         definition.presetId,
       )
       await expect(
-        anonymous.page.locator(definition.nativeSelector).first(),
+        anonymousRuntime.locator(definition.nativeSelector).first(),
       ).toBeVisible()
-      await expectVisibleEdit(anonymous.page, definition)
-      await expect(anonymous.page.locator("#liveStatus")).toHaveText("SNAPSHOT")
+      await expectVisibleEdit(anonymousRuntime, definition)
+      await expect(anonymousRuntime.locator("#liveStatus")).toHaveText("SNAPSHOT")
 
       await expectClipboardShare(page, publishedUrl)
       const editedProject = await storedProject(page, project.id)

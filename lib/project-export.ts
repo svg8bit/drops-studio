@@ -1,6 +1,18 @@
 import { strToU8, zipSync } from "fflate";
 import { assertArtifactFilesSafe, assertProjectPayloadSafe } from "./artifact-security.ts";
+import {
+  addProjectArtifactCspMeta,
+  PROJECT_ARTIFACT_CSP,
+} from "./artifact-csp.ts";
+import {
+  findHtmlOpeningTag,
+  stripHtmlOpeningTagAttribute,
+} from "./html-opening-tag.ts";
 import { getProductReality, STUDIO_TELEGRAM_CONNECTION_URL } from "./product-reality.ts";
+import {
+  staticWorkspaceServerSource,
+  workspaceFilesForSandbox,
+} from "./project-workspace.ts";
 import type { GeneratedProject, ProjectQualityReport } from "@/lib/project-types";
 
 const OFFICIAL_DROPSTAB_MARK = /https:\/\/(?:www\.)?dropstab\.com\/images\/dropstab-logo-drop-default\.svg(?:[?#][^\s"'()<>]*)?/gi;
@@ -11,6 +23,9 @@ const UNRESOLVED_ROOT_ARCHIVE_ASSET = /(^|[\s"'(=,:])\/(?:assets|brand)\//im;
 const REMOTE_BRAND_ASSET = /https?:\/\/[^\s"'()<>]*\/(?:dropstab-logo-drop-default\.svg|drops-bot-avatar\.(?:jpe?g|png|webp))(?:[?#][^\s"'()<>]*)?/i;
 const INLINE_SVG_ELEMENT = /<svg\b/i;
 const INLINE_SVG_DATA_URI = /data:image\/svg\+xml/i;
+// A bare `blob:` source inside a CSP is a permission token, not an ephemeral
+// asset dependency. Actual object URLs always continue with an origin/id.
+const SESSION_BLOB_URL = /\bblob:(?![\s"'`;,)])/i;
 
 export interface ProjectArchiveAssets {
   brand: {
@@ -28,14 +43,77 @@ function portableEndpoint(value: string): string {
   return value.replace(LOOPBACK_ORIGIN, ".");
 }
 
-function archiveProviderEvidence(quality: ProjectQualityReport): "dropstab" | "fallback" | "unverified" {
-  const value = String(quality.runtimeSmoke?.dataProvider || "").trim().toLowerCase();
-  if (value === "dropstab" || value === "fallback") return value;
+function archiveProviderEvidence(): "unverified" {
   return "unverified";
 }
 
 function stampArchiveProviderEvidence(html: string, evidence: "dropstab" | "fallback" | "unverified"): string {
-  return html.replace(/<html\b(?![^>]*\bdata-provider-evidence=)/i, `<html data-provider-evidence="${evidence}"`);
+  const root = findHtmlOpeningTag(html, "html");
+  if (!root) throw new Error("Archive provider evidence requires a complete html opening tag.");
+  const sanitized = stripHtmlOpeningTagAttribute(
+    root.source,
+    "data-provider-evidence",
+  );
+  const stamped = `${sanitized.slice(0, -1)} data-provider-evidence="${evidence}">`;
+  return `${html.slice(0, root.start)}${stamped}${html.slice(root.end)}`;
+}
+
+function archiveQualityReport(
+  quality: ProjectQualityReport,
+): ProjectQualityReport {
+  const providerDetail =
+    "Provider evidence is unverified in a client ZIP; browser telemetry is not provider proof.";
+  const sourceChecks = quality.checks.some(
+    (check) => check.id === "provider-evidence",
+  )
+    ? quality.checks
+    : [
+        ...quality.checks,
+        {
+          id: "provider-evidence",
+          label: "Live provider evidence",
+          passed: false,
+          detail: providerDetail,
+          weight: 1,
+          critical: false,
+        },
+      ];
+  const checks = sourceChecks.map((check) =>
+    check.id === "provider-evidence"
+      ? {
+          ...check,
+          passed: false,
+          detail: providerDetail,
+        }
+      : check,
+  );
+  const totalWeight = checks.reduce((sum, check) => sum + check.weight, 0);
+  const passedWeight = checks
+    .filter((check) => check.passed)
+    .reduce((sum, check) => sum + check.weight, 0);
+  const score = totalWeight > 0
+    ? Math.round((passedWeight / totalWeight) * 100)
+    : quality.score;
+  const criticalFailures = checks.length > 0
+    ? checks
+        .filter((check) => check.critical && !check.passed)
+        .map((check) => check.id)
+    : quality.criticalFailures;
+  return {
+    ...quality,
+    score,
+    readyToPublish: score >= 85 && criticalFailures.length === 0,
+    checks,
+    criticalFailures,
+    ...(quality.runtimeSmoke
+      ? {
+          runtimeSmoke: {
+            ...quality.runtimeSmoke,
+            dataProvider: "unverified",
+          },
+        }
+      : {}),
+  };
 }
 
 function archiveTelegramConnectionUrl(projectSlug: string): string {
@@ -68,7 +146,7 @@ export function makeArchiveHtmlPortable(
   if (LOOPBACK_DEPENDENCY.test(portable)) {
     throw new Error("ZIP export cannot depend on a localhost or loopback URL.");
   }
-  if (/\bblob:/i.test(portable)) {
+  if (SESSION_BLOB_URL.test(portable)) {
     throw new Error("ZIP export cannot include a session-only blob URL. Upload or embed the asset before exporting.");
   }
   if (INLINE_SVG_ELEMENT.test(portable) || INLINE_SVG_DATA_URI.test(portable)) {
@@ -89,13 +167,91 @@ function requiredAsset(bytes: Uint8Array | undefined, path: string): Uint8Array 
 
 function assertLocalReferencesBundled(html: string, files: Record<string, Uint8Array>): void {
   const references = new Set(
-    [...html.matchAll(/\.\/((?:assets|brand)\/[a-z0-9._/-]+)/gi)].map((match) => match[1]),
+    [
+      ...html.matchAll(
+        /(?:\.\.\/|\.\/)+((?:assets|brand)\/[a-z0-9._/-]+)/gi,
+      ),
+    ].map((match) => match[1]),
   );
   for (const reference of references) {
     if (!files[reference]?.byteLength) {
       throw new Error(`ZIP export references local asset "${reference}" but did not bundle it.`);
     }
   }
+}
+
+function workspaceAssetBytes(
+  path: string,
+  assets: ProjectArchiveAssets,
+): Uint8Array | null {
+  if (path === "brand/dropstab-mark.svg") {
+    return requiredAsset(assets.brand?.dropstabMarkSvg, path);
+  }
+  if (path === "brand/drops-bot-avatar.jpg") {
+    return requiredAsset(assets.brand?.dropsBotAvatarJpeg, path);
+  }
+  if (path === "assets/market-catcher-retro.png") {
+    return requiredAsset(assets.game?.marketCatcherBackgroundPng, path);
+  }
+  if (path === "assets/market-wolf-catcher.png") {
+    return requiredAsset(assets.game?.marketWolfSpritePng, path);
+  }
+  return null;
+}
+
+function workspaceAssetReferences(source: string): Set<string> {
+  return new Set(
+    [
+      ...source.matchAll(
+        /(?:\.\.\/|\.\/)+((?:assets|brand)\/[a-z0-9._/-]+)/gi,
+      ),
+    ].map((match) => match[1]),
+  );
+}
+
+function workspaceRelativeAssetPaths(source: string, path: string): string {
+  const depth = Math.max(0, path.split("/").length - 1);
+  if (depth === 0) return source;
+  const prefix = "../".repeat(depth);
+  return source.replace(
+    /(^|[\s"'(=,:])\.\/((?:assets|brand)\/[a-z0-9._/-]+)/gim,
+    `$1${prefix}$2`,
+  );
+}
+
+function portableWorkspaceSource(
+  path: string,
+  role: string,
+  source: string,
+  studioTelegramUrl: string,
+): string {
+  if (path === "project.json") {
+    let spec: Record<string, unknown>;
+    try {
+      spec = JSON.parse(source) as Record<string, unknown>;
+    } catch {
+      throw new Error("workspace/project.json must contain valid JSON before export.");
+    }
+    if (typeof spec.dataEndpoint === "string") {
+      spec.dataEndpoint = portableEndpoint(spec.dataEndpoint);
+    }
+    return makeArchiveHtmlPortable(
+      JSON.stringify(spec, null, 2),
+      studioTelegramUrl,
+    );
+  }
+
+  if (
+    role !== "integration-config" &&
+    !/\.(?:html?|css|js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(path)
+  ) {
+    return source;
+  }
+
+  const portable = makeArchiveHtmlPortable(source, studioTelegramUrl);
+  return /\.css$/i.test(path) || /\.html?$/i.test(path)
+    ? workspaceRelativeAssetPaths(portable, path)
+    : portable;
 }
 
 function projectReadme(project: GeneratedProject): string {
@@ -131,7 +287,7 @@ This is a runnable crypto product generated by Drops Studio.
 
 Publishing this web app does not claim that an external Telegram channel, wallet feed, trade, community backend or scheduled job exists. Those outcomes are marked pending until their provider verifies them.
 
-For a new Telegram channel, open the [Drops Studio Telegram connection flow](${STUDIO_TELEGRAM_CONNECTION_URL}). It connects the user's Telegram account through the existing MTProto wizard only after explicit consent, creates or selects the real destination, then adds and configures Drops Bot. The Telegram-shaped preview in \`index.html\` is never evidence that this external setup finished.
+For a new Telegram channel, open the [Drops Studio Telegram connection flow](${STUDIO_TELEGRAM_CONNECTION_URL}). It connects the user's Telegram account through the existing MTProto wizard only after explicit consent, creates or selects the real destination, then adds the selected platform or user-supplied Telegram bot. Official Drops Bot Profile linking remains a separate guided step in Telegram. The Telegram-shaped preview in \`index.html\` is never evidence that either setup finished.
 
 For a channel the user already owns, a Vercel deployment can use the included session-only BotFather fallback to verify administrator permissions and optionally send a test post. Completion requires Telegram's returned channel identity and, for delivery, a message ID.
 
@@ -179,7 +335,9 @@ export default async function handler(req, res) {
     if (!["creator", "administrator"].includes(member.status) || member.can_post_messages === false) return reply(res, 409, { error: "Bot needs channel admin post permission" });
     if (sendTest && !message) return reply(res, 400, { error: "Add a test message before sending" });
     const sent = sendTest ? await call(token, "sendMessage", { chat_id: chat.id, text: message, disable_web_page_preview: false }) : null;
-    return reply(res, 200, { verified: true, sent: Boolean(sent), bot: { username: bot.username || bot.first_name || "Telegram bot" }, channel: { id: String(chat.id), title: chat.title || chat.username || channel, username: chat.username ? "@" + chat.username : undefined }, messageId: sent?.message_id, storage: "session-only" });
+    const messageId = sent?.message_id;
+    if (sendTest && (!Number.isSafeInteger(messageId) || messageId <= 0)) throw new Error("Telegram delivery receipt is missing");
+    return reply(res, 200, { verified: true, sent: messageId !== undefined, bot: { username: bot.username || bot.first_name || "Telegram bot" }, channel: { id: String(chat.id), title: chat.title || chat.username || channel, username: chat.username ? "@" + chat.username : undefined }, messageId, storage: "session-only" });
   } catch { return reply(res, 422, { error: "Check the token, channel and bot admin permissions" }); }
 }
 `;
@@ -636,10 +794,14 @@ export function buildProjectArchiveFiles(
   assertProjectPayloadSafe(project.spec, "exported project spec");
   const slug = project.spec.slug;
   const reality = getProductReality(project.spec.presetId);
-  const providerEvidence = archiveProviderEvidence(quality);
-  const archiveHtml = makeArchiveHtmlPortable(
-    stampArchiveProviderEvidence(project.html, providerEvidence),
-    archiveTelegramConnectionUrl(project.spec.slug),
+  const providerEvidence = archiveProviderEvidence();
+  const exportedQuality = archiveQualityReport(quality);
+  const studioTelegramUrl = archiveTelegramConnectionUrl(project.spec.slug);
+  const archiveHtml = addProjectArtifactCspMeta(
+    makeArchiveHtmlPortable(
+      stampArchiveProviderEvidence(project.html, providerEvidence),
+      studioTelegramUrl,
+    ),
   );
   const portableSpec = {
     ...project.spec,
@@ -664,7 +826,7 @@ export function buildProjectArchiveFiles(
         url: STUDIO_TELEGRAM_CONNECTION_URL,
         userConsentRequired: true,
         credentialsIncluded: false,
-        completionEvidence: ["Telegram channel identity", "Configured bot administrator", "Test-message ID"],
+        completionEvidence: ["Telegram channel identity", "Selected Telegram bot administrator", "Test-message ID"],
       },
       existingChannel: {
         mode: "session-only-bot-verification",
@@ -694,9 +856,9 @@ export function buildProjectArchiveFiles(
     "index.html": strToU8(archiveHtml),
     "README.md": strToU8(projectReadme(project)),
     "project.json": strToU8(portableProjectJson),
-    "quality-report.json": strToU8(JSON.stringify(quality, null, 2)),
+    "quality-report.json": strToU8(JSON.stringify(exportedQuality, null, 2)),
     "drops.config.json": strToU8(JSON.stringify(integrationManifest, null, 2)),
-    "tests/smoke.mjs": strToU8(`import assert from "node:assert/strict";\nimport { readFile } from "node:fs/promises";\nconst html = await readFile(new URL("../index.html", import.meta.url), "utf8");\nassert.match(html, /data-project-kind="${project.spec.presetId}"/);\nassert.match(html, /data-provider-evidence="(?:dropstab|fallback|unverified)"/);\nassert.match(html, /DropsTab/);\nassert.match(html, /Drops Bot/);\nassert.doesNotMatch(html, /(?:^|[\\s"'(=,:])\\\/(?:assets|brand)\\\//im);\nassert.doesNotMatch(html, /https?:\\/\\/[^\\s"'()<>]*\\/(?:dropstab-logo-drop-default\\.svg|drops-bot-avatar\\.(?:jpe?g|png|webp))/i);\nassert.doesNotMatch(html, /https?:\\/\\/(?:localhost|127(?:\\.\\d{1,3}){3}|0\\.0\\.0\\.0|\\[::1\\])(?::\\d+)?/i);\nassert.doesNotMatch(html, /\\bblob:/i);\nassert.doesNotMatch(html, /<svg\\b/i);\nassert.doesNotMatch(html, /data:image\\/svg\\+xml/i);\nassert.doesNotMatch(html, /font-size:\\s*(?:[6-9]|10|11)px/i);\nassert.doesNotMatch(html, /\\beval\\s*\\(|new Function/);\nconst assetReferences = new Set([...html.matchAll(/\\.\\/((?:assets|brand)\\/[a-z0-9._/-]+)/gi)].map((match) => match[1]));\nfor (const asset of assetReferences) await readFile(new URL("../" + asset, import.meta.url));\nawait readFile(new URL("../brand/dropstab-mark.svg", import.meta.url));\nawait readFile(new URL("../brand/drops-bot-avatar.jpg", import.meta.url));\nawait readFile(new URL("../api/public-data.mjs", import.meta.url));\nif (/data-project-kind="crypto-game"/.test(html)) {\n  await readFile(new URL("../assets/market-catcher-retro.png", import.meta.url));\n}\nif (/data-project-kind="(?:crypto-game|portfolio-tamagotchi)"/.test(html)) {\n  await readFile(new URL("../assets/market-wolf-catcher.png", import.meta.url));\n}\nif (/data-project-kind="(?:alpha-channel|morning-alpha)"/.test(html)) {\n  assert.match(html, /flow=telegram-channel/);\n  assert.match(html, /existing channel/i);\n  assert.match(html, /PREVIEW · NOT PUBLISHED/);\n}\nconsole.log("Drops Studio smoke checks passed");\n`),
+    "tests/smoke.mjs": strToU8(`import assert from "node:assert/strict";\nimport { readFile } from "node:fs/promises";\nconst html = await readFile(new URL("../index.html", import.meta.url), "utf8");\nassert.match(html, /data-project-kind="${project.spec.presetId}"/);\nassert.match(html, /data-provider-evidence="unverified"/);\nassert.match(html, /DropsTab/);\nassert.match(html, /Drops Bot/);\nassert.doesNotMatch(html, /(?:^|[\\s"'(=,:])\\\/(?:assets|brand)\\\//im);\nassert.doesNotMatch(html, /https?:\\/\\/[^\\s"'()<>]*\\/(?:dropstab-logo-drop-default\\.svg|drops-bot-avatar\\.(?:jpe?g|png|webp))/i);\nassert.doesNotMatch(html, /https?:\\/\\/(?:localhost|127(?:\\.\\d{1,3}){3}|0\\.0\\.0\\.0|\\[::1\\])(?::\\d+)?/i);\nassert.doesNotMatch(html, /(?:src|href)\\s*=\\s*["']blob:/i);\nassert.doesNotMatch(html, /<svg\\b/i);\nassert.doesNotMatch(html, /data:image\\/svg\\+xml/i);\nassert.doesNotMatch(html, /font-size:\\s*(?:[6-9]|10|11)px/i);\nassert.doesNotMatch(html, /\\beval\\s*\\(|new Function/);\nconst assetReferences = new Set([...html.matchAll(/\\.\\/((?:assets|brand)\\/[a-z0-9._/-]+)/gi)].map((match) => match[1]));\nfor (const asset of assetReferences) await readFile(new URL("../" + asset, import.meta.url));\nawait readFile(new URL("../brand/dropstab-mark.svg", import.meta.url));\nawait readFile(new URL("../brand/drops-bot-avatar.jpg", import.meta.url));\nawait readFile(new URL("../api/public-data.mjs", import.meta.url));\nif (/data-project-kind="crypto-game"/.test(html)) {\n  await readFile(new URL("../assets/market-catcher-retro.png", import.meta.url));\n}\nif (/data-project-kind="(?:crypto-game|portfolio-tamagotchi)"/.test(html)) {\n  await readFile(new URL("../assets/market-wolf-catcher.png", import.meta.url));\n}\nif (/data-project-kind="(?:alpha-channel|morning-alpha)"/.test(html)) {\n  assert.match(html, /flow=telegram-channel/);\n  assert.match(html, /existing channel/i);\n  assert.match(html, /PREVIEW · NOT PUBLISHED/);\n}\nconsole.log("Drops Studio smoke checks passed");\n`),
     "api/telegram/verify.mjs": strToU8(telegramFunction),
     "api/public-data.mjs": strToU8(publicDataFunction),
     "vercel.json": strToU8(JSON.stringify({
@@ -706,12 +868,12 @@ export function buildProjectArchiveFiles(
         source: "/(.*)",
         headers: [
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
-          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "Content-Security-Policy", value: PROJECT_ARTIFACT_CSP },
           { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       }],
     }, null, 2)),
-    "netlify.toml": strToU8(`[build]\n  publish = "."\n\n[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = "nosniff"\n    X-Frame-Options = "SAMEORIGIN"\n    Content-Security-Policy = "frame-ancestors 'self'"\n`),
+    "netlify.toml": strToU8(`[build]\n  publish = "."\n\n[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = "nosniff"\n    X-Frame-Options = "SAMEORIGIN"\n    Content-Security-Policy = "${PROJECT_ARTIFACT_CSP}"\n`),
     "wrangler.toml": strToU8(`name = "${slug}"\ncompatibility_date = "2026-07-28"\n[assets]\ndirectory = "."\n`),
     ".github/workflows/pages.yml": strToU8(`name: Deploy static site to Pages\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\npermissions:\n  contents: read\n  pages: write\n  id-token: write\njobs:\n  deploy:\n    environment:\n      name: github-pages\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/configure-pages@v5\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: .\n      - uses: actions/deploy-pages@v4\n`),
     "brand/dropstab-mark.svg": requiredAsset(
@@ -757,6 +919,88 @@ export function buildProjectArchiveFiles(
     files["api/product-hunt/launches.mjs"] = strToU8(productHuntLaunchesFunction);
     files["api/product-hunt/launches/[id]/vote.mjs"] = strToU8(productHuntVoteFunction);
     files["tests/community-smoke.mjs"] = strToU8(`import assert from "node:assert/strict";\nimport { readFile } from "node:fs/promises";\nfor (const file of ["../api/product-hunt/launches.mjs", "../api/product-hunt/launches/[id]/vote.mjs", "../server/product-hunt-store.mjs"]) await readFile(new URL(file, import.meta.url));\nconst envExample = await readFile(new URL("../.env.example", import.meta.url), "utf8");\nassert.match(envExample, /^BLOB_READ_WRITE_TOKEN=$/m);\nconst manifest = JSON.parse(await readFile(new URL("../drops.config.json", import.meta.url), "utf8"));\nassert.equal(manifest.community.provider, "Vercel Blob");\nassert.equal(manifest.community.credentialsIncluded, false);\nconsole.log("Drops Studio community backend smoke checks passed");\n`);
+  }
+  if (project.workspace) {
+    const snapshot = workspaceFilesForSandbox(project.spec, project.workspace);
+    const roles = new Map(
+      project.workspace.files.map((source) => [source.path, source.role]),
+    );
+    const workspaceFiles: Record<string, Uint8Array> = {};
+    const portableSources: string[] = [];
+    for (const source of snapshot.files) {
+      const content = portableWorkspaceSource(
+        source.path,
+        roles.get(source.path) ?? "documentation",
+        source.content,
+        studioTelegramUrl,
+      );
+      workspaceFiles[source.path] = strToU8(content);
+      portableSources.push(content);
+    }
+    const portableManifest = JSON.parse(
+      new TextDecoder().decode(workspaceFiles["package.json"]),
+    ) as Record<string, unknown>;
+    const sourceScripts =
+      portableManifest.scripts
+      && typeof portableManifest.scripts === "object"
+      && !Array.isArray(portableManifest.scripts)
+        ? portableManifest.scripts as Record<string, unknown>
+        : {};
+    const sourceStart = typeof sourceScripts.start === "string"
+      ? sourceScripts.start
+      : null;
+    portableManifest.scripts = {
+      ...sourceScripts,
+      start: "node .drops-studio/serve.mjs",
+    };
+    const safeManifest = JSON.stringify(portableManifest, null, 2);
+    const safeServer = staticWorkspaceServerSource();
+    workspaceFiles["package.json"] = strToU8(safeManifest);
+    workspaceFiles[".drops-studio/serve.mjs"] = strToU8(safeServer);
+    workspaceFiles[".drops-studio/export.json"] = strToU8(
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          safeStart: "node .drops-studio/serve.mjs",
+          sourceStart,
+          editableSourceServer: "../server.mjs",
+          reason:
+            "The exported default start command uses the Studio-owned CSP server. The editable source server remains available for intentional sandbox work.",
+        },
+        null,
+        2,
+      ),
+    );
+    portableSources.push(safeManifest, safeServer);
+    workspaceFiles["brand/dropstab-mark.svg"] = files["brand/dropstab-mark.svg"];
+    workspaceFiles["brand/drops-bot-avatar.jpg"] =
+      files["brand/drops-bot-avatar.jpg"];
+    for (const source of portableSources) {
+      for (const reference of workspaceAssetReferences(source)) {
+        if (!workspaceFiles[reference]) {
+          const bytes = workspaceAssetBytes(reference, assets);
+          if (bytes) workspaceFiles[reference] = bytes;
+        }
+      }
+    }
+    for (const source of portableSources) {
+      assertLocalReferencesBundled(source, workspaceFiles);
+    }
+    for (const [path, bytes] of Object.entries(workspaceFiles)) {
+      files[`workspace/${path}`] = bytes;
+    }
+    files["workspace/.drops-studio-revision.json"] = strToU8(
+      JSON.stringify(
+        {
+          schemaVersion: project.workspace.schemaVersion,
+          revision: project.workspace.revision,
+          updatedAt: project.workspace.updatedAt,
+          credentialsIncluded: false,
+        },
+        null,
+        2,
+      ),
+    );
   }
   assertLocalReferencesBundled(archiveHtml, files);
   assertArtifactFilesSafe(files);
