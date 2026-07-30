@@ -1,8 +1,10 @@
 # Codex master prompt — implementation ledger
 
-**Source brief:** `CODEX-MASTER-PROMPT.md` supplied by the product owner  
-**Baseline commit:** `f47f14e`  
-**Project V2 commit:** `129af40`  
+**Source brief:** `CODEX-MASTER-PROMPT.md` supplied by the product owner
+
+**Baseline commit:** `f47f14e`
+
+**Project V2 commit:** `129af40`
 
 This file makes the supplied master prompt discoverable under its original
 filename and records where each requested capability lives. The source prompt

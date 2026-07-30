@@ -1,7 +1,9 @@
 # Context Compiler and RAG — implemented contract
 
-**Source brief:** `CONTEXT_COMPILER_RAG.md` supplied by the product owner  
-**Implementation version:** 2.0.0  
+**Source brief:** `CONTEXT_COMPILER_RAG.md` supplied by the product owner
+
+**Implementation version:** 2.0.0
+
 **Status:** working and covered by focused tests
 
 This document keeps the supplied architecture visible in the repository while
