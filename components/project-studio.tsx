@@ -533,6 +533,7 @@ export function ProjectStudio() {
   const quietCommitTimerRef = useRef<number | null>(null);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const cloudSyncAvailableRef = useRef(false);
+  const projectV2SyncAvailableRef = useRef(false);
   const cloudRevisionRef = useRef<number | null>(null);
   const projectV2CloudRevisionRef = useRef<number | null>(null);
   const [project, setProject] = useState<GeneratedProject | null>(null);
@@ -612,6 +613,31 @@ export function ProjectStudio() {
         }
 
         if (!cloudSyncAvailableRef.current) {
+          if (next.projectV2 && projectV2SyncAvailableRef.current) {
+            try {
+              const v2Record = await saveProjectV2ToCloud(
+                next.projectV2,
+                projectV2CloudRevisionRef.current ?? 0,
+              );
+              projectV2CloudRevisionRef.current = v2Record.storageRevision;
+              setProjectSyncStatus("synced");
+              return true;
+            } catch (error) {
+              if (
+                error instanceof ProjectV2SyncError
+                && error.code === "PROJECT_V2_REVISION_CONFLICT"
+              ) {
+                if (error.storageRevision !== undefined) {
+                  projectV2CloudRevisionRef.current = error.storageRevision;
+                }
+                setProjectSyncStatus("conflict");
+                setToast(
+                  "The Project V2 filesystem changed in another session. Reload before writing files.",
+                );
+                return false;
+              }
+            }
+          }
           setProjectSyncStatus("local");
           return true;
         }
@@ -686,6 +712,7 @@ export function ProjectStudio() {
         const accessPayload = (await accessResponse.json()) as {
           access?: {
             authenticated?: boolean;
+            projectSync?: boolean;
             account?: { connected?: boolean; projectSync?: boolean };
           };
         };
@@ -695,7 +722,15 @@ export function ProjectStudio() {
           accessPayload.access.account?.connected &&
           accessPayload.access.account.projectSync,
         );
+        const projectV2CloudAvailable = Boolean(
+          accessResponse.ok
+          && (
+            accessPayload.access?.projectSync
+            ?? accessPayload.access?.account?.projectSync
+          ),
+        );
         cloudSyncAvailableRef.current = cloudAvailable;
+        projectV2SyncAvailableRef.current = projectV2CloudAvailable;
         if (cloudAvailable) {
           const cloud = await listMemberProjectsFromCloud();
           const record = cloud.projects.find((item) => item.id === params.id);
@@ -728,11 +763,34 @@ export function ProjectStudio() {
             projectV2CloudRevisionRef.current = 0;
             setProjectSyncStatus(found ? "local" : "synced");
           }
+        } else if (projectV2CloudAvailable) {
+          const cloudProjectV2 = await loadProjectV2FromCloud(params.id);
+          projectV2CloudRevisionRef.current = cloudProjectV2?.storageRevision ?? 0;
+          if (cloudProjectV2) {
+            if (found) {
+              found = { ...found, projectV2: cloudProjectV2.project };
+            } else {
+              const spec = validateProjectSpec(cloudProjectV2.project.productSpec);
+              found = {
+                id: cloudProjectV2.project.id,
+                spec,
+                html: compileProject(spec),
+                projectV2: cloudProjectV2.project,
+                createdAt: cloudProjectV2.project.createdAt,
+                updatedAt: cloudProjectV2.project.updatedAt,
+              };
+            }
+            setProjectSyncStatus("synced");
+          } else {
+            setProjectSyncStatus(found ? "local" : "synced");
+          }
         } else {
+          projectV2SyncAvailableRef.current = false;
           setProjectSyncStatus("local");
         }
       } catch {
         cloudSyncAvailableRef.current = false;
+        projectV2SyncAvailableRef.current = false;
         setProjectSyncStatus("local");
       }
       if (cancelled) return;
@@ -1587,7 +1645,7 @@ export function ProjectStudio() {
     };
     projectRef.current = conversationDraft;
     setProject(conversationDraft);
-    if (activeProject.projectV2 && cloudSyncAvailableRef.current) {
+    if (activeProject.projectV2 && projectV2SyncAvailableRef.current) {
       try {
         await fetch("/api/access", {
           credentials: "same-origin",

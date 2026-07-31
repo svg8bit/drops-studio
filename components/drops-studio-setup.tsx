@@ -7,6 +7,7 @@ import {
   BadgeCheck,
   BrainCircuit,
   Check,
+  ChevronDown,
   Cloud,
   Code2,
   LoaderCircle,
@@ -14,7 +15,6 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { Preset } from "@/lib/presets";
 import type { GeneratedProjectSpec } from "@/lib/project-types";
@@ -65,23 +65,21 @@ function SelectControl({
   ariaLabel: string;
 }) {
   return (
-    <Select
-      value={value}
-      onValueChange={(nextValue) => {
-        if (typeof nextValue === "string") onChange(nextValue);
-      }}
-    >
-      <SelectTrigger className="field-select" aria-label={ariaLabel}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="select-content" align="start" sideOffset={6}>
+    <div className="field-select-wrap">
+      <select
+        aria-label={ariaLabel}
+        className="field-select"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      >
         {options.map((option) => (
-          <SelectItem className="select-item" key={option} value={option}>
+          <option key={option} value={option}>
             {option}
-          </SelectItem>
+          </option>
         ))}
-      </SelectContent>
-    </Select>
+      </select>
+      <ChevronDown aria-hidden="true" />
+    </div>
   );
 }
 

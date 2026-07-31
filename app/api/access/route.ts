@@ -65,6 +65,8 @@ export async function GET(request: NextRequest) {
   const access = accessMetadata({
     tier: context.configured && readiness.available ? "guest" : "fallback",
     used: context.used,
+    projectSyncAvailable: context.configured
+      && memberProjectSyncReadiness(readinessEnvironment),
   });
   const response = NextResponse.json(
     {

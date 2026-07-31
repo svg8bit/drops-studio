@@ -41,7 +41,7 @@ test("platform overview renders the server snapshot instead of hardcoded readine
     readFile(new URL("../app/platform/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/platform/platform-overview.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(pageSource, /platformCapabilitySnapshot\(\)/);
+  assert.match(pageSource, /platformCapabilitySnapshotWithHealth\(\)/);
   assert.match(pageSource, /PlatformOverview snapshot=\{snapshot\}/);
   assert.match(overviewSource, /snapshot\.capabilities\.find/);
   assert.doesNotMatch(overviewSource, /title: "Vercel Sandbox", status:/);

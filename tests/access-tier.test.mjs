@@ -192,7 +192,17 @@ test("access metadata exposes only tiers that actually work", () => {
   assert.equal(guest.byok.available, true);
   assert.equal(guest.account.available, true);
   assert.equal(guest.account.connected, false);
+  assert.equal(guest.projectSync, false);
   assert.equal(guest.pro.available, false);
+
+  const guestWithPrivateStorage = accessMetadata({
+    tier: "guest",
+    used: 1,
+    projectSyncAvailable: true,
+  });
+  assert.equal(guestWithPrivateStorage.projectSync, true);
+  assert.equal(guestWithPrivateStorage.account.connected, false);
+  assert.match(guestWithPrivateStorage.account.note, /Guest projects use actor-owned private storage/);
 
   const byok = accessMetadata({ tier: "byok", used: 0 });
   assert.equal(byok.platformAi.available, false);
@@ -307,6 +317,7 @@ test("access status issues a signed HttpOnly anonymous identity without claiming
     assert.equal(payload.access.account.available, true);
     assert.equal(payload.access.account.connected, false);
     assert.equal(payload.access.authenticated, false);
+    assert.equal(payload.access.projectSync, true);
     assert.equal(payload.access.pro.available, false);
     assert.match(response.headers.get("set-cookie") ?? "", /drops_guest_identity=/);
     assert.match(response.headers.get("set-cookie") ?? "", /HttpOnly/i);
@@ -395,6 +406,7 @@ test("access status recognizes a signed member and reports its daily platform al
     assert.equal(payload.access.platformAi.limit, MEMBER_DAILY_LIMIT);
     assert.equal(payload.access.platformAi.remaining, MEMBER_DAILY_LIMIT - 3);
     assert.equal(payload.access.account.provider, "openrouter");
+    assert.equal(payload.access.projectSync, true);
     assert.equal(payload.access.account.projectSync, true);
   } finally {
     globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ = undefined;

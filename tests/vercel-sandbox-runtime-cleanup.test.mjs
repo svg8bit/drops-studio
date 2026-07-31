@@ -86,6 +86,19 @@ function putRequest(body, cookie) {
   });
 }
 
+function proxiedPutRequest(body, cookie) {
+  return new NextRequest("http://localhost:3000/api/projects/v2", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      host: "127.0.0.1:3000",
+      origin: "http://127.0.0.1:3000",
+      cookie: `${GUEST_IDENTITY_COOKIE}=${cookie}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 async function fixtureProject() {
   return materializeProjectV2Template({
     id: "cleanup-project-v2",
@@ -165,6 +178,18 @@ test("Project V2 deletion destroys its deterministic Sandbox before removing sto
   assert.deepEqual(calls, { resume: 1, destroy: 1 });
   assert.equal(await readProjectV2Snapshot(actor.identity, project.id), null);
   assert.equal(await hasProjectV2ReleaseReceipt(receipt), false);
+});
+
+test("Project V2 accepts the browser-visible host behind a trusted same-origin proxy", async () => {
+  globalThis.__DROPS_STUDIO_LOCAL_PROJECT_V2__?.clear();
+  const { cookie } = guestSession();
+  const project = await fixtureProject();
+  const response = await putProjectV2(proxiedPutRequest({
+    project,
+    expectedStorageRevision: 0,
+  }, cookie));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).storageRevision, 1);
 });
 
 test("Project V2 deletion fails closed and retains storage when Sandbox destroy fails", async () => {

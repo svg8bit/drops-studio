@@ -45,6 +45,21 @@ export function OrganizationConsole() {
     setState("loading");
     setMessage("");
     try {
+      const accessResponse = await fetch("/api/access", {
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      });
+      const accessPayload = await accessResponse.json().catch(() => ({})) as {
+        access?: { authenticated?: boolean };
+      };
+      if (!accessResponse.ok) {
+        throw new Error("Account readiness could not be verified.");
+      }
+      if (accessPayload.access?.authenticated !== true) {
+        setState("signed-out");
+        return;
+      }
       const response = await fetch("/api/teams", {
         credentials: "same-origin",
         headers: { accept: "application/json" },
@@ -116,7 +131,7 @@ export function OrganizationConsole() {
           </div>
 
           {state === "loading" ? <div className="mt-6 grid min-h-56 place-items-center rounded-2xl bg-[#f8fbff]" aria-live="polite"><LoaderCircle className="size-6 animate-spin text-[#245fe5]" aria-hidden="true" /><span className="sr-only">Loading organizations</span></div> : null}
-          {state === "signed-out" ? <div className="mt-6 rounded-2xl border border-[#cfdcff] bg-[#f1f6ff] p-6"><StatusBadge status="setup">Sign in required</StatusBadge><h3 className="mt-4 text-xl font-semibold">Connect a Studio member account</h3><p className="mt-2 text-sm leading-6 text-[#596980]">Organization data is private and is never filled with sample members. Use the OpenRouter member flow from Connections, then return here.</p><Button render={<Link href="/?connections=1&provider=openrouter" />} className="mt-5">Open Connections</Button></div> : null}
+          {state === "signed-out" ? <div className="mt-6 rounded-2xl border border-[#cfdcff] bg-[#f1f6ff] p-6"><StatusBadge status="setup">Sign in required</StatusBadge><h3 className="mt-4 text-xl font-semibold">Connect a Studio member account</h3><p className="mt-2 text-sm leading-6 text-[#596980]">Organization data is private and is never filled with sample members. Use the OpenRouter member flow from Connections, then return here.</p><Button nativeButton={false} render={<Link href="/?connections=1&provider=openrouter" />} className="mt-5">Open Connections</Button></div> : null}
           {state === "setup" || state === "error" ? <div className="mt-6 rounded-2xl border border-[#ecd9bb] bg-[#fff9ef] p-6"><StatusBadge status="setup">{state === "setup" ? "Setup required" : "Unavailable"}</StatusBadge><h3 className="mt-4 text-xl font-semibold">Organization control plane is not ready in this environment</h3><p className="mt-2 text-sm leading-6 text-[#6f5a35]">{message || "Durable organization storage or authorization is unavailable."}</p></div> : null}
           {state === "ready" && workspaces.length === 0 ? <div className="mt-6 grid min-h-56 place-items-center rounded-2xl border border-dashed border-[#b9ccff] bg-[#f8fbff] p-6 text-center"><div><span className="mx-auto grid size-14 place-items-center rounded-2xl bg-white text-[#245fe5]"><Building2 aria-hidden="true" /></span><h3 className="mt-4 text-xl font-semibold">No workspaces yet</h3><p className="mt-2 text-sm text-[#52617a]">Create one below when the account has a verified team entitlement.</p></div></div> : null}
           {state === "ready" && workspaces.length ? <div className="mt-6 grid gap-3">{workspaces.map((workspace) => <article key={workspace.id} className="rounded-2xl border border-[#dbe4f1] bg-[#f8fbff] p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold">{workspace.name}</h3><StatusBadge status="working">Server revision {workspace.revision}</StatusBadge></div><p className="mt-2 text-xs text-[#52617a]">Updated {new Date(workspace.updatedAt).toLocaleString()}</p></div><div className="flex gap-4 text-sm text-[#52617a]"><span className="flex items-center gap-1.5"><UsersRound className="size-4" aria-hidden="true" />{workspace.members.length}</span><span className="flex items-center gap-1.5"><Building2 className="size-4" aria-hidden="true" />{workspace.projects.length}</span></div></div><div className="mt-4 flex flex-wrap gap-2">{workspace.members.map((member) => <span key={member.identity} className="inline-flex min-h-8 items-center gap-2 rounded-full border border-[#dbe4f1] bg-white px-3 text-xs text-[#596980]"><UserRound className="size-3.5" aria-hidden="true" />{member.role}<span className="font-mono">{member.identity.slice(0, 8)}</span></span>)}</div></article>)}</div> : null}

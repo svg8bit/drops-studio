@@ -87,7 +87,21 @@ function requireSameOrigin(request: NextRequest): void {
   const origin = request.headers.get("origin");
   if (!origin && process.env.NODE_ENV !== "production") return;
   try {
-    if (!origin || new URL(origin).origin !== request.nextUrl.origin) throw new Error();
+    const host = request.headers.get("host")?.split(",")[0]?.trim();
+    const protocol =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().replace(/:$/, "")
+      || request.nextUrl.protocol.replace(/:$/, "");
+    const visibleOrigin = host ? `${protocol}://${host}` : request.nextUrl.origin;
+    const parsedOrigin = origin ? new URL(origin).origin : "";
+    if (
+      !parsedOrigin
+      || (
+        parsedOrigin !== request.nextUrl.origin
+        && parsedOrigin !== visibleOrigin
+      )
+    ) {
+      throw new Error();
+    }
   } catch {
     throw new RouteError(403, { error: "A same-origin Project V2 mutation is required." });
   }
