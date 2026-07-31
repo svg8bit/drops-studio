@@ -73,7 +73,7 @@ export const materializedProjectDeterministicFallback: BuilderDeterministicFallb
     await services.ensureRuntime();
     return {
       summary:
-        "Free Auto used the deterministic Project V2 starter and verified its real Sandbox build without an AI provider.",
+        "Free Auto prepared the deterministic Project V2 starter for bounded Sandbox verification without an AI provider.",
     };
   },
 };

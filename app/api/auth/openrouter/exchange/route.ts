@@ -99,13 +99,22 @@ export async function POST(request: NextRequest) {
       ? request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value ?? ""
       : createStudioAccountCookie({ provider: "openrouter", subject: payload.user_id }, secret);
     const account = existingAccount ?? resolveStudioAccount(accountCookie);
+    let remembered = false;
     if (account) {
-      await saveStudioConnection(account.identity, {
-        provider: "openrouter",
-        credential: payload.key,
-        model: "openrouter/free",
-        label: "OpenRouter OAuth",
-      }).catch(() => undefined);
+      try {
+        await saveStudioConnection(account.identity, {
+          provider: "openrouter",
+          credential: payload.key,
+          model: "openrouter/free",
+          label: "OpenRouter OAuth",
+        });
+        remembered = true;
+      } catch (error) {
+        console.warn(
+          "[openrouter-auth] encrypted account persistence unavailable",
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
     }
     // The API key is returned once to the initiating browser. For a signed-in
     // Studio profile it is also stored only as an AES-GCM encrypted vault entry.
@@ -115,6 +124,7 @@ export async function POST(request: NextRequest) {
         account: {
           provider: account?.provider ?? "openrouter",
           connected: true,
+          remembered,
           projectSync: memberProjectSyncReadiness(),
         },
       },

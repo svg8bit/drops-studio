@@ -207,10 +207,10 @@ const providerList: Provider[] = [
   },
   {
     id: "dropsbot",
-    name: "Telegram delivery + Drops Bot setup",
-    eyebrow: "Separate provider boundaries",
+    name: "Telegram delivery",
+    eyebrow: "Drops Bot guided setup available",
     description:
-      "Create and verify a Telegram channel with the selected Telegram bot, then link an official Drops Bot Profile through its documented guided flow.",
+      "Connect and remember your Telegram delivery account. Official Drops Bot Profile linking remains a separate documented guided step.",
     docs: "https://core.telegram.org/method/channels.createChannel",
   },
   {
@@ -525,7 +525,9 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     setConnections((current) => {
       const next = { ...current };
       for (const connection of remembered) {
-        if (connection.provider !== "telegram" && connection.provider in next) {
+        if (connection.provider === "telegram") {
+          next.dropsbot = connection.connected;
+        } else if (connection.provider in next) {
           next[connection.provider as Exclude<ProviderId, "free">] = connection.connected;
         }
       }
@@ -556,6 +558,30 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         setActiveBrain(preferred.provider);
       }
     }
+  }, []);
+
+  useEffect(() => {
+    const handleConnectionChange = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        provider?: string;
+        connected?: boolean;
+      }>).detail;
+      if (detail?.provider !== "telegram") return;
+      setConnections((current) => ({
+        ...current,
+        dropsbot: detail.connected === true,
+      }));
+    };
+    window.addEventListener(
+      "drops-studio:connection-changed",
+      handleConnectionChange,
+    );
+    return () => {
+      window.removeEventListener(
+        "drops-studio:connection-changed",
+        handleConnectionChange,
+      );
+    };
   }, []);
 
   useEffect(() => {

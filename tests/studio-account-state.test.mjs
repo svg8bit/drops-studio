@@ -5,6 +5,83 @@ import test from "node:test";
 const identity = createHash("sha256").update("account-fixture").digest("hex");
 const vaultKey = createHash("sha256").update("vault-fixture").digest();
 
+function memoryAccountSql() {
+  let row = null;
+  const statements = [];
+  return {
+    statements,
+    storedJson() {
+      return row?.state_json ?? "";
+    },
+    async query(statement, parameters = []) {
+      const normalized = statement.replace(/\s+/g, " ").trim();
+      statements.push(normalized);
+      if (normalized.startsWith("CREATE TABLE")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (normalized.startsWith("SELECT state_revision")) {
+        return row && row.account_identity === parameters[0]
+          ? { rows: [{ ...row }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (normalized.startsWith("INSERT INTO")) {
+        if (row) return { rows: [], rowCount: 0 };
+        row = {
+          account_identity: parameters[0],
+          state_revision: parameters[1],
+          state_json: parameters[2],
+        };
+        return {
+          rows: [{ state_revision: row.state_revision }],
+          rowCount: 1,
+        };
+      }
+      if (normalized.startsWith("UPDATE drops_studio_account_states")) {
+        if (
+          !row
+          || row.account_identity !== parameters[0]
+          || row.state_revision !== parameters[3]
+        ) {
+          return { rows: [], rowCount: 0 };
+        }
+        row = {
+          ...row,
+          state_revision: parameters[1],
+          state_json: parameters[2],
+        };
+        return {
+          rows: [{ state_revision: row.state_revision }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected account-state SQL: ${normalized}`);
+    },
+  };
+}
+
+function memoryAccountBlob() {
+  let body = null;
+  let version = 0;
+  return {
+    async get() {
+      if (body === null) return null;
+      return {
+        statusCode: 200,
+        stream: new Blob([body]).stream(),
+        blob: { etag: `etag-${version}` },
+      };
+    },
+    async put(_pathname, value, options = {}) {
+      if (options.ifMatch && options.ifMatch !== `etag-${version}`) {
+        throw new Error("etag mismatch");
+      }
+      version += 1;
+      body = String(value);
+      return { etag: `etag-${version}` };
+    },
+  };
+}
+
 test("account connection vault encrypts credentials with account-bound authenticated data", async () => {
   const vault = await import("../lib/studio-account-state.ts");
   const credential = "provider-key-fixture-not-a-live-secret";
@@ -69,4 +146,69 @@ test("account connection metadata is public-safe and the vault fails closed", as
     updatedAt: "2026-07-31T00:00:00.000Z",
   });
   assert.equal(JSON.stringify(statuses).includes("another-provider-key-fixture"), false);
+});
+
+test("managed Postgres persists every encrypted provider envelope without plaintext credentials", async () => {
+  const previousVaultKey = process.env.DROPS_CONNECTION_VAULT_KEY;
+  process.env.DROPS_CONNECTION_VAULT_KEY = "account-vault-fixture-key-with-at-least-32-bytes";
+  const storage = await import("../db/studio-account-state.ts");
+  const sql = memoryAccountSql();
+  try {
+    await storage.saveStudioConnection(identity, {
+      provider: "openrouter",
+      credential: "openrouter-provider-key-fixture",
+      model: "openrouter/free",
+      label: "OpenRouter OAuth",
+    }, undefined, sql);
+    await storage.saveStudioConnection(identity, {
+      provider: "telegram",
+      credential: "telegram-account-session-fixture",
+      label: "Telegram account session",
+    }, undefined, sql);
+
+    const state = await storage.readStudioAccountState(identity, undefined, sql);
+    assert.equal(state.revision, 2);
+    assert.deepEqual(Object.keys(state.connections).sort(), ["openrouter", "telegram"]);
+    assert.doesNotMatch(sql.storedJson(), /openrouter-provider-key-fixture|telegram-account-session-fixture/);
+    assert.equal(
+      (await storage.readStudioConnectionSecret(identity, "openrouter", undefined, sql))?.credential,
+      "openrouter-provider-key-fixture",
+    );
+    assert.equal(
+      (await storage.readStudioConnectionSecret(identity, "telegram", undefined, sql))?.credential,
+      "telegram-account-session-fixture",
+    );
+    assert.ok(sql.statements.some((statement) => statement.startsWith("UPDATE drops_studio_account_states")));
+  } finally {
+    if (previousVaultKey === undefined) delete process.env.DROPS_CONNECTION_VAULT_KEY;
+    else process.env.DROPS_CONNECTION_VAULT_KEY = previousVaultKey;
+  }
+});
+
+test("managed Postgres reads through and migrates the existing private Blob envelope", async () => {
+  const previousVaultKey = process.env.DROPS_CONNECTION_VAULT_KEY;
+  process.env.DROPS_CONNECTION_VAULT_KEY = "blob-migration-vault-fixture-with-at-least-32-bytes";
+  const storage = await import("../db/studio-account-state.ts");
+  const blob = memoryAccountBlob();
+  const sql = memoryAccountSql();
+  try {
+    await storage.saveStudioConnection(identity, {
+      provider: "anthropic",
+      credential: "anthropic-provider-key-fixture",
+      model: "claude-fixture",
+    }, blob);
+
+    const migrated = await storage.readStudioAccountState(identity, blob, sql);
+    assert.equal(migrated.revision, 1);
+    assert.equal(migrated.connections.anthropic?.model, "claude-fixture");
+    assert.equal(
+      (await storage.readStudioConnectionSecret(identity, "anthropic", blob, sql))?.credential,
+      "anthropic-provider-key-fixture",
+    );
+    assert.ok(sql.statements.some((statement) => statement.startsWith("INSERT INTO")));
+    assert.doesNotMatch(sql.storedJson(), /anthropic-provider-key-fixture/);
+  } finally {
+    if (previousVaultKey === undefined) delete process.env.DROPS_CONNECTION_VAULT_KEY;
+    else process.env.DROPS_CONNECTION_VAULT_KEY = previousVaultKey;
+  }
 });

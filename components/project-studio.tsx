@@ -210,7 +210,7 @@ type SelectedCanvasItem =
     };
 
 const modelLabels: Record<ProjectProvider, string> = {
-  free: "Free Director",
+  free: "Free Auto",
   gateway: "Drops AI Gateway",
   openai: "OpenAI",
   anthropic: "Anthropic Claude",
@@ -218,6 +218,33 @@ const modelLabels: Record<ProjectProvider, string> = {
   kimi: "Kimi",
   custom: "Custom API",
 };
+
+function usesRussian(text: string) {
+  return /[\u0400-\u04ff]/.test(text);
+}
+
+function requestsExternalAction(text: string) {
+  if (
+    /\b(?:publish|deploy|send|deliver|register\s+(?:a\s+)?webhook)\b|(?:опубликуй|задеплой|отправь|пришли|зарегистрируй\s+вебхук)/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  if (!/\b(?:trade|buy|sell)\b|(?:торгуй|купи|продай)/i.test(text)) {
+    return false;
+  }
+  return /(?:\b\d+(?:[.,]\d+)?\s*(?:usd|usdt|usdc|btc|eth|sol|ton)\b|[$€]\s*\d+|\b(?:btc|bitcoin|eth|ethereum|sol|solana|ton|wallet|address|0x[a-f0-9]{8,}|order|position)\b|(?:биткоин|эфир|солан|кошел[её]к|адрес|ордер|позици))/i.test(
+    text,
+  );
+}
+
+function isReadOnlyChatQuestion(text: string) {
+  if (!/[?？]/.test(text)) return false;
+  return !/\b(?:build|make|change|edit|add|remove|delete|rename|fix|improve|create|update)\b|(?:сделай|измени|добавь|убери|удали|переименуй|исправь|улучши|создай|обнови|доделай)/i.test(
+    text,
+  );
+}
 
 const hostLinks: Record<HostingProvider, string> = {
   vercel: "https://vercel.com/new",
@@ -637,12 +664,26 @@ export function ProjectStudio() {
   const [tab, setTab] = useState<InspectorTab>("director");
   const [device, setDevice] = useState<DeviceMode>("desktop");
   const [canvasZoom, setCanvasZoom] = useState(100);
-  const [sidePanelWidth, setSidePanelWidth] = useState(420);
+  const [sidePanelWidth, setSidePanelWidth] = useState(() => {
+    if (typeof window === "undefined") {
+      return 420;
+    }
+    const persisted = window.localStorage.getItem(STUDIO_PANEL_WIDTH_KEY);
+    const stored = persisted === null ? Number.NaN : Number(persisted);
+    return Number.isFinite(stored)
+      ? Math.min(
+          STUDIO_PANEL_MAX_WIDTH,
+          Math.max(STUDIO_PANEL_MIN_WIDTH, stored),
+        )
+      : 420;
+  });
   const [sidePanelCollapsed, setSidePanelCollapsed] = useState(false);
+  const [sidePanelResizing, setSidePanelResizing] = useState(false);
   const sidePanelDragRef = useRef<{
     pointerId: number;
     startX: number;
     startWidth: number;
+    latestWidth: number;
   } | null>(null);
   const [designMode, setDesignMode] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(
@@ -689,15 +730,6 @@ export function ProjectStudio() {
     useState<"dropstab" | "fallback" | "unverified">("unverified");
   const [projectSyncStatus, setProjectSyncStatus] =
     useState<ProjectSyncStatus>("loading");
-
-  useEffect(() => {
-    const stored = Number(window.localStorage.getItem(STUDIO_PANEL_WIDTH_KEY));
-    if (Number.isFinite(stored)) {
-      setSidePanelWidth(
-        Math.min(STUDIO_PANEL_MAX_WIDTH, Math.max(STUDIO_PANEL_MIN_WIDTH, stored)),
-      );
-    }
-  }, []);
 
   const persistProject = useCallback(
     async (
@@ -1054,10 +1086,15 @@ export function ProjectStudio() {
         const requestedPanel = new URLSearchParams(window.location.search).get(
           "panel",
         );
-        if (requestedPanel === "director") {
-          setTab("director");
-        } else if (projectV2.manifest.framework.name === "nextjs") {
+        if (requestedPanel === "code") {
           setTab("code");
+        } else if (requestedPanel === "preview") {
+          setTab("preview");
+        } else {
+          // The product flow starts in the conversational workspace. Builder
+          // remains available on demand, but it is never the default landing
+          // surface for a newly generated multi-file project.
+          setTab("director");
         }
         setRuntimeRevision((revision) => revision + 1);
         setDirty(
@@ -1930,10 +1967,83 @@ export function ProjectStudio() {
     };
     projectRef.current = conversationDraft;
     setProject(conversationDraft);
+
+    const appendAssistantReply = (content: string) => {
+      const assistant: ProjectChatMessage = {
+        id: nowId("assistant"),
+        role: "assistant",
+        content,
+        createdAt: new Date().toISOString(),
+      };
+      const currentProject = projectRef.current ?? activeProject;
+      const next: GeneratedProject = {
+        ...currentProject,
+        conversation: [...baseConversation, assistant],
+        updatedAt: new Date().toISOString(),
+      };
+      projectRef.current = next;
+      setProject(next);
+      void persistProject(next, currentProject.updatedAt);
+    };
+
+    if (requestsExternalAction(instruction)) {
+      appendAssistantReply(
+        usesRussian(instruction)
+          ? "Я не выполнил внешнее действие без подтверждения. Изменения приложения можно сделать прямо здесь; отправка в Telegram, webhook и deployment выполняются через Connect или Publish и всегда показывают финальное подтверждение."
+          : "I did not run an external action without approval. App changes can be made here; Telegram delivery, webhooks and deployment continue through Connect or Publish with a final confirmation.",
+      );
+      setDirecting(false);
+      return;
+    }
+
+    if (isReadOnlyChatQuestion(instruction)) {
+      const fileCount = Object.keys(activeProject.projectV2?.files ?? {}).length;
+      appendAssistantReply(
+        usesRussian(instruction)
+          ? `Да, чат работает и видит текущий проект «${activeProject.spec.name}»${fileCount ? ` (${fileCount} файлов)` : ""}. Напишите, что изменить — Free Auto применит безопасную правку сразу, а подключённая модель сможет отредактировать реальные файлы.`
+          : `Yes — chat is connected to “${activeProject.spec.name}”${fileCount ? ` (${fileCount} files)` : ""}. Describe a change: Free Auto applies safe edits immediately, while a connected model can edit the real files.`,
+      );
+      setDirecting(false);
+      return;
+    }
+
+    if (activeProvider === "free") {
+      try {
+        const deterministic = selectedBlock?.kind === "element"
+          ? createFreeElementDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock,
+            )
+          : createFreeDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock?.id,
+            );
+        const assistant: ProjectChatMessage = {
+          id: nowId("assistant"),
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          content: usesRussian(instruction)
+            ? `Готово — применил правку к ${deterministic.affected.join(", ").toLowerCase()}. Preview обновляется, а предыдущая версия сохранена для отката.`
+            : `Done — I updated ${deterministic.affected.join(", ").toLowerCase()}. The preview is refreshing and the previous version remains available for rollback.`,
+        };
+        commitSpec(
+          deterministic.spec,
+          `Free Auto · ${deterministic.affected.join(", ")}`,
+          "director",
+          [...baseConversation, assistant],
+        );
+        setToast("Free Auto applied the change — Undo is available");
+      } finally {
+        setDirecting(false);
+      }
+      return;
+    }
+
     if (
       activeProject.projectV2
       && projectV2SyncAvailableRef.current
-      && activeProvider !== "free"
     ) {
       try {
         await fetch("/api/access", {
@@ -2052,56 +2162,7 @@ export function ProjectStudio() {
               : "Blocking check evidence is saved in this browser because private cloud sync could not be confirmed.",
         );
       } catch (error) {
-        void error;
-        const assistant: ProjectChatMessage = {
-          id: nowId("assistant"),
-          role: "assistant",
-          createdAt: new Date().toISOString(),
-          content: "The connected model could not finish this change, so I kept the last verified revision unchanged. Retry once or switch to Free Auto in Connections; no deployment or external action was performed.",
-        };
-        const next: GeneratedProject = {
-          ...conversationDraft,
-          conversation: [...baseConversation, assistant],
-        };
-        projectRef.current = next;
-        setProject(next);
-        const save = () =>
-          saveProjectSafely(next, {
-            expectedUpdatedAt: activeProject.updatedAt,
-          });
-        const queued = saveQueueRef.current.then(save, save);
-        saveQueueRef.current = queued.then(
-          () => true,
-          () => false,
-        );
-        try {
-          const saved = await queued;
-          if (saved.status === "conflict") {
-            setProjectSyncStatus("conflict");
-            setToast(
-              "The agent result could not be added because another tab saved a newer browser version. Reload to continue.",
-            );
-          }
-        } catch {
-          setProjectSyncStatus("error");
-          setToast(
-            "The agent result could not be saved in this browser. Free storage, then retry.",
-          );
-        }
-      } finally {
-        setDirecting(false);
-      }
-      return;
-    }
-    try {
-      let proposal: DirectorProposal;
-      const provider = activeProvider;
-      const key =
-        provider === "free"
-          ? null
-          : window.sessionStorage.getItem(`drops-studio:${provider}`);
-      if (provider === "free") {
-        const deterministic = selectedBlock?.kind === "element"
+        const fallback = selectedBlock?.kind === "element"
           ? createFreeElementDirectorProposal(
               activeProject.spec,
               instruction,
@@ -2112,15 +2173,32 @@ export function ProjectStudio() {
               instruction,
               selectedBlock?.id,
             );
-        proposal = {
-          ...deterministic,
-          label: "Free Director deterministic change set",
-          summary: [
-            ...deterministic.summary,
-            "Applying this proposal refreshes the generated Project V2 files; run Builder afterward for a verified Sandbox preview.",
-          ],
+        const assistant: ProjectChatMessage = {
+          id: nowId("assistant"),
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          content: usesRussian(instruction)
+            ? "Подключённая модель не завершила этот запрос, поэтому Free Auto сразу применил безопасную версию правки. Preview обновляется; предыдущая версия сохранена."
+            : "The connected model did not finish this request, so Free Auto immediately applied a safe version of the change. The preview is refreshing and the previous version is saved.",
         };
-      } else if (provider === "custom" && key) {
+        void error;
+        commitSpec(
+          fallback.spec,
+          `Free Auto fallback · ${fallback.affected.join(", ")}`,
+          "director",
+          [...baseConversation, assistant],
+        );
+        setToast("Free Auto applied the fallback change — Undo is available");
+      } finally {
+        setDirecting(false);
+      }
+      return;
+    }
+    try {
+      let proposal: DirectorProposal;
+      const provider = activeProvider;
+      const key = window.sessionStorage.getItem(`drops-studio:${provider}`);
+      if (provider === "custom" && key) {
         const endpoint = window.sessionStorage.getItem(
           "drops-studio:custom-endpoint",
         );
@@ -2333,21 +2411,18 @@ export function ProjectStudio() {
         id: nowId("assistant"),
         role: "assistant",
         createdAt: new Date().toISOString(),
-        content: `${error instanceof Error ? error.message : "The connected model is unavailable."} I prepared the same request with Free Director instead.`,
-        proposal: {
-          label: "Free Director fallback",
-          summary: fallback.summary,
-          spec: fallback.spec,
-        },
+        content: usesRussian(instruction)
+          ? "Подключённая модель сейчас не ответила, поэтому Free Auto применил безопасную версию этой правки. Preview обновляется, предыдущая версия доступна в Versions."
+          : "The connected model did not respond, so Free Auto applied a safe version of this change. The preview is refreshing and the previous version remains in Versions.",
       };
-      const currentProject = projectRef.current ?? activeProject;
-      const next = {
-        ...currentProject,
-        conversation: [...baseConversation, assistant],
-      };
-      void persistProject(next, currentProject.updatedAt);
-      projectRef.current = next;
-      setProject(next);
+      void error;
+      commitSpec(
+        fallback.spec,
+        `Free Auto fallback · ${fallback.affected.join(", ")}`,
+        "director",
+        [...baseConversation, assistant],
+      );
+      setToast("Free Auto applied a fallback change — Undo is available");
     } finally {
       setDirecting(false);
     }
@@ -3326,8 +3401,10 @@ export function ProjectStudio() {
   };
 
   const finishSidePanelResize = () => {
+    const latestWidth = sidePanelDragRef.current?.latestWidth ?? sidePanelWidth;
     sidePanelDragRef.current = null;
-    window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(sidePanelWidth));
+    setSidePanelResizing(false);
+    window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(latestWidth));
   };
 
   const openConnectionsHub = (provider?: string) => {
@@ -3493,7 +3570,9 @@ export function ProjectStudio() {
           tab === "code" && project.projectV2?.manifest.framework.name === "nextjs"
             ? " v2-builder-active"
             : ""
-        }${sidePanelCollapsed ? " side-panel-collapsed" : ""}`}
+        }${sidePanelCollapsed ? " side-panel-collapsed" : ""}${
+          sidePanelResizing ? " side-panel-resizing" : ""
+        }`}
         style={
           {
             "--studio-side-width": `${sidePanelCollapsed ? 0 : sidePanelWidth}px`,
@@ -4887,7 +4966,9 @@ export function ProjectStudio() {
               pointerId: event.pointerId,
               startX: event.clientX,
               startWidth: sidePanelCollapsed ? STUDIO_PANEL_MIN_WIDTH : sidePanelWidth,
+              latestWidth: sidePanelCollapsed ? STUDIO_PANEL_MIN_WIDTH : sidePanelWidth,
             };
+            setSidePanelResizing(true);
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={(event) => {
@@ -4896,6 +4977,7 @@ export function ProjectStudio() {
             const next = updateSidePanelWidth(
               drag.startWidth + event.clientX - drag.startX,
             );
+            drag.latestWidth = next;
             window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(next));
           }}
           onPointerUp={(event) => {
@@ -5038,9 +5120,9 @@ export function ProjectStudio() {
                 <Sparkles />
               </span>
               <span>
-                <strong>Drops Director</strong>
+                <strong>Drops Agent</strong>
                 <small>
-                  {modelLabels[activeProvider]} · project context ready
+                  {modelLabels[activeProvider]} · editing this project
                 </small>
               </span>
             </span>
@@ -5063,7 +5145,7 @@ export function ProjectStudio() {
               </button>
             </div>
           )}
-          <div className="conversation" role="log" aria-label="Drops Director conversation" tabIndex={0}>
+          <div className="conversation" role="log" aria-label="Drops Agent conversation" tabIndex={0}>
             {(project.conversation?.length ?? 0) <= 1 && (
               <div className="assistant-guide">
                 <strong>What should we build or change?</strong>
@@ -5123,8 +5205,7 @@ export function ProjectStudio() {
                   <LoaderCircle className="spin" />
                 </span>
                 <p>
-                  Planning a bounded change set, checking the product category
-                  and preserving Drops foundations…
+                  Understanding your request and updating the project…
                 </p>
               </article>
             )}
@@ -5142,7 +5223,7 @@ export function ProjectStudio() {
               onChange={(event) => setChatInput(event.target.value)}
               placeholder={
                 selectedBlock
-                  ? `Tell Director how to change ${selectedBlock.label}…`
+                  ? `Tell Drops Agent how to change ${selectedBlock.label}…`
                   : `Describe what to build or change… Try: “${suggestedPrompt}”`
               }
               rows={3}

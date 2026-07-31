@@ -50,7 +50,7 @@ function runtimeCommand(kind) {
 
 function dependencies() {
   let stored = project();
-  const calls = { loadActors: [], ensure: 0, resume: 0, saves: 0 };
+  const calls = { loadActors: [], ensure: 0, resume: 0, saves: 0, stop: 0 };
   const handle = {
     provider: "vercel-sandbox", projectId: stored.id, sandboxName: "sandbox-route", sessionId: "session-route",
     workspaceRoot: "/sandbox/project", revisionDigest: "a".repeat(64), createdAt: "2026-07-30T12:00:00.000Z", expiresAt: null,
@@ -66,7 +66,7 @@ function dependencies() {
     provider: "vercel-sandbox",
     async ensure() { calls.ensure += 1; return handle; },
     async resume() { calls.resume += 1; return handle; },
-    async status() { return { provider: "vercel-sandbox", status: "running", sandboxName: handle.sandboxName, sessionId: handle.sessionId, vcpus: 2, memoryMb: 4096, createdAt: handle.createdAt, updatedAt: handle.createdAt, expiresAt: null, activeDurationMs: 1000, previewUrl: "https://preview.example.test/", previewCommandId: "preview-command" }; },
+    async status() { return { provider: "vercel-sandbox", status: "running", sandboxName: handle.sandboxName, sessionId: handle.sessionId, vcpus: 2, memoryMb: 4096, createdAt: handle.createdAt, updatedAt: handle.createdAt, expiresAt: null, activeDurationMs: 1000, previewUrl: "https://preview.example.test/", previewCommandId: "command-preview" }; },
     async writeProject() { return handle; },
     async readFile(_handle, path) { return stored.files[path].content; },
     async installDependencies() { return runtimeCommand("install"); },
@@ -79,11 +79,12 @@ function dependencies() {
     async runTests() { return runtimeCommand("test"); },
     async runBuild() { return runtimeCommand("build"); },
     async captureCheckpoint(_handle, checkpointId, revision, paths) { return { checkpointId, revision, files: paths.map((path) => ({ path, content: stored.files[path].content })) }; },
-    async restoreCheckpoint() { return handle; }, async stop() {}, async destroy() {},
+    async restoreCheckpoint() { return handle; }, async stop() { calls.stop += 1; }, async destroy() {},
     async cleanupIdle() { return { inspected: 0, stopped: [], failed: [] }; },
   };
   return {
     calls,
+    getStored: () => structuredClone(stored),
     repository,
     runtime,
     audit: { async record() {} },
@@ -241,6 +242,36 @@ test("failed release checks return bounded real diagnostics for the repair loop"
   assert.equal(payload.result.project.preview, undefined);
 });
 
+test("release gate cannot verify a preview whose dev command is no longer live", async () => {
+  const deps = dependencies();
+  deps.runtime.status = async () => ({
+    provider: "vercel-sandbox",
+    status: "running",
+    sandboxName: "sandbox-route",
+    sessionId: "session-route",
+    vcpus: 2,
+    memoryMb: 4096,
+    createdAt: "2026-07-30T12:00:00.000Z",
+    updatedAt: "2026-07-30T12:01:00.000Z",
+    expiresAt: null,
+    activeDurationMs: 60_000,
+    previewUrl: null,
+    previewCommandId: null,
+  });
+  const response = await handleBuilderAgentRequest(request("/api/builder/agent", {
+    projectId: "builder-route-project",
+    prompt: "Build it and verify the live preview.",
+    mode: "build",
+    provider: { provider: "free" },
+  }), deps);
+  assert.equal(response.status, 422);
+  const payload = await response.json();
+  assert.equal(payload.result.releaseGate.ok, false);
+  assert.equal(payload.result.releaseGate.previewUrl, null);
+  assert.equal(payload.result.project.preview.status, "failed");
+  assert.match(payload.result.releaseGate.blockingErrors.join("\n"), /preview stopped/i);
+});
+
 test("runtime status resumes without creating or syncing a new Sandbox", async () => {
   const deps = dependencies();
   const response = await handleBuilderRuntimeRequest(request("/api/builder/runtime", {
@@ -253,6 +284,60 @@ test("runtime status resumes without creating or syncing a new Sandbox", async (
   assert.equal(payload.result.previewUrl, "https://preview.example.test/");
   assert.equal(deps.calls.resume, 1);
   assert.equal(deps.calls.ensure, 0);
+});
+
+test("runtime status invalidates persisted ready preview when the Sandbox stopped", async () => {
+  const deps = dependencies();
+  const previewResponse = await handleBuilderRuntimeRequest(request("/api/builder/runtime", {
+    projectId: "builder-route-project",
+    action: "preview",
+  }), deps);
+  assert.equal(previewResponse.status, 200);
+  deps.runtime.status = async () => ({
+    provider: "vercel-sandbox",
+    status: "stopped",
+    sandboxName: "sandbox-route",
+    sessionId: "session-route",
+    vcpus: 2,
+    memoryMb: 4096,
+    createdAt: "2026-07-30T12:00:00.000Z",
+    updatedAt: "2026-07-30T12:01:00.000Z",
+    expiresAt: null,
+    activeDurationMs: null,
+    previewUrl: null,
+    previewCommandId: null,
+  });
+  const response = await handleBuilderRuntimeRequest(request("/api/builder/runtime", {
+    projectId: "builder-route-project",
+    action: "status",
+  }), deps);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).result.status, "stopped");
+  const stored = deps.getStored();
+  assert.equal(stored.preview.status, "stopped");
+  assert.equal(stored.preview.url, undefined);
+  assert.ok(stored.runs.every((run) => run.status !== "running"));
+});
+
+test("builder request deadline stops the Sandbox and returns a restartable timeout", async () => {
+  const deps = dependencies();
+  deps.executionTimeoutMs = 25;
+  deps.deterministicFallback = {
+    async run() {
+      await new Promise(() => {});
+    },
+  };
+  const response = await handleBuilderAgentRequest(request("/api/builder/agent", {
+    projectId: "builder-route-project",
+    prompt: "Build within the bounded runtime window.",
+    mode: "build",
+    provider: { provider: "free" },
+  }), deps);
+  assert.equal(response.status, 504);
+  const payload = await response.json();
+  assert.equal(payload.code, "BUILDER_EXECUTION_TIMEOUT");
+  assert.match(payload.error, /stopped.*restart/i);
+  assert.equal(deps.calls.stop, 1);
 });
 
 test("runtime preview persists and returns real Project V2 preview metadata", async () => {

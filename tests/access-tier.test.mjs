@@ -358,7 +358,12 @@ test("OpenRouter OAuth creates a signed HttpOnly Studio member session without s
 
     assert.equal(response.status, 200);
     assert.equal(payload.key, "sk-or-v1-session-only-test-key");
-    assert.deepEqual(payload.account, { provider: "openrouter", connected: true, projectSync: true });
+    assert.deepEqual(payload.account, {
+      provider: "openrouter",
+      connected: true,
+      remembered: false,
+      projectSync: true,
+    });
     assert.match(response.headers.get("set-cookie") ?? "", new RegExp(`${STUDIO_ACCOUNT_COOKIE}=`));
     assert.match(response.headers.get("set-cookie") ?? "", /HttpOnly/i);
     assert.doesNotMatch(JSON.stringify(payload.account), new RegExp(accountSubject));

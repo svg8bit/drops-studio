@@ -30,7 +30,11 @@ export default function OpenRouterCallbackPage() {
         });
         const payload = await response.json().catch(() => ({})) as {
           key?: string;
-          account?: { provider?: string; connected?: boolean };
+          account?: {
+            provider?: string;
+            connected?: boolean;
+            remembered?: boolean;
+          };
           error?: string;
         };
         if (!response.ok || !payload.key || !payload.account?.connected) {
@@ -42,7 +46,11 @@ export default function OpenRouterCallbackPage() {
         window.sessionStorage.setItem("drops-studio:openrouter:model", "openrouter/free");
         window.sessionStorage.setItem("drops-studio:active-brain", "openrouter");
         setState("success");
-        setMessage("OpenRouter and your signed-in Studio member session are connected. Returning to Drops Studio…");
+        setMessage(
+          payload.account.remembered
+            ? "OpenRouter is connected and encrypted in your Studio account. Returning to Drops Studio…"
+            : "OpenRouter is connected for this browser tab. Account sync is unavailable, so the key was not claimed as remembered.",
+        );
         window.setTimeout(() => window.location.replace("/?connections=1&openrouter=connected"), 650);
       } catch (error) {
         setState("error");

@@ -290,9 +290,57 @@ test("preview waits for a real HTTP response and exposes actual logs and status"
   const stateless = new VercelSandboxRuntimeAdapter({ provider: mock.api, credentials: null });
   const resumed = await stateless.resume(context);
   assert.ok(resumed);
+  assert.equal(mock.calls.get.at(-1).resume, false, "status lookup must not restart a stopped Sandbox");
   assert.equal((await stateless.status(resumed)).previewUrl, preview.previewUrl);
   await adapter.stopProcess(handle, preview.commandId);
   assert.equal((await adapter.status(handle)).previewUrl, null);
+});
+
+test("stopped sandboxes never expose stale preview evidence or an active duration", async () => {
+  const sandbox = new MockSandbox();
+  const mock = provider(sandbox);
+  const adapter = new VercelSandboxRuntimeAdapter({
+    provider: mock.api,
+    credentials: null,
+    async fetch() { return new Response("ready", { status: 200 }); },
+  });
+  const context = { actorId: "signed-user-identity", project: project(), requestId: "request-stopped" };
+  const handle = await adapter.writeProject(context);
+  const preview = await adapter.startPreview(context, handle);
+  assert.ok(preview.previewUrl);
+  sandbox.status = "stopped";
+
+  const state = await adapter.status(handle);
+  assert.equal(state.status, "stopped");
+  assert.equal(state.createdAt, null);
+  assert.equal(state.activeDurationMs, null);
+  assert.equal(state.previewUrl, null);
+  assert.equal(state.previewCommandId, null);
+});
+
+test("a stateless preview restart terminates the prior tagged dev command", async () => {
+  const sandbox = new MockSandbox();
+  const mock = provider(sandbox);
+  const context = { actorId: "signed-user-identity", project: project(), requestId: "request-preview-restart" };
+  const first = new VercelSandboxRuntimeAdapter({
+    provider: mock.api,
+    credentials: null,
+    async fetch() { return new Response("ready", { status: 200 }); },
+  });
+  const handle = await first.writeProject(context);
+  const initial = await first.startPreview(context, handle);
+  const initialCommand = sandbox.commandById.get(initial.commandId);
+
+  const second = new VercelSandboxRuntimeAdapter({
+    provider: mock.api,
+    credentials: null,
+    async fetch() { return new Response("ready", { status: 200 }); },
+  });
+  const resumed = await second.resume(context);
+  assert.ok(resumed);
+  const restarted = await second.startPreview(context, resumed);
+  assert.notEqual(restarted.commandId, initial.commandId);
+  assert.ok(initialCommand.killed.includes("SIGTERM"));
 });
 
 test("checkpoint restore uses a full secret-free file snapshot and idle cleanup stops named sandboxes", async () => {

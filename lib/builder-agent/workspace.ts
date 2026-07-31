@@ -160,6 +160,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
   readonly permissions: BuilderToolExecutionServices["permissions"];
   readonly #repository: BuilderAgentSessionDependencies["repository"];
   readonly #runtime: BuilderAgentSessionDependencies["runtime"];
+  readonly #signal?: AbortSignal;
   readonly #browser?: BuilderAgentSessionDependencies["browser"];
   readonly #connections?: BuilderAgentSessionDependencies["connections"];
   readonly #publisher?: BuilderAgentSessionDependencies["publisher"];
@@ -175,6 +176,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
     this.#project = structuredClone(dependencies.project);
     this.#repository = dependencies.repository;
     this.#runtime = dependencies.runtime;
+    this.#signal = dependencies.signal;
     this.#browser = dependencies.browser;
     this.#connections = dependencies.connections;
     this.#publisher = dependencies.publisher;
@@ -336,6 +338,12 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
       script,
       port,
     });
+    try {
+      this.#assertActive();
+    } catch (error) {
+      await this.#runtime.stopProcess(handle, preview.commandId).catch(() => undefined);
+      throw error;
+    }
     const expectedRevision = this.#project.revision;
     const next: ProjectV2 = {
       ...appendCommandMetadata(this.#project, preview, script ?? "dev"),
@@ -406,6 +414,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
   }
 
   async browserCheck(): Promise<BuilderBrowserCheckResult> {
+    this.#assertActive();
     if (!this.#browser) {
       throw new ProjectRuntimeUnavailableError(
         "A real browser checker is not configured.",
@@ -419,6 +428,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
       project: this.#project,
       signal: AbortSignal.timeout(60_000),
     });
+    this.#assertActive();
     const result = {
       ...raw,
       pageErrors: raw.pageErrors.slice(0, 20).map((error) =>
@@ -534,12 +544,15 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
   }
 
   async ensureRuntime(): Promise<RuntimeHandle> {
+    this.#assertActive();
     if (this.#handle && this.#runtimeSyncedRevision === this.#project.revision) {
       return this.#handle;
     }
     const context = this.runtimeContext;
     const handle = this.#handle ?? (await this.#runtime.ensure(context));
+    this.#assertActive();
     this.#handle = await this.#runtime.writeProject(context, handle);
+    this.#assertActive();
     this.#runtimeSyncedRevision = this.#project.revision;
     return this.#handle;
   }
@@ -547,6 +560,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
   async runReleaseGate(
     options: { install?: boolean } = {},
   ): Promise<BuilderReleaseGateResult> {
+    this.#assertActive();
     const checks: BuilderReleaseCheck[] = [];
     const blockingErrors: string[] = [];
     let handle: RuntimeHandle;
@@ -582,6 +596,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
     } else {
       checks.push({ name: "install", status: "skipped", summary: "Dependencies were already installed for this revision." });
     }
+    this.#assertActive();
     if (blockingErrors.length) {
       return { ok: false, checks, blockingErrors, previewUrl: null };
     }
@@ -593,6 +608,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
     ] as const) {
       try {
         const command = await execute();
+        this.#assertActive();
         if (!command) {
           checks.push({ name, status: "skipped", summary: `${name} script is not declared.` });
           continue;
@@ -609,6 +625,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
 
     try {
       const command = await this.runBuild();
+      this.#assertActive();
       const check = commandCheck("build", command);
       checks.push(check);
       if (check.status === "failed") blockingErrors.push(check.summary);
@@ -623,6 +640,7 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
 
     try {
       const preview = await this.startPreview();
+      this.#assertActive();
       checks.push({ name: "preview", status: "passed", summary: "Live preview answered successfully.", preview });
     } catch (error) {
       const check = failedCheck("preview", error, "Live preview failed.");
@@ -651,12 +669,85 @@ export class BuilderAgentSession implements BuilderToolExecutionServices {
       checks.push(check);
       blockingErrors.push(check.summary);
     }
+    try {
+      const state = await this.#runtime.status(handle);
+      const expectedUrl = this.#preview?.previewUrl ?? null;
+      const expectedCommandId = this.#preview?.commandId ?? null;
+      if (
+        state.status !== "running"
+        || !expectedUrl
+        || !expectedCommandId
+        || !state.previewUrl
+        || !state.previewCommandId
+        || state.previewUrl !== expectedUrl
+        || state.previewCommandId !== expectedCommandId
+      ) {
+        throw new ProjectRuntimeProviderError(
+          "Live preview stopped before release verification completed.",
+        );
+      }
+    } catch (error) {
+      const check = failedCheck(
+        "preview",
+        error,
+        "Live preview could not be verified after browser checks.",
+      );
+      const previewIndex = checks.findIndex((candidate) => candidate.name === "preview");
+      if (previewIndex >= 0) checks[previewIndex] = check;
+      else checks.push(check);
+      if (!blockingErrors.includes(check.summary)) blockingErrors.push(check.summary);
+      await this.#invalidatePreview(check.summary);
+    }
     return {
       ok: blockingErrors.length === 0,
       checks,
       blockingErrors,
       previewUrl: this.#preview?.previewUrl ?? null,
     };
+  }
+
+  async #invalidatePreview(error: string): Promise<void> {
+    const preview = this.#project.preview;
+    this.#preview = null;
+    if (!preview) return;
+    const now = new Date().toISOString();
+    const next: ProjectV2 = {
+      ...this.#project,
+      preview: {
+        status: "failed",
+        projectRevision: this.#project.revision,
+        ...(preview.sandboxId ? { sandboxId: preview.sandboxId } : {}),
+        ...(preview.startedAt ? { startedAt: preview.startedAt } : {}),
+        stoppedAt: now,
+        error,
+      },
+      runs: this.#project.runs.map((run) =>
+        run.status === "running"
+          ? { ...run, status: "stopped" as const, finishedAt: now, exitCode: null }
+          : run
+      ),
+      updatedAt: now,
+    };
+    try {
+      this.#project = await this.#repository.saveAuthorized(
+        this.actorId,
+        next,
+        this.#project.revision,
+      );
+    } catch {
+      // The release is already blocked. Keep the response truthful even when
+      // persistence concurrently changed, and let the next passive status
+      // refresh reconcile the durable snapshot.
+      this.#project = next;
+    }
+  }
+
+  #assertActive(): void {
+    if (this.#signal?.aborted) {
+      throw new ProjectRuntimeUnavailableError(
+        "Builder execution exceeded its bounded server window and the Sandbox was stopped.",
+      );
+    }
   }
 
   async #applyOperations(operations: ProjectFileOperationV2[]): Promise<ProjectV2> {
