@@ -83,7 +83,13 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: process.env.CI ? "retain-on-failure" : "off",
-    launchOptions: executablePath ? { executablePath } : undefined,
+    launchOptions: {
+      ...(executablePath ? { executablePath } : {}),
+      // Keep exact screenshots independent of the GitHub runner's GPU model.
+      // Chromium otherwise produces a few different anti-aliased pixels for
+      // SVG strokes and diagonal gradients across otherwise identical runs.
+      args: ["--disable-gpu", "--force-color-profile=srgb"],
+    },
   },
   projects: projects.map((project) => ({
     name: project.name,
