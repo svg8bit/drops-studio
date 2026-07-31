@@ -4,4 +4,6 @@
 
 The two-actor tests prove convergence without lost edits, viewer mutation denial, presence expiry and stale AI work not overwriting canonical files.
 
-The shipped runtime is local/test. A durable collaboration release still needs an authorized realtime transport and shared append-only operation storage. The UI reports that boundary directly.
+The production transport is exposed at `/api/collaboration/transport`. Normal reads and writes require a signed Studio member, team workspace membership and shared-project scope. Owners and editors may append; viewers are read-only. Writes are same-origin, rate-limited, secret-scanned, payload-bounded, CAS revisioned and idempotent.
+
+The durable room log uses the existing project-data backend, so the active provider is Neon Postgres or private Vercel Blob. The operator-only `?health=1` probe proves two-actor ordering, replay idempotency, durable read and isolated cleanup before the capability becomes `working`; configuration markers alone never activate it. The HTTP transport is intentionally bounded rather than presented as a permanent WebSocket process.

@@ -21,8 +21,8 @@ const capabilityGroups = [
 const managedRoadmap = [
   { href: "/organizations", icon: UsersRound, title: "Organizations and RBAC", text: "The current team control plane reads real member state; the V4 role engine adds tenant-safe default and custom role contracts." },
   { href: "/backend", icon: Braces, title: "Managed backend", text: "The reference runtime covers schema through recovery. Production data still requires a healthy D1 or Postgres adapter; blob storage is never treated as relational storage." },
-  { href: "/enterprise", icon: RadioTower, title: "Realtime collaboration", text: "Concurrent edits, presence expiry, comments and AI branch conflicts are verified locally. Production transport remains setup-required." },
-  { href: "/enterprise", icon: KeyRound, title: "Enterprise identity", text: "OIDC, domains, service tokens, policies and audit have executable local contracts. External IdP health evidence remains required." },
+  { href: "/enterprise", icon: RadioTower, title: "Realtime collaboration", text: "Tenant-scoped durable events, ordered two-actor updates, presence and conflict-safe AI branches share one provider-aware control plane." },
+  { href: "/enterprise", icon: KeyRound, title: "Enterprise identity", text: "The first-party OIDC issuer uses public JWKS, PKCE and one-time durable codes; custom workforce providers can reuse the same standards contract." },
 ];
 
 function badgeStatus(state: PlatformCapabilityState) {
