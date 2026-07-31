@@ -12,7 +12,6 @@ import {
   Database,
   Eye,
   ExternalLink,
-  FileCode2,
   Folder,
   Flame,
   Link2,
@@ -288,11 +287,11 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
           : "Plan growth loop";
 
   return (
-    <section className="preview-column" aria-live="polite">
-      <div className="preview-status-row">
-        <span className="preview-ready"><Eye size={17} /> {spec ? "Product plan" : preset.shortTitle} · Concept preview</span>
-        <span className={`data-mode ${dataMode}`}><i /> {dataMode === "live" ? "Live DropsTab data" : "Sample data"}</span>
-      </div>
+    <section
+      className="preview-column"
+      aria-label={`${visibleName} ${dataMode === "live" ? "with live DropsTab data" : "with labelled sample data"}`}
+      aria-live="polite"
+    >
       <div className="landing-studio-frame">
         <div className="landing-studio-toolbar">
           <div>
@@ -384,7 +383,7 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
             <div className="landing-copilot-title">
               <Sparkles aria-hidden="true" />
               <strong>AI Director</strong>
-              <span>{spec ? "Plan ready" : "Template mode"}</span>
+              <span>{spec ? "Plan ready" : "Ready"}</span>
             </div>
             <p>
               {spec
@@ -414,15 +413,9 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
             </div>
             <button type="button" onClick={() => onAction("EDIT PLAN")}>
               <Code2 aria-hidden="true" />
-              {spec ? "Review this plan" : "Create an editable plan"}
-              <FileCode2 aria-hidden="true" />
+              {spec ? "Review plan" : "Create plan"}
             </button>
           </aside>
-        </div>
-        <div className="landing-studio-statusbar">
-          <span><ShieldCheck aria-hidden="true" /> No external action without approval</span>
-          <span>{dataMode === "live" ? "DropsTab receipt verified" : "Sample data is labelled"}</span>
-          <span>Sandbox starts after Build</span>
         </div>
       </div>
       {preset.preview === "channel" ? (
@@ -448,7 +441,6 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
           </div>
         </aside>
       ) : null}
-      <p className="preview-footnote"><ShieldCheck size={14} /> Concept preview only. Real data, delivery and public state are labelled separately.</p>
     </section>
   );
 }

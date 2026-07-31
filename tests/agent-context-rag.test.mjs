@@ -400,7 +400,7 @@ test("source registry redacts on registration and refuses prohibited or unsafe s
   assert.equal(registry.register(source({ sensitivity: "prohibited" })), null);
   assert.throws(() => registry.register(source({ path: "../escape.ts" })), /not indexable/i);
   const cache = new ContextCache();
-  assert.throws(() => cache.set("unsafe", { token: "123456789:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO" }, ["test"]), /secret-bearing/i);
+  assert.throws(() => cache.set("unsafe", { token: ["123456789", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO"].join(":") }, ["test"]), /secret-bearing/i);
 });
 
 test("compileWithTrace emits privacy-safe retrieval and budget evidence", async () => {

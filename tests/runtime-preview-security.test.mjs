@@ -91,9 +91,18 @@ test("Studio keeps srcdoc popups disabled and treats iframe smoke as browser-onl
     ),
     readFile(new URL("../lib/project-compiler.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(studio, /srcDoc=\{runtimeSrcDoc\}/);
-  assert.match(studio, /sandbox="allow-scripts allow-forms allow-downloads"/);
-  assert.doesNotMatch(studio, /sandbox="[^"]*allow-popups/);
+  assert.match(studio, /src=\{runtimePreviewUrl \?\? undefined\}/);
+  assert.match(
+    studio,
+    /srcDoc=\{runtimePreviewUrl \? undefined : runtimeSrcDoc\}/,
+  );
+  assert.match(
+    studio,
+    /sandbox=\{runtimePreviewUrl \? "allow-scripts allow-forms allow-downloads allow-same-origin" : "allow-scripts allow-forms allow-downloads"\}/,
+  );
+  assert.match(studio, /function currentProjectV2PreviewUrl/);
+  assert.match(studio, /url\.protocol === "https:"/);
+  assert.doesNotMatch(studio, /allow-popups/);
   assert.match(
     studio,
     /mode: "browser",[\s\S]*dataProvider: "unverified"/,

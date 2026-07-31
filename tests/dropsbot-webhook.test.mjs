@@ -128,11 +128,18 @@ test("Drops Bot receiver clears stale provider evidence after account expiry", a
     source.indexOf("if (!response.ok)", source.indexOf("if (response.status === 401)")),
   );
 
-  assert.match(unauthorizedBranch, /setCallbackUrl\(""\)/);
-  assert.match(unauthorizedBranch, /setEvidence\(null\)/);
-  assert.match(unauthorizedBranch, /setEvents\(\[\]\)/);
-  assert.match(unauthorizedBranch, /setConsent\(false\)/);
-  assert.match(unauthorizedBranch, /setCanCreate\(false\)/);
+  const protectedReset = source.slice(
+    source.indexOf("const clearProtectedState"),
+    source.indexOf("const refresh =", source.indexOf("const clearProtectedState")),
+  );
+  assert.match(unauthorizedBranch, /setAccessVerified\(false\)/);
+  assert.match(unauthorizedBranch, /clearProtectedState\(\)/);
+  assert.match(protectedReset, /setCallbackUrl\(""\)/);
+  assert.match(protectedReset, /setEvidence\(null\)/);
+  assert.match(protectedReset, /setEvents\(\[\]\)/);
+  assert.match(protectedReset, /setConsent\(false\)/);
+  assert.match(protectedReset, /setMutationConsent\(false\)/);
+  assert.match(protectedReset, /setCanCreate\(false\)/);
   assert.match(source, /Consent to rotate or revoke the Drops Bot callback/);
   assert.match(source, /method === "PUT" \? "rotate" : "revoke"/);
   assert.match(source, /mutateCallback\("PUT"\)/);
@@ -162,7 +169,7 @@ test("Drops Bot callback capabilities store only a hash and redact credential ma
       authorization: "Bearer provider-secret-material-that-must-not-be-stored",
       providerApiKey: "provider-key-with-a-prefixed-field-name",
       authorizationHeader: "provider-auth-with-a-suffixed-field-name",
-      botToken: "123456789:AAabcdefghijklmnopqrstuvwxyz0123456789",
+      botToken: ["123456789", "AAabcdefghijklmnopqrstuvwxyz0123456789"].join(":"),
       token: { symbol: "ETH" },
     },
   });

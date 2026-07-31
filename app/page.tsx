@@ -1,12 +1,8 @@
 import { DropsStudio } from "@/components/drops-studio";
-import { Sparkles } from "lucide-react";
 
 function LandingHero() {
   return (
     <div className="hero-copy">
-      <span className="eyebrow">
-        <Sparkles size={14} /> DROPS AI CRYPTO BUILDER
-      </span>
       <h1>
         Build crypto apps{" "}
         <br className="hero-break" />

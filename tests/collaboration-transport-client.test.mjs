@@ -234,6 +234,6 @@ test("Studio team component polls only while visible and keeps remote apply cons
   assert.match(source, /pendingRemoteRevisionRef/);
   assert.match(source, /approve the replacement, then open it locally/i);
   assert.match(source, /checked=\{applyConsent\}/);
-  assert.match(source, /disabled=\{signedOut \|\| !applicableProject \|\| !applyConsent/);
+  assert.match(source, /disabled=\{accessUnverified \|\| !applicableProject \|\| !applyConsent/);
   assert.doesNotMatch(source, /Collaboration connected/);
 });

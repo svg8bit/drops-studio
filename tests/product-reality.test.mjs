@@ -138,7 +138,10 @@ test("generated products do not claim outcomes they cannot verify", async () => 
   assert.match(validator, /change: null/);
   assert.match(builder, /useState<"sample" \| "live">\("sample"\)/);
   assert.match(builder, /probability: 68/);
-  assert.match(previewCanvas, /dataMode === "live" \? "Live DropsTab data" : "Sample data"/);
+  assert.match(
+    previewCanvas,
+    /aria-label=\{`\$\{visibleName\} \$\{dataMode === "live" \? "with live DropsTab data" : "with labelled sample data"\}`\}/,
+  );
   assert.match(builder, /const sandboxChecks = new Set\(\[[\s\S]*?"data-adapter"/);
   assert.doesNotMatch(builder, /const sandboxChecks = new Set\(\[[\s\S]*?"dropstab"/);
   assert.doesNotMatch(builder, /probability: 0/);

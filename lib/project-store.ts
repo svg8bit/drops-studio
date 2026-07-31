@@ -87,6 +87,14 @@ function timestamp(project: GeneratedProject): number {
   return Number.isFinite(created) ? created : 0;
 }
 
+function compactProjectForCompatibilityIndex(
+  project: GeneratedProject,
+): GeneratedProject {
+  const compact = { ...project };
+  Reflect.deleteProperty(compact, "projectV2");
+  return compact;
+}
+
 export function readProjectsFromStore(
   storage: StorageLike = window.localStorage,
 ): GeneratedProject[] {
@@ -133,6 +141,7 @@ function writeProject(
     .slice(0, PROJECT_STORE_LIMIT - 1);
   const merged = [project, ...retainedExisting]
     .sort((left, right) => timestamp(right) - timestamp(left));
+  const compatibilityIndex = merged.map(compactProjectForCompatibilityIndex);
   const retainedKeys = new Set(merged.map((item) => itemKey(item.id)));
   const evictedItems = storedItemKeys(storage)
     .filter((storedKey) => !retainedKeys.has(storedKey))
@@ -144,10 +153,12 @@ function writeProject(
   const removedItems: Array<{ key: string; value: string | null }> = [];
 
   try {
+    // Compact the compatibility index first so an existing full Project V2
+    // snapshot cannot consume the quota needed by the canonical item record.
+    storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(compatibilityIndex));
+    indexWritten = true;
     storage.setItem(key, JSON.stringify({ schemaVersion: 1, version, project } satisfies StoredProjectItem));
     itemWritten = true;
-    storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(merged));
-    indexWritten = true;
     for (const evicted of evictedItems) {
       storage.removeItem(evicted.key);
       removedItems.push(evicted);
@@ -155,9 +166,9 @@ function writeProject(
   } catch (error) {
     let rollbackFailed = false;
     try {
-      for (const removed of removedItems) restoreValue(storage, removed.key, removed.value);
-      if (indexWritten) restoreValue(storage, PROJECTS_STORAGE_KEY, previousIndex);
       if (itemWritten) restoreValue(storage, key, previousItem);
+      if (indexWritten) restoreValue(storage, PROJECTS_STORAGE_KEY, previousIndex);
+      for (const removed of removedItems) restoreValue(storage, removed.key, removed.value);
     } catch {
       rollbackFailed = true;
     }

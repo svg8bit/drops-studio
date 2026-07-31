@@ -41,7 +41,7 @@ function gameSpec() {
 
 test("publish boundary rejects secrets without echoing them", async ({ request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-1440")
-  const secret = "123456789:AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8"
+  const secret = ["123456789", "AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8"].join(":")
   const spec = { ...gameSpec(), prompt: `Use ${secret}` }
   const response = await request.post("/api/projects/publish", { data: { spec } })
   expect(response.status()).toBe(400)

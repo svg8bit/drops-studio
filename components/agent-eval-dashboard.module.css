@@ -368,10 +368,10 @@
   align-items: flex-start;
   gap: 8px;
   padding: 10px 11px;
-  border: 1px solid #f0d4d8;
+  border: 1px solid #d8e2f0;
   border-radius: 11px;
-  color: #8b3642;
-  background: #fff7f8;
+  color: #53657e;
+  background: #f7faff;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -379,7 +379,7 @@
 .gateList li svg {
   width: 17px;
   flex: 0 0 auto;
-  color: #c83d4d;
+  color: #316cff;
 }
 
 .gateList .gateClear {

@@ -172,10 +172,12 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
 
   const proposal = page.locator(".proposal-card")
   await expect(proposal).toBeVisible()
-  await expect(proposal).toContainText("Free Director proof change set")
-  await expect(proposal).toContainText("native screens")
-  await expect(proposal).toContainText("working interactions")
-  await expect(proposal).toContainText("DropsTab evidence")
+  await expect(proposal).toContainText("Free Director deterministic change set")
+  await expect(proposal).toContainText("Shifted the accent to market green.")
+  await expect(proposal).toContainText("Converted the game world to a pixel cyber arcade.")
+  await expect(proposal).toContainText("Set the playable demo round to 47 seconds.")
+  await expect(proposal).toContainText("Raised difficulty to expert.")
+  await expect(proposal).toContainText("Renamed the product to PIXEL.")
 
   await mkdir(captureDirectory, { recursive: true })
   await proposal.screenshot({
@@ -198,7 +200,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   expect(applied.checkpoints).toHaveLength(2)
   expect(applied.checkpoints?.at(-1)).toMatchObject({
     source: "director",
-    label: "Free Director proof change set",
+    label: "Free Director deterministic change set",
   })
 
   await page.reload({ waitUntil: "domcontentloaded" })
@@ -226,7 +228,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   const checkpoints = page.locator(".checkpoint-list > button")
   await expect(checkpoints).toHaveCount(2)
   await expect(checkpoints.first()).toContainText(
-    "Free Director proof change set",
+    "Free Director deterministic change set",
   )
 
   await page.getByRole("button", { name: "Director", exact: true }).click()

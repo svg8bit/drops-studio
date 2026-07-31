@@ -1,4 +1,7 @@
-.studio-inspector { background: white; border-right: 1px solid var(--ps-line); overflow-y: auto; padding: 18px 16px 28px; }
+.studio-inspector { background: white; border-right: 1px solid var(--ps-line); overflow-y: auto; overscroll-behavior: contain; padding: 18px 16px 28px; scrollbar-color: #b8c5d7 transparent; scrollbar-width: thin; }
+.studio-inspector::-webkit-scrollbar { width: 8px; }
+.studio-inspector::-webkit-scrollbar-track { background: transparent; }
+.studio-inspector::-webkit-scrollbar-thumb { background: #b8c5d7; border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
 .inspector-section { animation: inspector-in .18s ease; }
 @keyframes inspector-in { from { opacity: .45; transform: translateX(-3px); } }
 .inspector-heading { align-items: center; display: flex; justify-content: space-between; margin-bottom: 13px; }

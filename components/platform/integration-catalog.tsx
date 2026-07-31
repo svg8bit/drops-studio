@@ -1,19 +1,22 @@
 "use client";
 
 import {
-  Bot,
   Braces,
-  BrainCircuit,
-  CloudUpload,
   DatabaseZap,
-  GitBranch,
   KeyRound,
-  Network,
-  Route,
   Send,
   Sparkles,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import {
+  SiAnthropic,
+  SiGithub,
+  SiMoonshotai,
+  SiOpenrouter,
+  SiVercel,
+} from "react-icons/si";
+import { TbBrandOpenai } from "react-icons/tb";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -22,15 +25,15 @@ import { StatusBadge, type PlatformStatus } from "./platform-ui";
 
 const integrations = [
   { id: "free", name: "Free Auto", eyebrow: "Deterministic fallback", description: "Built-in planning and generation fallback. No provider key is required.", icon: Sparkles, href: "/", fixed: "built-in" },
-  { id: "dropstab", name: "DropsTab API", eyebrow: "Market intelligence", description: "Session-only key for documented market, unlock, funding, and activity capabilities.", icon: DatabaseZap, href: "/?connections=1&provider=dropstab" },
-  { id: "dropsbot", name: "Drops Bot + Telegram", eyebrow: "Monitoring and delivery", description: "Guided account, channel, bot, and provider verification. No delivery is assumed.", icon: Send, href: "/?connections=1&provider=dropsbot&flow=telegram-channel", fixed: "setup" },
-  { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use a session-only OpenAI API project key and a provider-returned model.", icon: BrainCircuit, href: "/?connections=1&provider=openai" },
-  { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Use a session-only Anthropic API key for supported Claude models.", icon: Bot, href: "/?connections=1&provider=anthropic" },
-  { id: "openrouter", name: "OpenRouter", eyebrow: "Account and BYOK", description: "PKCE member flow or session-only key with provider-returned model catalog.", icon: Route, href: "/?connections=1&provider=openrouter" },
-  { id: "kimi", name: "Kimi", eyebrow: "Long context", description: "Use a session-only Moonshot API key and verified model identifier.", icon: Network, href: "/?connections=1&provider=kimi" },
+  { id: "dropstab", name: "DropsTab API", eyebrow: "Market intelligence", description: "Session-only key for documented market, unlock, funding, and activity capabilities.", icon: DatabaseZap, logo: "/brand/dropstab-mark.svg", href: "/?connections=1&provider=dropstab" },
+  { id: "dropsbot", name: "Drops Bot + Telegram", eyebrow: "Monitoring and delivery", description: "Guided account, channel, bot, and provider verification. No delivery is assumed.", icon: Send, logo: "/brand/drops-bot-avatar.png", href: "/?connections=1&provider=dropsbot&flow=telegram-channel", fixed: "setup" },
+  { id: "openai", name: "OpenAI", eyebrow: "Bring your key", description: "Use a session-only OpenAI API project key and a provider-returned model.", icon: TbBrandOpenai, href: "/?connections=1&provider=openai" },
+  { id: "anthropic", name: "Anthropic", eyebrow: "Bring your key", description: "Use a session-only Anthropic API key for supported Claude models.", icon: SiAnthropic, href: "/?connections=1&provider=anthropic" },
+  { id: "openrouter", name: "OpenRouter", eyebrow: "Account and BYOK", description: "PKCE member flow or session-only key with provider-returned model catalog.", icon: SiOpenrouter, href: "/?connections=1&provider=openrouter" },
+  { id: "kimi", name: "Kimi", eyebrow: "Long context", description: "Use a session-only Moonshot API key and verified model identifier.", icon: SiMoonshotai, href: "/?connections=1&provider=kimi" },
   { id: "custom", name: "Custom provider", eyebrow: "OpenAI-compatible", description: "Configure a public HTTPS chat-completions endpoint for this browser tab.", icon: Braces, href: "/?connections=1&provider=custom" },
-  { id: "github", name: "GitHub App", eyebrow: "Repository delivery", description: "Project-scoped branch, commit, and pull request actions require configured credentials and approval.", icon: GitBranch, href: "/projects", fixed: "setup" },
-  { id: "vercel", name: "Vercel deployment", eyebrow: "Preview and release", description: "A deployment is shown ready only after Vercel returns a confirmed provider receipt.", icon: CloudUpload, href: "/projects", fixed: "setup" },
+  { id: "github", name: "GitHub App", eyebrow: "Repository delivery", description: "Project-scoped branch, commit, and pull request actions require configured credentials and approval.", icon: SiGithub, href: "/projects", fixed: "setup" },
+  { id: "vercel", name: "Vercel deployment", eyebrow: "Preview and release", description: "A deployment is shown ready only after Vercel returns a confirmed provider receipt.", icon: SiVercel, href: "/projects", fixed: "setup" },
 ] as const;
 
 function subscribeToSessionConnections(onStoreChange: () => void) {
@@ -66,7 +69,7 @@ export function IntegrationCatalog() {
           const label = fixed === "built-in" ? "Built in" : sessionConfigured ? "Session configured" : "Setup required";
           return (
             <article key={integration.id} className="flex min-w-0 flex-col rounded-2xl border border-[#dbe4f1] bg-white p-5 shadow-[0_10px_32px_rgba(49,84,144,0.055)]">
-              <div className="flex items-start justify-between gap-4"><span className="grid size-12 place-items-center rounded-2xl bg-[#eef4ff] text-[#245fe5]"><Icon className="size-6" aria-hidden="true" /></span><StatusBadge status={status}>{label}</StatusBadge></div>
+              <div className="flex items-start justify-between gap-4"><span className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-2xl bg-[#eef4ff] text-[#245fe5]">{"logo" in integration ? <Image src={integration.logo} alt={`${integration.name} logo`} width={30} height={30} className="size-8 object-contain" unoptimized={integration.id === "dropstab"} /> : <Icon className="size-6" aria-hidden="true" />}</span><StatusBadge status={status}>{label}</StatusBadge></div>
               <p className="mt-6 text-xs font-bold uppercase tracking-[0.12em] text-[#245fe5]">{integration.eyebrow}</p>
               <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]">{integration.name}</h2>
               <p className="mt-2 flex-1 text-sm leading-6 text-[#52617a]">{integration.description}</p>
