@@ -93,14 +93,6 @@ test.describe("approved Storybook visual states", () => {
 
       expect(errors, errors.join("\n")).toEqual([])
       if (story === "crypto-game-desktop") {
-        // Warm the story once before the exact-pixel assertion. Chromium's
-        // first raster pass for this gradient-heavy surface can differ by a
-        // few antialias pixels, while every cached render is byte-identical.
-        // Reloading keeps the zero-pixel visual contract without accepting a
-        // tolerance or masking real product UI.
-        await page.reload({ waitUntil: "domcontentloaded" })
-        await settleStory(page)
-
         // The same DropsTab SVG is covered by the other approved stories.
         // Hide this downscaled copy to prevent cross-run Skia antialias noise
         // (single-channel changes in a handful of edge pixels) from making the
