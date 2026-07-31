@@ -119,10 +119,13 @@ destination. Drops Studio copies the command for the user; it does not send the
 command or inspect the bot's reply. Even a future Telegram message receipt would
 prove only that the command was sent, not that Drops Bot applied the Profile.
 
-`BLOB_READ_WRITE_TOKEN` or the provider combination `BLOB_STORE_ID` plus
-`VERCEL_OIDC_TOKEN` supplies durable production request/rate-limit state. These
-are variable names only; credentials must be configured in the deployment
-secret store and never copied into generated products.
+Mutable production request/rate-limit state uses a dedicated private Blob store
+selected by `BLOB_STORE_ID` and authenticated with Vercel's short-lived
+`VERCEL_OIDC_TOKEN`. This enables cache-bypassed consistent reads after an
+overwrite. The separate `BLOB_READ_WRITE_TOKEN` remains scoped to the public
+store used by legacy `/p/{slug}` publications. These are variable names only;
+credentials stay in the deployment secret store and never enter generated
+products.
 
 Relevant official references:
 

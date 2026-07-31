@@ -206,18 +206,16 @@ retains the project for a safe retry.
 
 ## Private Project V2 persistence
 
-Snapshots use private Vercel Blob when configured by either:
-
-```text
-BLOB_READ_WRITE_TOKEN
-```
-
-or the provider combination:
+Snapshots use a dedicated private Vercel Blob store selected by:
 
 ```text
 BLOB_STORE_ID
 VERCEL_OIDC_TOKEN
 ```
+
+Vercel injects the short-lived OIDC token at runtime. The independent
+`BLOB_READ_WRITE_TOKEN` is scoped to the public legacy publication store and is
+never used for private snapshots or mutable control-plane state.
 
 The storage envelope is capped at 8,000,000 bytes and revalidates the complete
 Project V2 object before write/read. Blob ETags provide compare-and-swap. A

@@ -266,10 +266,12 @@ trusted. Blob keys contain a SHA-256 actor namespace and project ID. Writes use
 both a storage revision and the validated Project V2 revision; stale writes
 return HTTP 409 with the current server copy.
 
-Private Vercel Blob is used when `BLOB_READ_WRITE_TOKEN`, or `BLOB_STORE_ID` plus
-`VERCEL_OIDC_TOKEN`, is configured. `DROPS_STUDIO_LOCAL_PROJECT_STORE` enables an
-explicit non-production, process-memory fallback. The browser project store uses
-`localStorage` and Web Locks when available. IndexedDB is not implemented.
+Private Vercel Blob uses the dedicated `BLOB_STORE_ID` plus the runtime-injected
+`VERCEL_OIDC_TOKEN`. The unrelated `BLOB_READ_WRITE_TOKEN` selects the public
+legacy publication store and is passed explicitly only by `/p/{slug}` storage.
+`DROPS_STUDIO_LOCAL_PROJECT_STORE` enables an explicit non-production,
+process-memory fallback. The browser project store uses `localStorage` and Web
+Locks when available. IndexedDB is not implemented.
 
 Verified release receipts use a separate private Blob namespace (or the same
 explicit local proof backend) and are never embedded in Project V2 JSON. A

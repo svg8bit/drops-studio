@@ -67,7 +67,10 @@ function database(): D1Database | null {
 }
 
 function blobAvailable(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN));
+  return Boolean(
+    process.env.BLOB_STORE_ID
+      && (process.env.VERCEL_OIDC_TOKEN || process.env.VERCEL),
+  );
 }
 
 async function identityHash(identity: string): Promise<string> {
@@ -95,11 +98,11 @@ async function consumeRateLimit(identity: string): Promise<"allowed" | "limited"
     const hour = Math.floor(now / (60 * 60 * 1_000));
     const pathname = `drops-studio/rate-limit/telegram/${hour}/${key}.json`;
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const current = await get(pathname, { access: "public", useCache: false });
+      const current = await get(pathname, { access: "private", useCache: false });
       if (!current) {
         try {
           await put(pathname, JSON.stringify({ count: 1 }), {
-            access: "public",
+            access: "private",
             addRandomSuffix: false,
             allowOverwrite: false,
             cacheControlMaxAge: 60,
@@ -115,7 +118,7 @@ async function consumeRateLimit(identity: string): Promise<"allowed" | "limited"
       const count = Math.max(0, Number(stored.count) || 0) + 1;
       try {
         await put(pathname, JSON.stringify({ count }), {
-          access: "public",
+          access: "private",
           addRandomSuffix: false,
           allowOverwrite: true,
           cacheControlMaxAge: 60,
