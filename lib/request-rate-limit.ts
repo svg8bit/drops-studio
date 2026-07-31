@@ -64,6 +64,11 @@ function countedState(count: number, max: number, limited = count > max): Reques
   };
 }
 
+function retryDelay(attempt: number): Promise<void> {
+  const delayMs = Math.min(160, 20 * 2 ** attempt);
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 function cleanupLocalLimits(now: number): Map<string, { count: number; expiresAt: number }> {
   const limits = globalThis.__DROPS_STUDIO_LOCAL_RATE_LIMITS__ ??= new Map();
   for (const [storedKey, stored] of limits) {
@@ -171,20 +176,24 @@ export async function consumeRequestLimitState(
     // installations may use the original public publication store, while new
     // installations can use a private store. Alternate access modes so both
     // configurations retain the same atomic limiter contract.
-    const accessAttempts: BlobAccess[] = [
-      "private",
-      "public",
-      "private",
-      "public",
-      "private",
-      "public",
-    ];
-    for (const access of accessAttempts) {
+    // A public fallback store rejects private reads, while a private store
+    // rejects public reads. Keep both modes backward compatible, but allow six
+    // real attempts for either store. Each attempt re-reads the authoritative
+    // ETag before writing, so transient Blob failures and concurrent CAS
+    // conflicts cannot turn an otherwise valid build into an intermittent 503.
+    const accessAttempts: BlobAccess[] = Array.from(
+      { length: 6 },
+      () => ["private", "public"] satisfies BlobAccess[],
+    ).flat();
+    for (const [attemptIndex, access] of accessAttempts.entries()) {
       const pathname = pathnames[access];
       let current: Awaited<ReturnType<typeof storedBlobCount>>;
       try {
         current = await storedBlobCount(storage, pathname, access);
       } catch {
+        if (attemptIndex % 2 === 1 && attemptIndex < accessAttempts.length - 1) {
+          await retryDelay(Math.floor(attemptIndex / 2));
+        }
         continue;
       }
       const now = Date.now();
@@ -200,6 +209,9 @@ export async function consumeRequestLimitState(
           });
           return countedState(1, options.max);
         } catch {
+          if (attemptIndex % 2 === 1 && attemptIndex < accessAttempts.length - 1) {
+            await retryDelay(Math.floor(attemptIndex / 2));
+          }
           continue;
         }
       }
@@ -216,6 +228,9 @@ export async function consumeRequestLimitState(
         });
         return countedState(count, options.max);
       } catch {
+        if (attemptIndex % 2 === 1 && attemptIndex < accessAttempts.length - 1) {
+          await retryDelay(Math.floor(attemptIndex / 2));
+        }
         continue;
       }
     }
