@@ -230,7 +230,14 @@ async function installationToken(
     },
     // A platform GitHub App credential is narrowed to exactly the repository
     // selected by the server-side allowlist before any repository API call.
-    body: JSON.stringify({ repositories: [scopedRepository] }),
+    body: JSON.stringify({
+      repositories: [scopedRepository],
+      permissions: {
+        contents: "write",
+        pull_requests: "write",
+        metadata: "read",
+      },
+    }),
     cache: "no-store",
   });
   let payload: Record<string, unknown> = {};

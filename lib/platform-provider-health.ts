@@ -328,6 +328,11 @@ async function githubHealth(): Promise<PlatformProviderHealthCheck> {
   }
   try {
     const receipt = await timed(async () => {
+      const allowedRepositories = allowed
+        .split(",")
+        .map((entry) => entry.trim().split("/").at(-1) ?? "")
+        .filter((entry) => /^[A-Za-z0-9_.-]{1,100}$/.test(entry));
+      if (!allowedRepositories.length) throw new Error("repository allowlist failed");
       const tokenResponse = await fetch(
         `https://api.github.com/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
         {
@@ -335,8 +340,13 @@ async function githubHealth(): Promise<PlatformProviderHealthCheck> {
           headers: {
             accept: "application/vnd.github+json",
             authorization: `Bearer ${githubAppJwt()}`,
+            "content-type": "application/json",
             "x-github-api-version": "2022-11-28",
           },
+          body: JSON.stringify({
+            repositories: allowedRepositories,
+            permissions: { metadata: "read" },
+          }),
           cache: "no-store",
           signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
         },
@@ -344,7 +354,7 @@ async function githubHealth(): Promise<PlatformProviderHealthCheck> {
       const tokenPayload = await tokenResponse.json() as Record<string, unknown>;
       const token = typeof tokenPayload.token === "string" ? tokenPayload.token : "";
       if (!tokenResponse.ok || !token) throw new Error("installation token failed");
-      const repositories = await fetch(
+      const repositoriesResponse = await fetch(
         "https://api.github.com/installation/repositories?per_page=1",
         {
           headers: {
@@ -356,7 +366,7 @@ async function githubHealth(): Promise<PlatformProviderHealthCheck> {
           signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
         },
       );
-      if (!repositories.ok) throw new Error("repository receipt failed");
+      if (!repositoriesResponse.ok) throw new Error("repository receipt failed");
     });
     return working(
       "github-app-installation-live",
