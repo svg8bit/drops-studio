@@ -326,6 +326,47 @@ test("durable limiter retries a transient read failure before consuming", async 
   assert.equal(writes, 1);
 });
 
+test("durable limiter survives repeated public-store CAS conflicts without failing open", async () => {
+  let record = {
+    body: JSON.stringify({ count: 4, windowEndsAt: Date.now() + 60_000 }),
+    etag: "etag-4",
+  };
+  let publicWrites = 0;
+  const state = await requestLimitModule.consumeRequestLimitState({
+    identity: "session:public-cas-retry",
+    namespace: "project-build-run",
+    max: 10,
+    windowMs: 60_000,
+  }, {
+    async get(_pathname, options) {
+      if (options.access === "private") throw new Error("store access is public");
+      return {
+        statusCode: 200,
+        stream: new Blob([record.body]).stream(),
+        blob: { etag: record.etag },
+      };
+    },
+    async put(pathname, body, options) {
+      assert.equal(options.access, "public");
+      publicWrites += 1;
+      if (publicWrites <= 3) {
+        record = {
+          body: JSON.stringify({ count: 4, windowEndsAt: Date.now() + 60_000 }),
+          etag: `concurrent-etag-${publicWrites}`,
+        };
+        throw new Error("etag mismatch");
+      }
+      assert.equal(options.ifMatch, record.etag);
+      record = { body: String(body), etag: "etag-5" };
+      return { pathname, etag: record.etag };
+    },
+  });
+
+  assert.deepEqual(state, { status: "allowed", count: 5, remaining: 5 });
+  assert.equal(publicWrites, 4);
+  assert.equal(JSON.parse(record.body).count, 5);
+});
+
 test("durable limiter supports an existing public Blob store without weakening the limit", async () => {
   const accesses = [];
   let record = null;
