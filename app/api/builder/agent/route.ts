@@ -158,13 +158,17 @@ export async function handleBuilderAgentRequest(
     );
     const agentRequest = {
       ...parsed.data,
-      provider: remembered.selection,
+      provider:
+        parsed.data.mode === "build"
+          ? ({ provider: "free" } as const)
+          : remembered.selection,
       approvedTools: [...approvedTools],
     };
     const agentDependencies = {
       services: session,
       audit,
-      credentials: remembered.credentials,
+      credentials:
+        parsed.data.mode === "build" ? undefined : remembered.credentials,
       deterministicFallback:
         dependencies.deterministicFallback ??
         materializedProjectDeterministicFallback,
@@ -172,7 +176,12 @@ export async function handleBuilderAgentRequest(
       runnerFactory: dependencies.runnerFactory,
     };
     const flags = resolveAgentIntelligenceFlags();
-    const intelligence = flags.compositeModelRouting
+    // Initial builds are owned by the deterministic server release pipeline.
+    // Letting the composite model choose lifecycle tools allowed checks to run
+    // before dependency installation and left projects permanently pending.
+    const useCompositeIntelligence =
+      flags.compositeModelRouting && parsed.data.mode !== "build";
+    const intelligence = useCompositeIntelligence
       ? await (dependencies.intelligenceRunner ?? runIntelligentBuilderAgent)({
           request: agentRequest,
           dependencies: agentDependencies,

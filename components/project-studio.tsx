@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitCommit,
   Globe2,
+  GripVertical,
   History,
   Image as ImageIcon,
   KeyRound,
@@ -164,6 +165,30 @@ type ProjectSyncStatus =
   | "synced"
   | "conflict"
   | "error";
+
+const STUDIO_PANEL_WIDTH_KEY = "drops-studio:studio-panel-width";
+const STUDIO_PANEL_MIN_WIDTH = 320;
+const STUDIO_PANEL_MAX_WIDTH = 720;
+
+function friendlyConversationMessage(content: string) {
+  if (
+    /Independent Verifier|RETRYABLE_FAILURE|deterministic evidence|browser telemetry|host-side check|release gate/i.test(
+      content,
+    )
+  ) {
+    return "The build needs another pass. Open Code and choose Retry; your last working preview is unchanged.";
+  }
+  if (/Starting the isolated Node 24 Sandbox|syncing real project files/i.test(content)) {
+    return "Starting your app and preparing the live preview…";
+  }
+  if (/Release checks passed|Live Sandbox preview is ready/i.test(content)) {
+    return "Your app is ready. The live preview and changed files are available now.";
+  }
+  return content
+    .replace(/^(Working|Verified|Paused)\s*[·:-]\s*/i, "")
+    .replace(/\s*\([^)]*(?:FAILURE|GATE|EVIDENCE)[^)]*\)\s*/gi, " ")
+    .trim();
+}
 
 type SelectedCanvasItem =
   | {
@@ -609,9 +634,16 @@ export function ProjectStudio() {
     useState<GeneratedProject | null>(null);
   const [runtimeRevision, setRuntimeRevision] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<InspectorTab>("project");
+  const [tab, setTab] = useState<InspectorTab>("director");
   const [device, setDevice] = useState<DeviceMode>("desktop");
   const [canvasZoom, setCanvasZoom] = useState(100);
+  const [sidePanelWidth, setSidePanelWidth] = useState(420);
+  const [sidePanelCollapsed, setSidePanelCollapsed] = useState(false);
+  const sidePanelDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [designMode, setDesignMode] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(
     null,
@@ -657,6 +689,15 @@ export function ProjectStudio() {
     useState<"dropstab" | "fallback" | "unverified">("unverified");
   const [projectSyncStatus, setProjectSyncStatus] =
     useState<ProjectSyncStatus>("loading");
+
+  useEffect(() => {
+    const stored = Number(window.localStorage.getItem(STUDIO_PANEL_WIDTH_KEY));
+    if (Number.isFinite(stored)) {
+      setSidePanelWidth(
+        Math.min(STUDIO_PANEL_MAX_WIDTH, Math.max(STUDIO_PANEL_MIN_WIDTH, stored)),
+      );
+    }
+  }, []);
 
   const persistProject = useCallback(
     async (
@@ -3242,36 +3283,51 @@ export function ProjectStudio() {
     icon: typeof Settings2;
     mobileOnly?: boolean;
   }> = [
-    { id: "project", label: "Project", icon: Settings2 },
     { id: "preview", label: "Preview", icon: Monitor, mobileOnly: true },
-    { id: "director", label: "Director", icon: Sparkles },
+    { id: "director", label: "Chat", icon: Sparkles },
     { id: "design", label: "Design", icon: Palette },
-    { id: "data", label: "Data", icon: Database },
-    { id: "logic", label: "Logic", icon: Blocks },
     { id: "connections", label: "Connect", icon: KeyRound },
-    { id: "quality", label: "Tests", icon: ShieldCheck },
     {
       id: "code",
-      label:
-        project.projectV2?.manifest.framework.name === "nextjs"
-          ? "Builder"
-          : "Code",
+      label: "Code",
       icon: Code2,
     },
     { id: "history", label: "Versions", icon: History },
   ];
   const game = project.spec.gameDirection;
-  const quickPrompts = categoryPrompts[project.spec.presetId];
+  const suggestedPrompt = categoryPrompts[project.spec.presetId][0];
   const activeWorkspace =
     project.workspace ?? materializeProjectWorkspace(project);
 
   const openInspectorTab = (nextTab: InspectorTab) => {
+    if (nextTab !== "preview" && nextTab !== "code") {
+      setSidePanelCollapsed(false);
+    }
     setTab(nextTab);
     if (nextTab === "director") {
       window.requestAnimationFrame(() => {
         document.querySelector<HTMLTextAreaElement>(".chat-composer textarea")?.focus();
       });
     }
+  };
+
+  const updateSidePanelWidth = (next: number) => {
+    const viewportMaximum = Math.max(
+      STUDIO_PANEL_MIN_WIDTH,
+      Math.min(STUDIO_PANEL_MAX_WIDTH, window.innerWidth - 560),
+    );
+    const width = Math.min(
+      viewportMaximum,
+      Math.max(STUDIO_PANEL_MIN_WIDTH, next),
+    );
+    setSidePanelCollapsed(false);
+    setSidePanelWidth(width);
+    return width;
+  };
+
+  const finishSidePanelResize = () => {
+    sidePanelDragRef.current = null;
+    window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(sidePanelWidth));
   };
 
   const openConnectionsHub = (provider?: string) => {
@@ -3324,17 +3380,13 @@ export function ProjectStudio() {
                   ? "Research app published"
                   : "Web app published"
                 : dirty
-                  ? builderEvidence.verified
-                    ? "Verified draft"
-                    : hasProjectV2
-                      ? "Build pending"
-                      : "Edits pending"
+                  ? "Draft"
                   : externalSetup
                   ? "Needs connection"
                   : hasProjectV2
                     ? builderEvidence.verified
-                      ? "Verified draft"
-                      : "Build pending"
+                      ? "Ready"
+                      : "Draft"
                     : "Draft"}
           </b>
         </div>
@@ -3441,7 +3493,12 @@ export function ProjectStudio() {
           tab === "code" && project.projectV2?.manifest.framework.name === "nextjs"
             ? " v2-builder-active"
             : ""
-        }`}
+        }${sidePanelCollapsed ? " side-panel-collapsed" : ""}`}
+        style={
+          {
+            "--studio-side-width": `${sidePanelCollapsed ? 0 : sidePanelWidth}px`,
+          } as React.CSSProperties
+        }
       >
         <aside className="studio-rail">
           {nav.map((item) => {
@@ -3460,14 +3517,6 @@ export function ProjectStudio() {
               </button>
             );
           })}
-          <div className="rail-foundation">
-            <span title="DropsTab attached">
-              <Database />
-            </span>
-            <span title="Drops Bot setup available">
-              <Bot />
-            </span>
-          </div>
         </aside>
 
         {project.projectV2?.manifest.framework.name === "nextjs" ? (
@@ -4822,6 +4871,56 @@ export function ProjectStudio() {
           )}
         </aside>
 
+        <div
+          className="studio-splitter"
+          role="separator"
+          aria-label="Resize chat and preview"
+          aria-orientation="vertical"
+          aria-valuemin={STUDIO_PANEL_MIN_WIDTH}
+          aria-valuemax={STUDIO_PANEL_MAX_WIDTH}
+          aria-valuenow={sidePanelCollapsed ? 0 : sidePanelWidth}
+          tabIndex={0}
+          title="Drag to resize. Double-click to collapse."
+          onDoubleClick={() => setSidePanelCollapsed((value) => !value)}
+          onPointerDown={(event) => {
+            sidePanelDragRef.current = {
+              pointerId: event.pointerId,
+              startX: event.clientX,
+              startWidth: sidePanelCollapsed ? STUDIO_PANEL_MIN_WIDTH : sidePanelWidth,
+            };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const drag = sidePanelDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) return;
+            const next = updateSidePanelWidth(
+              drag.startWidth + event.clientX - drag.startX,
+            );
+            window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(next));
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            finishSidePanelResize();
+          }}
+          onPointerCancel={finishSidePanelResize}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              setSidePanelCollapsed((value) => !value);
+              return;
+            }
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const next = updateSidePanelWidth(
+              sidePanelWidth + (event.key === "ArrowRight" ? 24 : -24),
+            );
+            window.localStorage.setItem(STUDIO_PANEL_WIDTH_KEY, String(next));
+          }}
+        >
+          <GripVertical />
+        </div>
+
         <section className="runtime-stage">
           <div className="stage-toolbar">
             <div className="device-switch">
@@ -4873,22 +4972,6 @@ export function ProjectStudio() {
               </button>
               <button type="button" onClick={() => openSource("index.html")}>
                 <Code2 /> Code
-              </button>
-              <button
-                type="button"
-                className={
-                  releaseEvidenceReady
-                    ? "quality-ready"
-                    : ""
-                }
-                onClick={() => setTab("quality")}
-              >
-                <ShieldCheck />
-                {builderEvidence.verified
-                  ? "Build verified"
-                  : hasProjectV2
-                    ? `Build pending ${builderEvidence.passed}/${builderEvidence.total}`
-                    : `Legacy quality ${quality.score}`}
               </button>
               <button type="button" onClick={openRuntime}>
                 <ExternalLink /> Fullscreen
@@ -4983,31 +5066,11 @@ export function ProjectStudio() {
           <div className="conversation" role="log" aria-label="Drops Director conversation" tabIndex={0}>
             {(project.conversation?.length ?? 0) <= 1 && (
               <div className="assistant-guide">
-                <strong>Build with context, not from zero</strong>
+                <strong>What should we build or change?</strong>
                 <p>
-                  I already know this preset’s user flow, modules, data sources
-                  and safe actions.
+                  Describe the result in plain language. Director edits the real
+                  project and refreshes the preview.
                 </p>
-                <span>
-                  <MousePointer2 />
-                  <b>Select a block</b>
-                  <small>then describe a targeted change</small>
-                </span>
-                <span>
-                  <Palette />
-                  <b>Ask for directions</b>
-                  <small>cartoon, terminal, editorial, glass</small>
-                </span>
-                <span>
-                  <Blocks />
-                  <b>Change behavior</b>
-                  <small>layout, data view, rules and social loop</small>
-                </span>
-                <span>
-                  <Undo2 />
-                  <b>Experiment safely</b>
-                  <small>every Apply creates a checkpoint</small>
-                </span>
               </div>
             )}
             {(project.conversation ?? []).map((message) => (
@@ -5018,7 +5081,7 @@ export function ProjectStudio() {
                 <span>
                   {message.role === "assistant" ? <Sparkles /> : "You"}
                 </span>
-                <p>{message.content}</p>
+                <p>{friendlyConversationMessage(message.content)}</p>
                 {message.proposal && (
                   <div className="proposal-card">
                     <header>
@@ -5067,17 +5130,6 @@ export function ProjectStudio() {
             )}
             <div ref={chatEndRef} />
           </div>
-          <div className="quick-prompts">
-            {quickPrompts.map((prompt) => (
-              <button
-                type="button"
-                key={prompt}
-                onClick={() => void sendDirectorPrompt(prompt)}
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
           <form
             className="chat-composer"
             onSubmit={(event) => {
@@ -5091,7 +5143,7 @@ export function ProjectStudio() {
               placeholder={
                 selectedBlock
                   ? `Tell Director how to change ${selectedBlock.label}…`
-                  : "Describe a product, visual or behavior change…"
+                  : `Describe what to build or change… Try: “${suggestedPrompt}”`
               }
               rows={3}
             />
@@ -5108,10 +5160,6 @@ export function ProjectStudio() {
               </button>
             </footer>
           </form>
-          <div className="assistant-foot">
-            <ShieldCheck /> Suggestions never change the app until you press
-            Apply.
-          </div>
         </aside>
       </div>
 
