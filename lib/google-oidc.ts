@@ -5,7 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { safeSameOriginReturnPath } from "@/lib/safe-return-to";
+import { safeSameOriginReturnPath } from "./safe-return-to.ts";
 
 export const GOOGLE_OIDC_TRANSACTION_COOKIE = "drops_google_oidc";
 export const GOOGLE_OIDC_TRANSACTION_TTL_SECONDS = 10 * 60;
