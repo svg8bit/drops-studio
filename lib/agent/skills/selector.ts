@@ -24,6 +24,18 @@ function integrationSignal(skill: RuntimeSkill, integrations: Set<string>): bool
     "github-delivery": ["github"],
     "vercel-deployment": ["vercel"],
     "project-data": ["project-data", "database"],
+    "managed-backend": ["managed-backend", "project-data", "database"],
+    "data-modeling": ["managed-backend", "database"],
+    "managed-auth": ["managed-auth", "auth"],
+    "object-storage": ["object-storage", "blob", "r2"],
+    "server-functions": ["managed-functions", "functions"],
+    "jobs-and-cron": ["managed-jobs", "cron"],
+    "webhooks": ["managed-webhooks", "dropsbot"],
+    "realtime-data": ["managed-realtime", "realtime"],
+    "collaboration": ["collaboration"],
+    "enterprise-rbac": ["organizations", "rbac"],
+    "enterprise-sso": ["oidc", "sso"],
+    "audit-and-compliance": ["audit", "backups"],
   };
   return (map[skill.id] ?? []).some((entry) => integrations.has(entry));
 }

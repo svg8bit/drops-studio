@@ -11,8 +11,10 @@ registerHooks({
 });
 
 const { projectPresetIds } = await import("../lib/presets.ts");
+const { findArtifactSecrets } = await import("../lib/artifact-security.ts");
 const { createProjectSpec } = await import("../lib/project-factory.ts");
 const { materializeProjectV2Template } = await import("../lib/project-template-materializer.ts");
+const { projectTemplateComponentSource } = await import("../lib/project-template-ui.ts");
 const { validateProjectV2 } = await import("../lib/project-v2-validator.ts");
 
 const categoryExpectations = {
@@ -144,4 +146,67 @@ test("mandatory vertical demos contain their real category interactions and hone
     const source = project.files["components/crypto-product.tsx"].content;
     for (const text of evidence) assert.match(source, new RegExp(text, "i"), `${presetId}: ${text}`);
   }
+});
+
+test("custom collaborative SaaS prompts materialize a secret-free managed backend contract", async () => {
+  const spec = createProjectSpec({
+    presetId: "custom-product",
+    values: {},
+    prompt: "Build a multi-user whale intelligence SaaS with organizations, RBAC, auth, collaborative comments, wallet webhooks, jobs, realtime updates, audit and approved Telegram alerts.",
+    tools: ["DropsTab API", "Drops Bot", "Telegram"],
+    provider: "free",
+    model: "Free compiler",
+    market: [],
+    prediction: { title: "No prediction", probability: null, change: null },
+    origin: "https://drops-studio.example",
+  });
+  const project = await materializeProjectV2Template({ id: "managed-collaborative-saas", spec, now: "2026-07-30T12:00:00.000Z" });
+  const manifest = JSON.parse(project.files["backend/manifest.json"].content);
+  const schema = JSON.parse(project.files["backend/schema.json"].content);
+  const policies = JSON.parse(project.files["backend/policies.json"].content);
+  const integration = project.integrations.find((item) => item.id === "managed-backend");
+  const environment = project.environment.find((item) => item.name === "DROPS_MANAGED_PROJECT_CAPABILITY");
+
+  assert.equal(manifest.productionProvider, "setup-required-until-health-receipt");
+  assert.deepEqual(Object.keys(schema.collections), ["wallet_events", "alerts", "comments", "workflow_items"]);
+  assert.ok(policies.approvals.includes("telegram.publish"));
+  assert.equal(integration?.status, "setup-required");
+  assert.ok(integration?.capabilities.includes("collaboration"));
+  assert.ok(integration?.capabilities.includes("enterprise-policy"));
+  assert.equal(environment?.secret, true);
+  assert.match(project.files["app/api/backend/status/route.ts"].content, /\.\.\/\.\.\/\.\.\/\.\.\/lib\/drops-managed-server/);
+  assert.match(project.files["lib/drops-managed-server.ts"].content, /target\.origin !== origin/);
+  assert.match(project.files["lib/drops-managed-server.ts"].content, /redirect: "error"/);
+  assert.match(project.files["app/api/backend/collections/[collection]/route.ts"].content, /ALLOWED_COLLECTIONS/);
+  assert.match(project.files["lib/use-managed-collection.ts"].content, /Browser-local demo · cloud setup required/);
+  assert.match(project.files["components/crypto-product.tsx"].content, /useManagedCollection\("workflow_items"\)/);
+  assert.ok(project.files["tests/managed-backend-manifest.test.mjs"]);
+  const generatedSource = Object.values(project.files).map((file) => file.content).join("\n");
+  assert.deepEqual(findArtifactSecrets(generatedSource, "managed collaborative template"), []);
+  assert.equal((await validateProjectV2(project)).contentHash, project.contentHash);
+});
+
+test("dynamic template values are inserted verbatim without replacement-token expansion", () => {
+  const spec = createProjectSpec({
+    presetId: "custom-product",
+    values: {},
+    prompt: "Build a custom product",
+    tools: [],
+    provider: "free",
+    model: "Free compiler",
+    market: [],
+    prediction: { title: "No prediction", probability: null, change: null },
+    origin: "https://drops-studio.example",
+  });
+  const source = projectTemplateComponentSource(spec, {
+    eyebrow: "VALUE $&",
+    headline: "Literal $` and $'",
+    description: "Replacement tokens stay data",
+    primaryAction: "Create",
+    metrics: ["One", "Two", "Three"],
+    blocks: ["A", "B", "C"],
+  });
+  assert.match(source, /VALUE \$&/);
+  assert.match(source, /Literal \$` and \$'/);
+  assert.doesNotMatch(source, /__PRODUCT_MODEL__|__MANAGED_IMPORT__/);
 });

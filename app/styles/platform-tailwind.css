@@ -1,0 +1,5 @@
+/* Public dashboard routes are isolated from the legacy landing cascade. Keep
+   these utilities unlayered so explicit component classes can override the
+   older unlayered h1-h6 reset without changing the approved builder shell. */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";

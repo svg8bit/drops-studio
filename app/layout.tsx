@@ -26,12 +26,12 @@ const productionUrl = /^https?:\/\//i.test(configuredProductionUrl)
 
 export const metadata: Metadata = {
   metadataBase: new URL(productionUrl),
-  title: "Drops Studio — Build crypto products in minutes",
+  title: "Drops Studio — Build crypto apps 10x faster with AI",
   description:
-    "Build useful crypto apps with DropsTab intelligence, guided Drops Bot setup and the AI model you choose.",
+    "Plan, build, test and publish editable crypto applications with DropsTab intelligence, Drops Bot automation and the AI model you choose.",
   openGraph: {
     title: "Drops Studio",
-    description: "Turn a crypto idea into a live project in five minutes.",
+    description: "Build editable crypto applications with AI, DropsTab intelligence and Drops Bot automation.",
     type: "website",
     images: [
       {
@@ -45,7 +45,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Drops Studio",
-    description: "Turn a crypto idea into a live project in five minutes.",
+    description: "Build editable crypto applications with AI, DropsTab intelligence and Drops Bot automation.",
     images: ["/og.png"],
   },
 };

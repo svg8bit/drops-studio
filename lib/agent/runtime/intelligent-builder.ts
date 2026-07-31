@@ -54,6 +54,7 @@ import {
   type ImmutableVerificationEvidence,
   type VerificationReport,
 } from "../models/verifier.ts";
+import { loadRuntimeSkills } from "../skills/index.ts";
 import {
   composeRuntimeSystemPrompt,
   loadRuntimeSystemPrompt,
@@ -163,11 +164,34 @@ function requestedIntegrations(prompt: string): string[] {
   if (/dropstab|market cap|fdv|token unlock|funding round/i.test(prompt)) {
     values.push("dropstab");
   }
-  if (/drops\s*bot|wallet monitor|tracked wallet|wallet event|webhook/i.test(prompt)) {
+  if (/drops\s*bot|wallet monitor|tracked wallet|wallet event/i.test(prompt)) {
     values.push("drops-bot");
   }
   if (/telegram|channel delivery|send alert/i.test(prompt)) values.push("telegram");
-  return values;
+  if (/managed backend|backend services|full[- ]stack|database|data model|schema migration/i.test(prompt)) values.push("managed-backend");
+  if (/managed auth|magic link|one[- ]time code|app users|user sessions/i.test(prompt)) values.push("managed-auth");
+  if (/attachment|file upload|object storage|signed url/i.test(prompt)) values.push("object-storage");
+  if (/server function|backend function|api handler/i.test(prompt)) values.push("managed-functions");
+  if (/background job|job queue|scheduled|cron/i.test(prompt)) values.push("managed-jobs");
+  if (/webhook|event inbox/i.test(prompt)) values.push("managed-webhooks");
+  if (/realtime|live updates|subscribe|websocket|sse/i.test(prompt)) values.push("managed-realtime");
+  if (/collaborative|collaboration|presence|comments?|review workflow|ai task branch/i.test(prompt)) values.push("collaboration");
+  if (/organization|workspace members|rbac|owner\/developer\/viewer|service account|api token/i.test(prompt)) values.push("organizations");
+  if (/enterprise sso|oidc|domain verification|group mapping|saml|scim/i.test(prompt)) values.push("oidc");
+  if (/audit|retention|export|deletion|backup|compliance/i.test(prompt)) values.push("audit");
+  return [...new Set(values)];
+}
+
+function runtimeSkillCapabilities(project: ProjectV2): string[] {
+  const capabilities = new Set<string>(["project-v2", "vercel-sandbox"]);
+  for (const integration of project.integrations) {
+    capabilities.add(integration.kind);
+    if (integration.kind === "dropstab") capabilities.add("dropstab-proxy");
+    if (integration.kind === "drops-bot") capabilities.add("dropsbot-proxy");
+    if (integration.kind === "telegram") capabilities.add("telegram-proxy");
+    if (integration.kind === "project-data") capabilities.add("project-data");
+  }
+  return [...capabilities].sort();
 }
 
 function routeTask(request: BuilderAgentRequest, project: ProjectV2) {
@@ -472,8 +496,35 @@ function composeBuilderPrompt(input: {
   safePrompt: string;
   core: Awaited<ReturnType<typeof loadRuntimeSystemPrompt>>;
 }): ComposedRuntimePrompt {
+  const integrations = requestedIntegrations(input.safePrompt);
+  const skillSelection = loadRuntimeSkills({
+    role: input.route.primaryRole,
+    task: input.safePrompt,
+    project: {
+      framework: input.source.project.manifest.framework.name,
+      category: input.source.project.productSpec.presetId,
+      filePaths: Object.keys(input.source.project.files),
+    },
+    integrations: [
+      ...integrations,
+      ...input.source.project.integrations.map((integration) => integration.kind),
+    ],
+    availableCapabilities: runtimeSkillCapabilities(input.source.project),
+    maximumSkills: 12,
+    maximumEstimatedTokens: 4_800,
+  });
+  const selectedSkills = skillSelection.skills.map((skill) => ({
+    id: skill.id,
+    version: skill.version,
+    instructions: [
+      ...skill.instructions,
+      ...skill.acceptanceChecks.map((check) => `Acceptance: ${check}`),
+      ...skill.forbiddenClaims.map((claim) => `Boundary: ${claim}`),
+    ].join("\n"),
+  }));
   const versions = createAgentRuntimeVersions({
     projectRevision: safeProjectRevision(input.source.project),
+    selectedSkillVersions: selectedSkills,
   });
   for (const contextLimit of [5_500, 3_000, 1_500, 0]) {
     const composed = composeRuntimeSystemPrompt({
@@ -495,7 +546,7 @@ function composeBuilderPrompt(input: {
           "Use only the current Project V2 and registered tools.",
           "Never expose credentials or claim unverified provider state.",
         ],
-        requestedIntegrations: requestedIntegrations(input.safePrompt),
+        requestedIntegrations: integrations,
       },
       projectMemory: {
         projectId: input.source.project.id,
@@ -503,7 +554,7 @@ function composeBuilderPrompt(input: {
         framework: input.source.project.manifest.framework.name,
         presetId: input.source.project.productSpec.presetId,
       },
-      selectedSkills: [],
+      selectedSkills,
       retrievedContext: boundedRuntimeContext(
         input.contextPackage,
         contextLimit,

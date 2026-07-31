@@ -247,6 +247,7 @@ test("composite runtime resolves once, compiles redacted provenance, delegates, 
   assert.match(prompts[0], /# Drops Studio Agent/);
   assert.match(prompts[0], /<RUNTIME_MODULES>/);
   assert.match(prompts[0], /GET \/coins/);
+  assert.match(prompts[0], /dropstab-integration/);
   assert.doesNotMatch(prompts[0], new RegExp(secret));
   assert.equal(output.verification.verdict, "PASS_WITH_SETUP_REQUIRED");
   assert.equal(output.trace.verification.deterministicGatePassed, true);

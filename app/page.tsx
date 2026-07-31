@@ -5,21 +5,22 @@ function LandingHero() {
   return (
     <div className="hero-copy">
       <span className="eyebrow">
-        <Sparkles size={14} /> BUILD IN 5 MINUTES
+        <Sparkles size={14} /> DROPS AI CRYPTO BUILDER
       </span>
       <h1>
-        Turn a crypto idea{" "}
+        Build crypto apps{" "}
         <br className="hero-break" />
-        into a live project<span>.</span>
+        10x faster with AI<span>.</span>
       </h1>
       <div className="hero-description">
         <p>
-          Start from 12 extensible working foundations or describe any crypto
-          product.
+          Describe a product or start from 12 extensible working foundations
+          for category-native crypto apps. Review the plan, then build an editable
+          multi-file application.
         </p>
         <p>
-          Drops Studio assembles the data, triggers, AI brain and output around
-          DropsTab + Drops Bot.
+          DropsTab supplies market intelligence. Drops Bot supplies monitoring,
+          alerts and approved Telegram delivery. You own the source.
         </p>
       </div>
     </div>

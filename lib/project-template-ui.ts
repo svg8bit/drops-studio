@@ -17,6 +17,7 @@ const COMPONENT_TEMPLATE = String.raw`"use client";
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useDropsTabCoins, type DropsTabCapabilityState } from "../lib/use-dropstab-coins";
+__MANAGED_IMPORT__
 
 const product = __PRODUCT_MODEL__ as const;
 
@@ -163,10 +164,11 @@ function CryptoAssistant() {
 function CustomProduct() {
   const modules: readonly string[] = product.modules.length ? product.modules : ["Primary workflow", "Sourced data", "Local persistence"];
   const [active, setActive] = useState(modules[0]);
-  const [items, setItems] = useState<string[]>([]);
+  const managed = useManagedCollection("workflow_items");
   const [draft, setDraft] = useState("");
-  const add = () => { if (!draft.trim()) return; setItems((current) => [draft.trim(), ...current]); setDraft(""); };
-  return <Shell state="Native multi-file app · edit routes and tests in Builder"><div className="split reverse"><Card title="Product map" label="PROMPT-DERIVED MODULES"><div className="choices">{modules.map((module) => <button type="button" className={module === active ? "choice active" : "choice"} key={module} onClick={() => setActive(module)}>{module}</button>)}</div></Card><Card title={active} label="EDITABLE PRIMARY WORKFLOW"><label htmlFor="custom-item">Add a local workflow item</label><div className="inline"><input id="custom-item" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Describe an item" /><Button onClick={add}>Add item</Button></div>{items.length ? <Steps items={items} /> : <Empty>{product.emptyState}</Empty>}</Card></div><div className="metrics"><Metric label="DropsTab" value="Demo" detail="Proxy-ready" /><Metric label="Project data" value="Local" detail="Cloud optional" /><Metric label="External actions" value="Approval" detail="Never automatic" /></div></Shell>;
+  const [saveError, setSaveError] = useState("");
+  const add = async () => { if (!draft.trim()) return; try { await managed.addItem(draft); setDraft(""); setSaveError(""); } catch { setSaveError("Wait for the managed backend check, then try again."); } };
+  return <Shell state="Native multi-file app · managed writes require a server capability"><div className="split reverse"><Card title="Product map" label="PROMPT-DERIVED MODULES"><div className="choices">{modules.map((module) => <button type="button" className={module === active ? "choice active" : "choice"} key={module} onClick={() => setActive(module)}>{module}</button>)}</div></Card><Card title={active} label="EDITABLE PRIMARY WORKFLOW"><label htmlFor="custom-item">Add a workflow item</label><div className="inline"><input id="custom-item" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Describe an item" /><Button onClick={() => void add()}>Add item</Button></div><p role="status">{saveError || managed.status}</p>{managed.items.length ? <Steps items={managed.items.map((item) => item.title)} /> : <Empty>{product.emptyState}</Empty>}</Card></div><div className="metrics"><Metric label="DropsTab" value="Demo" detail="Proxy-ready" /><Metric label="Project data" value={managed.mode === "managed" ? "Managed" : managed.mode === "loading" ? "Checking" : "Local"} detail={managed.status} /><Metric label="External actions" value="Approval" detail="Never automatic" /></div></Shell>;
 }
 
 const products = {
@@ -322,8 +324,13 @@ export function projectTemplateComponentSource(
     modules: spec.blueprint.modules,
     emptyState: spec.blueprint.content.emptyState,
   });
+  const managedImport = spec.presetId === "custom-product"
+    ? 'import { useManagedCollection } from "../lib/use-managed-collection";'
+    : "";
   return selectCategoryComponent(
-    COMPONENT_TEMPLATE.replace("__PRODUCT_MODEL__", model),
+    COMPONENT_TEMPLATE
+      .replace("__PRODUCT_MODEL__", () => model)
+      .replace("__MANAGED_IMPORT__", () => managedImport),
     COMPONENT_NAME_BY_PRESET[spec.presetId],
   );
 }

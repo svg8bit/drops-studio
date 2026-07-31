@@ -11,7 +11,7 @@ test("Next production build emits the complete Drops Studio builder HTML", async
     "utf8",
   );
   assert.match(html, /<title>Drops Studio/);
-  assert.match(html, /Turn a crypto idea/);
+  assert.match(html, /Build crypto apps 10x faster with AI/);
   assert.match(html, /AI Morning Alpha/);
   assert.match(html, /Action Engine/);
   assert.match(html, /Crypto Aggregator/);

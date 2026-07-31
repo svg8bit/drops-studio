@@ -18,6 +18,18 @@ export const RUNTIME_SKILL_IDS = [
   "vercel-deployment",
   "crypto-game",
   "project-data",
+  "managed-backend",
+  "managed-auth",
+  "data-modeling",
+  "object-storage",
+  "server-functions",
+  "jobs-and-cron",
+  "webhooks",
+  "realtime-data",
+  "collaboration",
+  "enterprise-rbac",
+  "enterprise-sso",
+  "audit-and-compliance",
 ] as const;
 
 export type RuntimeSkillId = (typeof RUNTIME_SKILL_IDS)[number];
