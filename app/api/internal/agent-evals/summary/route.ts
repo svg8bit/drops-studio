@@ -28,11 +28,12 @@ export async function handleAgentEvalSummary(
   }
   try {
     const store = dependencies.store ?? new DefaultAgentEvalStore();
-    const [traces, reports, platform] = await Promise.all([
+    const [traces, reports, snapshots] = await Promise.all([
       store.listTraces(100),
       store.listReports(20),
-      createAgentV3PlatformEvidence({ env }),
+      store.listEvidenceSnapshots(1),
     ]);
+    const platform = await createAgentV3PlatformEvidence({ env, snapshot: snapshots[0] ?? null });
     return NextResponse.json(
       { summary: aggregateAgentEvals(traces, reports), platform, storage: "private" },
       { headers: { "cache-control": "no-store" } },
