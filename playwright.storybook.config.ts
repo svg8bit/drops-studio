@@ -88,7 +88,11 @@ export default defineConfig({
       // Keep exact screenshots independent of the GitHub runner's GPU model.
       // Chromium otherwise produces a few different anti-aliased pixels for
       // SVG strokes and diagonal gradients across otherwise identical runs.
-      args: ["--disable-gpu", "--force-color-profile=srgb"],
+      args: [
+        "--disable-gpu",
+        "--disable-skia-runtime-opts",
+        "--force-color-profile=srgb",
+      ],
     },
   },
   projects: projects.map((project) => ({
