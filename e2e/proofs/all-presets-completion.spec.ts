@@ -585,7 +585,7 @@ test("all 12 presets complete edit, publish, replay, share and browser ZIP bound
       await expect(runtime.locator(definition.nativeSelector).first()).toBeVisible()
       await expect(runtime.locator("#liveStatus")).toHaveText("SNAPSHOT")
 
-      await page.getByRole("button", { name: "Logic", exact: true }).click()
+      await page.getByRole("button", { name: "Design", exact: true }).click()
       const field = page.getByRole("combobox", {
         name: definition.edit.fieldLabel,
         exact: true,

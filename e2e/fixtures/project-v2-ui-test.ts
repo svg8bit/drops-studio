@@ -184,7 +184,7 @@ export async function prepareProjectV2UiPage(
   );
   await page.goto(`/studio/${id}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("main")).toHaveClass(/project-studio-shell/);
-  await page.getByRole("button", { name: "Builder", exact: true }).click();
+  await page.locator(".studio-rail").getByRole("button", { name: "Code", exact: true }).click();
   await expect(page.getByTestId("project-v2-workspace")).toBeVisible();
   return { project, projectV2 };
 }

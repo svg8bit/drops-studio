@@ -413,6 +413,7 @@ test("Studio restores a remote-only project and syncs validated source without p
     waitUntil: "domcontentloaded",
   })
   await expect(page.getByRole("main")).toHaveClass(/project-studio-shell/)
+  await page.getByRole("button", { name: "Design", exact: true }).click()
   await expect(page.getByLabel("Product name")).toHaveValue(REMOTE_PROJECT_NAME)
   await expect(page.locator("[data-sync-status='synced']")).toContainText(
     "Saved to cloud",

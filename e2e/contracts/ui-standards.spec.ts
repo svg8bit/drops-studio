@@ -184,7 +184,7 @@ test("project studio preserves its current workspace architecture", async ({ pag
   }
 
   await expect(page.locator(".studio-rail")).toBeVisible()
-  await expect(page.locator(".project-statusbar")).toBeVisible()
+  await expect(page.locator(".project-statusbar")).toBeHidden()
 
   const viewportWidth = page.viewportSize()?.width ?? 0
   if (viewportWidth > 920) {
@@ -192,7 +192,7 @@ test("project studio preserves its current workspace architecture", async ({ pag
     await expect(page.locator(".studio-inspector")).toBeVisible()
     await expect(page.locator(".assistant-panel")).toBeHidden()
 
-    await page.getByRole("button", { name: "Director", exact: true }).click()
+    await page.getByRole("button", { name: "Chat", exact: true }).click()
     await expect(page.locator(".assistant-panel")).toBeVisible()
     await expect(page.locator(".studio-inspector")).toBeHidden()
     await expect(page.locator(".runtime-stage")).toBeVisible()
@@ -201,7 +201,7 @@ test("project studio preserves its current workspace architecture", async ({ pag
     await expect(page.locator(".assistant-panel")).toBeHidden()
     await expect(page.locator(".runtime-stage")).toBeHidden()
 
-    await page.getByRole("button", { name: "Director", exact: true }).click()
+    await page.getByRole("button", { name: "Chat", exact: true }).click()
     await expect(page.locator(".assistant-panel")).toBeVisible()
     await expect(page.locator(".studio-inspector")).toBeHidden()
     await expect(page.locator(".runtime-stage")).toBeHidden()
@@ -215,7 +215,7 @@ test("project studio preserves its current workspace architecture", async ({ pag
   await assertCleanRuntime()
 })
 
-test("1920px Project Studio keeps Director in the left context surface", async ({
+test("1920px Project Studio keeps Chat in the left context surface", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-1440")
@@ -244,7 +244,7 @@ test("1920px Project Studio keeps Director in the left context surface", async (
   expect(initialCanvas).not.toBeNull()
   expect(initialInspector!.x + initialInspector!.width).toBeLessThanOrEqual(initialCanvas!.x + 1)
 
-  await page.getByRole("button", { name: "Director", exact: true }).click()
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
   await expect(director).toBeVisible()
   await expect(inspector).toBeHidden()
   await expect(canvas).toBeVisible()

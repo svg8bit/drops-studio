@@ -206,134 +206,18 @@ async function expectStudioChromeToStaySeparated(page: Page) {
     }
   })
   expect(surfaces).not.toBeNull()
+  expect(surfaces!.statusDisplay).toBe("none")
 
   if (viewportWidth <= 920) {
-    expect(surfaces!.statusDisplay).not.toBe("none")
-    expect(surfaces!.railPosition).toBe("fixed")
-    expect(Math.abs(surfaces!.railBottom - surfaces!.viewportHeight)).toBeLessThanOrEqual(1)
-    expect(surfaces!.statusBottom).toBeLessThanOrEqual(surfaces!.railTop + 1)
+    expect(surfaces!.railBottom).toBeLessThanOrEqual(surfaces!.viewportHeight + 1)
     return
   }
 
-  expect(surfaces!.statusDisplay).not.toBe("none")
-  expect(surfaces!.layoutBottom).toBeLessThanOrEqual(surfaces!.statusTop + 1)
-}
-
-async function expectStatusbarItemsToFit(page: Page) {
-  const geometry = await page.locator(".project-statusbar").evaluate((statusbar) => {
-    const barRect = statusbar.getBoundingClientRect()
-    const items = [...statusbar.children]
-      .filter((child): child is HTMLElement => child instanceof HTMLElement)
-      .filter((child) => {
-        const style = getComputedStyle(child)
-        const rect = child.getBoundingClientRect()
-
-        return style.display !== "none" && rect.width > 0 && rect.height > 0
-      })
-      .map((item, index) => {
-        const rect = item.getBoundingClientRect()
-        const range = document.createRange()
-        range.selectNodeContents(item)
-        const contentRect = range.getBoundingClientRect()
-
-        return {
-          index,
-          text: item.innerText.trim().replace(/\s+/g, " "),
-          left: rect.left,
-          right: rect.right,
-          top: rect.top,
-          bottom: rect.bottom,
-          clientWidth: item.clientWidth,
-          scrollWidth: item.scrollWidth,
-          clientHeight: item.clientHeight,
-          scrollHeight: item.scrollHeight,
-          contentLeft: contentRect.left,
-          contentRight: contentRect.right,
-          contentTop: contentRect.top,
-          contentBottom: contentRect.bottom,
-        }
-      })
-
-    const overlaps: Array<{ first: string; second: string }> = []
-    for (let first = 0; first < items.length; first += 1) {
-      for (let second = first + 1; second < items.length; second += 1) {
-        const horizontal = Math.min(items[first].contentRight, items[second].contentRight) -
-          Math.max(items[first].contentLeft, items[second].contentLeft)
-        const vertical = Math.min(items[first].contentBottom, items[second].contentBottom) -
-          Math.max(items[first].contentTop, items[second].contentTop)
-        if (horizontal > 1 && vertical > 1) {
-          overlaps.push({
-            first: items[first].text,
-            second: items[second].text,
-          })
-        }
-      }
-    }
-
-    return {
-      bar: {
-        left: barRect.left,
-        right: barRect.right,
-        top: barRect.top,
-        bottom: barRect.bottom,
-        clientWidth: statusbar.clientWidth,
-        scrollWidth: statusbar.scrollWidth,
-        clientHeight: statusbar.clientHeight,
-        scrollHeight: statusbar.scrollHeight,
-      },
-      items,
-      overlaps,
-    }
-  })
-
-  expect(geometry.items, "1024px statusbar must render all five statuses").toHaveLength(5)
-  expect(
-    geometry.bar.scrollWidth,
-    `Statusbar overflows horizontally: ${JSON.stringify(geometry, null, 2)}`
-  ).toBeLessThanOrEqual(geometry.bar.clientWidth + 1)
-  expect(
-    geometry.bar.scrollHeight,
-    `Statusbar is vertically clamped: ${JSON.stringify(geometry, null, 2)}`
-  ).toBeLessThanOrEqual(geometry.bar.clientHeight + 1)
-  expect(geometry.overlaps, JSON.stringify(geometry, null, 2)).toEqual([])
-
-  for (const item of geometry.items) {
-    const context = `${item.index}: ${item.text}`
-    expect(item.left, `${context} starts outside the statusbar`).toBeGreaterThanOrEqual(
-      geometry.bar.left - 1
-    )
-    expect(item.right, `${context} ends outside the statusbar`).toBeLessThanOrEqual(
-      geometry.bar.right + 1
-    )
-    expect(item.top, `${context} starts above the statusbar`).toBeGreaterThanOrEqual(
-      geometry.bar.top - 1
-    )
-    expect(item.bottom, `${context} ends below the statusbar`).toBeLessThanOrEqual(
-      geometry.bar.bottom + 1
-    )
-    expect(item.scrollWidth, `${context} is horizontally clamped`).toBeLessThanOrEqual(
-      item.clientWidth + 1
-    )
-    expect(item.scrollHeight, `${context} is vertically clamped`).toBeLessThanOrEqual(
-      item.clientHeight + 1
-    )
-    expect(item.contentLeft, `${context} content escapes its cell`).toBeGreaterThanOrEqual(
-      item.left - 1
-    )
-    expect(item.contentRight, `${context} content escapes its cell`).toBeLessThanOrEqual(
-      item.right + 1
-    )
-    expect(item.contentTop, `${context} content escapes its cell`).toBeGreaterThanOrEqual(
-      item.top - 1
-    )
-    expect(item.contentBottom, `${context} content escapes its cell`).toBeLessThanOrEqual(
-      item.bottom + 1
-    )
-  }
+  expect(surfaces!.layoutBottom).toBeLessThanOrEqual(surfaces!.viewportHeight + 1)
 }
 
 async function expectDirectorToStartReadable(page: Page) {
-  await page.getByRole("button", { name: "Director", exact: true }).click()
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
   const panel = page.locator(".assistant-panel")
   const conversation = panel.locator(".conversation")
   const guide = panel.locator(".assistant-guide")
@@ -344,7 +228,6 @@ async function expectDirectorToStartReadable(page: Page) {
   const geometry = await panel.evaluate((element) => {
     const conversation = element.querySelector<HTMLElement>(".conversation")!
     const guide = element.querySelector<HTMLElement>(".assistant-guide")!
-    const promptBox = element.querySelector<HTMLElement>(".quick-prompts")!
     const composer = element.querySelector<HTMLElement>(".chat-composer")!
     const panelRect = element.getBoundingClientRect()
     const conversationRect = conversation.getBoundingClientRect()
@@ -356,21 +239,11 @@ async function expectDirectorToStartReadable(page: Page) {
       conversationTop: conversationRect.top,
       composerBottom: composerRect.bottom,
       panelBottom: panelRect.bottom,
-      promptOverflowY: getComputedStyle(promptBox).overflowY,
-      clippedPrompts: [...promptBox.querySelectorAll<HTMLElement>("button")]
-        .filter(
-          (button) =>
-            button.scrollWidth > button.clientWidth + 1 ||
-            button.scrollHeight > button.clientHeight + 1
-        )
-        .map((button) => button.innerText),
     }
   })
 
   expect(geometry.guideTop).toBeGreaterThanOrEqual(geometry.conversationTop - 1)
   expect(geometry.composerBottom).toBeLessThanOrEqual(geometry.panelBottom + 1)
-  expect(geometry.promptOverflowY).toBe("auto")
-  expect(geometry.clippedPrompts).toEqual([])
 }
 
 async function expectSelectedInspectorToPreserveText(
@@ -476,14 +349,15 @@ test("uses exact DropsTab and Drops Bot assets instead of generic surrogate mark
   )
 })
 
-test("1024px statusbar fits every status without overlap or clamping", async ({
+test("1024px workspace hides the legacy statusbar without overflow", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-1024")
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await prepareStudioPage(page)
-  await expectStatusbarItemsToFit(page)
+  await expect(page.locator(".project-statusbar")).toBeHidden()
+  await expectNoHorizontalOverflow(page)
   await assertCleanRuntime()
 })
 
@@ -703,19 +577,24 @@ test("900px workspace shows one selected primary tool surface", async (
     .evaluate((element) => getComputedStyle(element).flexDirection)
   expect(layoutDirection).toBe("column")
 
-  const inspector = await page.locator(".studio-inspector").boundingBox()
-  expect(inspector).not.toBeNull()
-  expect(inspector!.width).toBeGreaterThanOrEqual(880)
-  await expect(page.locator(".runtime-stage")).toBeHidden()
+  await expect(page.locator(".studio-inspector")).toBeVisible()
   await expect(page.locator(".assistant-panel")).toBeHidden()
+  await expect(page.locator(".runtime-stage")).toBeHidden()
 
-  await expectInspectorTextToFit(page)
-  await expectInspectorTargetsToMeetPolicy(page)
-
-  await page.getByRole("button", { name: "Director", exact: true }).click()
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
   await expect(page.locator(".assistant-panel")).toBeVisible()
   await expect(page.locator(".studio-inspector")).toBeHidden()
   await expect(page.locator(".runtime-stage")).toBeHidden()
+
+  await page.getByRole("button", { name: "Design", exact: true }).click()
+  const inspector = await page.locator(".studio-inspector").boundingBox()
+  expect(inspector).not.toBeNull()
+  expect(inspector!.width).toBeGreaterThanOrEqual(880)
+  await expect(page.locator(".assistant-panel")).toBeHidden()
+  await expect(page.locator(".runtime-stage")).toBeHidden()
+
+  await expectInspectorTextToFit(page)
+  await expectInspectorTargetsToMeetPolicy(page)
 
   const visiblePrimarySurfaces = await page
     .locator(".studio-inspector, .assistant-panel, .runtime-stage")
