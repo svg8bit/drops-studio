@@ -134,7 +134,7 @@ test("Telegram account status preserves its valid same-origin JSON behavior", as
   }));
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { connected: false });
+  assert.deepEqual(await response.json(), { connected: false, remembered: false });
   assert.equal(response.headers.get("cache-control"), "no-store, max-age=0");
   assert.equal(response.headers.get("pragma"), "no-cache");
 });
