@@ -85,6 +85,48 @@ async function withLocalStorage(run) {
   }
 }
 
+function postgresSnapshotClient() {
+  const rows = new Map();
+  return {
+    async query(statement, parameters = []) {
+      if (/CREATE TABLE/i.test(statement)) return { rows: [], rowCount: 0 };
+      const key = `${parameters[0]}:${parameters[1]}`;
+      if (/^SELECT/i.test(statement.trim())) {
+        const row = rows.get(key);
+        return { rows: row ? [structuredClone(row)] : [], rowCount: row ? 1 : 0 };
+      }
+      if (/^INSERT/i.test(statement.trim())) {
+        if (rows.has(key)) return { rows: [], rowCount: 0 };
+        const row = {
+          storage_revision: Number(parameters[2]),
+          snapshot_json: String(parameters[3]),
+          updated_at: new Date("2026-07-31T08:00:00.000Z"),
+        };
+        rows.set(key, row);
+        return { rows: [{ storage_revision: row.storage_revision }], rowCount: 1 };
+      }
+      if (/^UPDATE/i.test(statement.trim())) {
+        const current = rows.get(key);
+        if (!current || current.storage_revision !== Number(parameters[4])) {
+          return { rows: [], rowCount: 0 };
+        }
+        const row = {
+          storage_revision: Number(parameters[2]),
+          snapshot_json: String(parameters[3]),
+          updated_at: new Date("2026-07-31T08:01:00.000Z"),
+        };
+        rows.set(key, row);
+        return { rows: [{ storage_revision: row.storage_revision }], rowCount: 1 };
+      }
+      if (/^DELETE/i.test(statement.trim())) {
+        const deleted = rows.delete(key);
+        return { rows: [], rowCount: deleted ? 1 : 0 };
+      }
+      throw new Error(`Unexpected SQL: ${statement}`);
+    },
+  };
+}
+
 test("private Project V2 snapshots use optimistic storage revisions", async () => {
   await withLocalStorage(async () => {
     const source = await project();
@@ -103,6 +145,30 @@ test("private Project V2 snapshots use optimistic storage revisions", async () =
     await deleteProjectV2Snapshot(identity, source.id);
     assert.equal(await readProjectV2Snapshot(identity, source.id), null);
   });
+});
+
+test("private Project V2 snapshots use transactional Postgres CAS when configured", async () => {
+  const source = await project();
+  const sql = postgresSnapshotClient();
+
+  const first = await writeProjectV2Snapshot(identity, source, 0, undefined, sql);
+  assert.equal(first.status, "saved");
+  assert.equal(first.storageRevision, 1);
+
+  const second = await writeProjectV2Snapshot(identity, source, 1, undefined, sql);
+  assert.equal(second.status, "saved");
+  assert.equal(second.storageRevision, 2);
+
+  const conflict = await writeProjectV2Snapshot(identity, source, 1, undefined, sql);
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.storageRevision, 2);
+
+  const stored = await readProjectV2Snapshot(identity, source.id, undefined, sql);
+  assert.equal(stored.storageRevision, 2);
+  assert.equal(stored.project.contentHash, source.contentHash);
+
+  await deleteProjectV2Snapshot(identity, source.id, undefined, sql);
+  assert.equal(await readProjectV2Snapshot(identity, source.id, undefined, sql), null);
 });
 
 test("private Project V2 snapshots revalidate file integrity and reject secret-bearing source", async () => {
