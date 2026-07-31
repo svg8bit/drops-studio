@@ -136,7 +136,14 @@ test("narrows GitHub App installation credentials to the selected repository", a
     },
   });
   const tokenCall = calls[0];
-  assert.deepEqual(JSON.parse(String(tokenCall.init.body)), { repositories: ["whale-app"] });
+  assert.deepEqual(JSON.parse(String(tokenCall.init.body)), {
+    repositories: ["whale-app"],
+    permissions: {
+      contents: "write",
+      pull_requests: "write",
+      metadata: "read",
+    },
+  });
   assert.equal(tokenCall.init.headers["content-type"], "application/json");
   assert.equal(repository.repo, "whale-app");
 });
