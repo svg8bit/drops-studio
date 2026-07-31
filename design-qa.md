@@ -4,16 +4,16 @@ final result: passed
 
 ## Source references
 
-- Homepage annotation: `/root/.codex/attachments/3b678a44-5619-4485-a8b8-dcd75d571dea/codex-clipboard-1c3b364a-a71d-415a-8a7e-b9eb4816b171.png` at 1563 x 855.
-- Studio annotation: `/root/.codex/attachments/e9656f83-3d22-4b70-808e-9afcab983bd0/codex-clipboard-cdfad721-f853-4fdc-a81f-3a34bb7723ec.png` at 1911 x 922.
-- Integrations annotation: `/root/.codex/attachments/95406d81-5cfd-41eb-b1d0-569b718a3e0e/codex-clipboard-ecf0aec7-50d1-4a5a-a17b-433cb18f735b.png` at 1410 x 992.
+- [Homepage structure reference](docs/design/current-home-structure-reference.png) at 1440 x 900.
+- [Studio structure reference](docs/design/current-studio-structure-reference.png) at 1280 x 790.
+- [Integrations concept reference](docs/design/v2-reference/05-integrations.png) at 1448 x 1086.
 
 ## Implemented result
 
-- Homepage comparison: `/tmp/drops-home-comparison.png` (reference and current implementation in one image).
-- Studio comparison: `/tmp/drops-studio-comparison.png` (reference and current implementation in one image).
-- Integrations comparison: `/tmp/drops-integrations-comparison.png` (reference and current implementation in one image).
-- Current captures: `/tmp/drops-home-actual-1563x855.png`, `/tmp/drops-studio-actual-1911x922.png`, and `/tmp/drops-integrations-actual-1410x992.png`.
+- [Homepage reference and implementation](docs/design/current-home-reference-vs-actual.png) at matched 1440 x 900 viewports.
+- [Studio reference and implementation](docs/design/current-studio-reference-vs-actual.png) at matched 1280 x 790 viewports.
+- [Integrations reference and implementation](docs/design/current-integrations-reference-vs-actual.png) at matched 1448 x 1086 viewports.
+- Standalone retained captures: [homepage](docs/design/current-home-actual.png), [Studio](docs/design/current-studio-actual.png), and [Integrations](docs/design/current-integrations-actual.png).
 
 ## Comparison findings
 
@@ -27,6 +27,8 @@ final result: passed
 
 ## Interaction and responsive evidence
 
-- Focused Playwright editor/Director persistence flow: passed at 1440, 1024, and 390 widths.
-- Focused accessibility/navigation/Project V2 flow: passed at 1440, 1024, and 390 widths.
-- Horizontal-overflow checks are included in the browser suite and pass for the focused release paths.
+- Verified implementation commit: `d1a718557424ace3c57174741bcb15ee38ada02e`.
+- `npx playwright test e2e/interactions/editor-commit.spec.ts e2e/proofs/director-flow.spec.ts --workers=1`: 9 passed at 1440, 1024, and 390 widths.
+- `npx playwright test e2e/interactions/editor-commit.spec.ts e2e/proofs/director-flow.spec.ts e2e/contracts/home-builder-p1.spec.ts e2e/contracts/member-access.spec.ts e2e/accessibility/home.spec.ts e2e/contracts/project-v2-studio.spec.ts --workers=1`: 38 passed and 4 intentionally skipped outside the two persistence cases rerun above.
+- `npm run test:lighthouse:prepared`: three runs passed all configured performance, accessibility, best-practices, SEO, LCP, CLS, and TBT budgets.
+- Horizontal-overflow assertions are part of the focused browser suite and passed for the release paths.
