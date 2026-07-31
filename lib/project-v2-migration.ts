@@ -1,5 +1,8 @@
 import { hashProjectV2CanonicalState } from "./project-v2-hash.ts";
-import { createProjectV2File } from "./project-v2-files.ts";
+import {
+  applyProjectV2FileOperations,
+  createProjectV2File,
+} from "./project-v2-files.ts";
 import type {
   BuilderTaskV2,
   ProjectFileLanguageV2,
@@ -331,6 +334,71 @@ export async function migrateGeneratedProjectToV2(
   };
   project.contentHash = await hashProjectV2CanonicalState(project);
   return validateProjectV2(project);
+}
+
+/**
+ * Refresh a migrated legacy filesystem after a product-spec edit without
+ * converting the project to a different runtime or overwriting manual/AI files.
+ */
+export async function refreshLegacyProjectV2Migration(input: {
+  project: ProjectV2;
+  generatedProject: GeneratedProject;
+}): Promise<ProjectV2> {
+  const current = await validateProjectV2(input.project);
+  if (current.manifest.framework.name !== "legacy-html") {
+    throw new Error("Only migrated legacy projects can use the legacy refresh adapter.");
+  }
+
+  const baseline = await migrateGeneratedProjectToV2({
+    ...input.generatedProject,
+    projectV2: undefined,
+  });
+  const preservedFiles = Object.values(current.files).filter(
+    (file) => file.provenance !== "generated",
+  );
+  const preservedOperations = preservedFiles.map((file) => ({
+    type: "write" as const,
+    path: file.path,
+    content: file.content,
+    language: file.language,
+    role: file.role,
+    provenance: file.provenance,
+    editable: file.editable,
+  }));
+  const refreshed = preservedOperations.length
+    ? await applyProjectV2FileOperations(
+        baseline,
+        baseline.revision,
+        preservedOperations,
+        { now: () => new Date(input.generatedProject.updatedAt) },
+      )
+    : baseline;
+  const revision = current.revision + 1;
+  const updatedAt = new Date(input.generatedProject.updatedAt).toISOString();
+  const next: ProjectV2 = {
+    ...refreshed,
+    revision,
+    integrations: current.integrations,
+    environment: current.environment,
+    permissions: current.permissions,
+    deployment: current.deployment,
+    migration: current.migration,
+    runs: current.runs,
+    logs: current.logs,
+    checkpoints: current.checkpoints,
+    preview: current.preview
+      ? {
+          status: "stopped",
+          projectRevision: revision,
+          stoppedAt: updatedAt,
+        }
+      : undefined,
+    createdAt: current.createdAt,
+    updatedAt,
+    contentHash: "",
+  };
+  next.contentHash = await hashProjectV2CanonicalState(next);
+  return validateProjectV2(next);
 }
 
 export class LegacyProjectV2MigrationAdapter implements ProjectV2MigrationAdapter {

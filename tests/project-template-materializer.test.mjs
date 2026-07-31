@@ -13,7 +13,11 @@ registerHooks({
 const { projectPresetIds } = await import("../lib/presets.ts");
 const { findArtifactSecrets } = await import("../lib/artifact-security.ts");
 const { createProjectSpec } = await import("../lib/project-factory.ts");
-const { materializeProjectV2Template } = await import("../lib/project-template-materializer.ts");
+const {
+  materializeProjectV2Template,
+  refreshGeneratedProjectV2Template,
+} = await import("../lib/project-template-materializer.ts");
+const { writeProjectV2File } = await import("../lib/project-v2-files.ts");
 const { projectTemplateComponentSource } = await import("../lib/project-template-ui.ts");
 const { validateProjectV2 } = await import("../lib/project-v2-validator.ts");
 
@@ -122,6 +126,97 @@ test("generated DropsTab /coins capability is server-only, bounded and honest", 
   assert.match(component, /market\.snapshot\?\.coins/);
   assert.equal(integration?.proxyPath, "/api/capabilities/dropstab");
   assert.deepEqual(integration?.capabilities, ["coins"]);
+});
+
+test("refreshes generated V2 source from product edits without overwriting manual files", async () => {
+  const spec = createProjectSpec({
+    presetId: "crypto-radio",
+    values: {},
+    prompt: "Build a crypto radio",
+    tools: ["DropsTab API", "Drops Bot"],
+    provider: "free",
+    model: "Free compiler",
+    market: [],
+    prediction: { title: "No prediction", probability: null, change: null },
+    origin: "https://drops-studio.example",
+  });
+  const base = await materializeProjectV2Template({
+    id: "refresh-radio",
+    spec,
+    now: "2026-07-30T12:00:00.000Z",
+  });
+  const manual = await writeProjectV2File(base, base.revision, {
+    type: "write",
+    path: "README.md",
+    content: "# Manually curated radio notes\n",
+    provenance: "manual",
+  });
+  const withPreview = {
+    ...manual,
+    preview: {
+      status: "ready",
+      projectRevision: manual.revision,
+      url: "https://radio-preview.vercel.run/",
+      port: 3000,
+      startedAt: "2026-07-30T12:01:00.000Z",
+    },
+  };
+  const editedSpec = {
+    ...spec,
+    name: "Drops Signal Radio",
+    slug: "drops-signal-radio",
+    theme: { ...spec.theme, accent: "#a3ff12", surface: "#080d10" },
+  };
+  const refreshed = await refreshGeneratedProjectV2Template({
+    project: withPreview,
+    spec: editedSpec,
+    now: "2026-07-30T12:02:00.000Z",
+  });
+
+  assert.equal(refreshed.revision, manual.revision + 1);
+  assert.equal(refreshed.productSpec.name, "Drops Signal Radio");
+  assert.equal(refreshed.manifest.slug, "drops-signal-radio");
+  assert.match(refreshed.files["app/globals.css"].content, /--project-accent: #a3ff12/);
+  assert.equal(refreshed.files["README.md"].content, "# Manually curated radio notes\n");
+  assert.equal(refreshed.files["README.md"].provenance, "manual");
+  assert.equal(refreshed.preview?.status, "stopped");
+  assert.equal(refreshed.preview?.projectRevision, refreshed.revision);
+  assert.equal((await validateProjectV2(refreshed)).contentHash, refreshed.contentHash);
+
+  const noOp = await refreshGeneratedProjectV2Template({
+    project: refreshed,
+    spec: editedSpec,
+    now: "2026-07-30T12:03:00.000Z",
+  });
+  assert.equal(noOp.revision, refreshed.revision);
+});
+
+test("crypto radio starter has working browser playback and evidence-first editorial controls", async () => {
+  const spec = createProjectSpec({
+    presetId: "crypto-radio",
+    values: {},
+    prompt: "Build a premium crypto radio",
+    tools: ["DropsTab API", "Drops Bot"],
+    provider: "free",
+    model: "Free compiler",
+    market: [],
+    prediction: { title: "No prediction", probability: null, change: null },
+    origin: "https://drops-studio.example",
+  });
+  const project = await materializeProjectV2Template({
+    id: "premium-radio",
+    spec,
+    now: "2026-07-30T12:00:00.000Z",
+  });
+  const component = project.files["components/crypto-product.tsx"].content;
+  assert.match(component, /SpeechSynthesisUtterance/);
+  assert.match(component, /Play briefing/);
+  assert.match(component, /Four crypto desks, one broadcast/);
+  assert.match(component, /Rundown editor/);
+  assert.match(component, /const updateScript = \(value: string\)/);
+  assert.match(component, /index === segmentIndex \? \{ \.\.\.item, script: value \} : item/);
+  assert.match(component, /evidenceLabel\(market\)/);
+  assert.match(component, /Drops Bot, Telegram and public distribution remain setup-required/);
 });
 
 test("mandatory vertical demos contain their real category interactions and honest boundaries", async () => {

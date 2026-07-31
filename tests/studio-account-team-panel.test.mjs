@@ -85,10 +85,12 @@ test("panel keeps access claims honest and follows the local Tailwind/Base UI fl
   assert.match(source, /aria-label="Consent to open Stripe billing"/);
   assert.match(source, /aria-label="Consent to accept team invite"/);
   assert.match(source, /aria-label="Consent to apply the verified shared source revision locally"/);
-  assert.match(source, /signedOut \|\| !acceptConsent/);
-  assert.match(source, /signedOut \|\| !selectedWorkspace \|\| !canWrite/);
-  assert.match(source, /signedOut \|\| !teamConsent/);
-  assert.match(source, /signedOut \|\| !createTeamConsent/);
+  assert.match(source, /accessUnverified \|\| !acceptConsent/);
+  assert.match(source, /accessUnverified \|\| !selectedWorkspace \|\| !canWrite/);
+  assert.match(source, /accessUnverified \|\| !teamConsent/);
+  assert.match(source, /accessUnverified \|\| !createTeamConsent/);
+  assert.match(source, /type LoadState = "loading" \| "ready" \| "signed-out" \| "unavailable"/);
+  assert.match(source, /setLoadState\("unavailable"\)/);
   assert.match(source, /aria-label="Consent to create a team workspace"/);
   assert.match(source, /aria-label="Consent to owner team mutations"/);
   assert.match(source, /checked=\{teamConsent\}[\s\S]*I approve the next owner-only invite or role mutation/);
@@ -108,7 +110,7 @@ test("owners, editors and viewers can apply a verified shared source revision lo
   assert.match(source, /onApplyProject\(materialized\)/);
   assert.match(source, /const applied = await onApplyProject\(materialized\)/);
   assert.match(source, /if \(!applied\)/);
-  assert.match(source, /disabled=\{signedOut \|\| !applicableProject \|\| !applyConsent \|\| pendingAction !== null\}/);
+  assert.match(source, /disabled=\{accessUnverified \|\| !applicableProject \|\| !applyConsent \|\| pendingAction !== null\}/);
   assert.doesNotMatch(
     source.slice(source.indexOf("async function applySharedProject"), source.indexOf("async function shareProject")),
     /canWrite|role === "owner"|role === "editor"/,
@@ -152,7 +154,7 @@ test("signed-out and action-level 401 clear capabilities and consent before reus
     (source.match(/handleUnauthorizedResponse\(response\)/g) ?? []).length >= 6,
     "every billing/team mutation must handle an expired signed session",
   );
-  assert.match(source, /disabled=\{signedOut\}[\s\S]*if \(signedOut\) return[\s\S]*navigator\.clipboard\?\.writeText[\s\S]*navigator\.clipboard\.writeText\(oneTimeInvite\.capability\)/);
+  assert.match(source, /disabled=\{accessUnverified\}[\s\S]*if \(accessUnverified\) return[\s\S]*navigator\.clipboard\?\.writeText[\s\S]*navigator\.clipboard\.writeText\(oneTimeInvite\.capability\)/);
   assert.match(source, /Clipboard access is unavailable — copy the visible capability manually/);
 });
 

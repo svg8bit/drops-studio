@@ -12,7 +12,7 @@ export function DropsBrand({
   return (
     <div
       className={`drops-brand${compact ? " drops-brand-compact" : ""}`}
-      aria-label="Drops Studio by DropsTab and Drops Bot"
+      aria-label={showPartners ? "Drops Studio by DropsTab" : "Drops Studio"}
     >
       <span className="drops-brand-marks" aria-hidden="true">
         <span className="drops-brand-dropstab">
@@ -22,46 +22,15 @@ export function DropsBrand({
             width={24}
             height={32}
             loading="eager"
+            style={{ height: compact ? 21 : 25, width: "auto" }}
             unoptimized
           />
         </span>
-        <Image
-          className="drops-brand-bot"
-          src="/brand/drops-bot-avatar.jpg"
-          alt=""
-          width={32}
-          height={32}
-          loading="eager"
-          sizes="32px"
-        />
       </span>
       <span className="drops-brand-copy">
-        <strong>Drops Studio</strong>
-        {showPartners ? (
-          <span className="drops-brand-partners">
-            <span>
-              <Image
-                src="/brand/dropstab-mark.svg"
-                alt=""
-                width={11}
-                height={14}
-                unoptimized
-              />
-              DropsTab
-            </span>
-            <i aria-hidden="true">×</i>
-            <span>
-              <Image
-                src="/brand/drops-bot-avatar.jpg"
-                alt=""
-                width={14}
-                height={14}
-                sizes="14px"
-              />
-              Drops Bot
-            </span>
-          </span>
-        ) : null}
+        <strong>
+          Drops <span>Studio</span>
+        </strong>
       </span>
     </div>
   );

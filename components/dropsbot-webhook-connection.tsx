@@ -2,7 +2,7 @@
 
 import "@/app/styles/tailwind.css"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   Bot,
   Check,
@@ -54,10 +54,47 @@ export function DropsBotWebhookConnection({
   const [evidence, setEvidence] = useState<DropsBotCallbackEvidenceView | null>(null)
   const [message, setMessage] = useState("")
   const [canCreate, setCanCreate] = useState(false)
+  const [accessVerified, setAccessVerified] = useState(false)
+  const refreshVersion = useRef(0)
+
+  const clearProtectedState = useCallback(() => {
+    setCallbackUrl("")
+    setEvidence(null)
+    setEvents([])
+    setConsent(false)
+    setMutationConsent(false)
+    setCanCreate(false)
+  }, [])
 
   const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current
     setLoading(true)
+    setAccessVerified(false)
+    clearProtectedState()
+    setMessage("")
     try {
+      const accessResponse = await fetch("/api/access", {
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      })
+      const accessPayload = (await accessResponse.json().catch(() => ({}))) as {
+        access?: {
+          authenticated?: boolean
+          account?: { connected?: boolean }
+        }
+      }
+      if (version !== refreshVersion.current) return
+      if (
+        !accessResponse.ok
+        || !(
+          accessPayload.access?.authenticated
+          || accessPayload.access?.account?.connected
+        )
+      ) {
+        setMessage("Connect a signed Studio account before creating an owner-scoped Drops Bot callback.")
+        return
+      }
       const response = await fetch(
         `/api/dropsbot/events?projectId=${encodeURIComponent(projectId)}&limit=20`,
         { credentials: "same-origin", cache: "no-store" },
@@ -68,7 +105,9 @@ export function DropsBotWebhookConnection({
         error?: string
         code?: string
       }
+      if (version !== refreshVersion.current) return
       if (response.status === 404) {
+        setAccessVerified(true)
         setCanCreate(true)
         setEvidence(null)
         setEvents([])
@@ -76,37 +115,41 @@ export function DropsBotWebhookConnection({
         return
       }
       if (response.status === 401) {
-        setCallbackUrl("")
-        setEvidence(null)
-        setEvents([])
-        setConsent(false)
-        setCanCreate(false)
+        setAccessVerified(false)
+        clearProtectedState()
         setMessage("Connect a signed Studio account before creating an owner-scoped Drops Bot callback.")
         return
       }
       if (!response.ok) throw new Error(payload.error || "Callback events are unavailable.")
+      setAccessVerified(true)
       setCanCreate(false)
       setEvidence(payload.callbackEvidence ?? null)
       setEvents(Array.isArray(payload.events) ? payload.events : [])
       setMutationConsent(false)
       setMessage("")
     } catch (error) {
+      if (version !== refreshVersion.current) return
+      setAccessVerified(false)
+      clearProtectedState()
       setMessage(error instanceof Error ? error.message : "Callback events are unavailable.")
     } finally {
-      setLoading(false)
+      if (version === refreshVersion.current) setLoading(false)
     }
-  }, [projectId])
+  }, [clearProtectedState, projectId])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void refresh()
     }, 0)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      refreshVersion.current += 1
+    }
   }, [refresh])
 
   async function createCallback() {
-    if (!consent || creating) return
+    if (!accessVerified || !consent || creating) return
     setCreating(true)
     setMessage("")
     try {
@@ -122,11 +165,8 @@ export function DropsBotWebhookConnection({
         error?: string
       }
       if (response.status === 401) {
-        setCallbackUrl("")
-        setEvidence(null)
-        setEvents([])
-        setConsent(false)
-        setCanCreate(false)
+        setAccessVerified(false)
+        clearProtectedState()
       }
       if (!response.ok || !payload.callbackUrl) {
         throw new Error(payload.error || "Drops Bot callback could not be created.")
@@ -150,7 +190,7 @@ export function DropsBotWebhookConnection({
   }
 
   async function mutateCallback(method: "PUT" | "DELETE") {
-    if (!mutationConsent || mutating) return
+    if (!accessVerified || !mutationConsent || mutating) return
     const action = method === "PUT" ? "rotate" : "revoke"
     if (
       method === "DELETE"
@@ -174,10 +214,8 @@ export function DropsBotWebhookConnection({
         error?: string
       }
       if (response.status === 401) {
-        setCallbackUrl("")
-        setEvidence(null)
-        setEvents([])
-        setCanCreate(false)
+        setAccessVerified(false)
+        clearProtectedState()
       }
       if (!response.ok) {
         throw new Error(payload.error || `Drops Bot callback could not be ${action}d.`)
@@ -242,7 +280,7 @@ export function DropsBotWebhookConnection({
           </p>
         ) : null}
 
-        {callbackUrl ? (
+        {accessVerified && callbackUrl ? (
           <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950">
             <strong className="text-sm">One-time callback URL</strong>
             <code className="block break-all rounded-md bg-white p-3 text-sm leading-6">{callbackUrl}</code>
@@ -271,7 +309,7 @@ export function DropsBotWebhookConnection({
           </div>
         ) : null}
 
-        {canCreate ? (
+        {accessVerified && canCreate ? (
           <div className="space-y-3">
             <Label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
               <Checkbox checked={consent} onCheckedChange={(checked) => setConsent(checked === true)} aria-label="Consent to create a Drops Bot callback" />
@@ -279,7 +317,7 @@ export function DropsBotWebhookConnection({
                 Create a secret callback for this project and store incoming event payloads. I will register the URL myself inside @drops.
               </span>
             </Label>
-            <Button type="button" className="w-full" disabled={!consent || creating} onClick={() => void createCallback()}>
+            <Button type="button" className="w-full" disabled={!accessVerified || !consent || creating} onClick={() => void createCallback()}>
               {creating ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : <Bot data-icon="inline-start" aria-hidden="true" />}
               Create owner-scoped callback
             </Button>
@@ -288,7 +326,7 @@ export function DropsBotWebhookConnection({
 
         {message ? <p className="text-sm leading-6 text-muted-foreground">{message}</p> : null}
 
-        {evidence ? (
+        {accessVerified && evidence ? (
           <div className="grid gap-3 rounded-lg border border-border bg-muted/25 p-3 text-sm">
             <div className="grid gap-2">
               <span className="flex items-center gap-2">
@@ -319,7 +357,7 @@ export function DropsBotWebhookConnection({
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={!mutationConsent || Boolean(mutating)}
+                  disabled={!accessVerified || !mutationConsent || Boolean(mutating)}
                   onClick={() => void mutateCallback("PUT")}
                 >
                   {mutating === "rotate" ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : <KeyRound data-icon="inline-start" aria-hidden="true" />}
@@ -328,7 +366,7 @@ export function DropsBotWebhookConnection({
                 <Button
                   type="button"
                   variant="destructive"
-                  disabled={!mutationConsent || Boolean(mutating)}
+                  disabled={!accessVerified || !mutationConsent || Boolean(mutating)}
                   onClick={() => void mutateCallback("DELETE")}
                 >
                   {mutating === "revoke" ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : <Trash2 data-icon="inline-start" aria-hidden="true" />}
@@ -339,7 +377,7 @@ export function DropsBotWebhookConnection({
           </div>
         ) : null}
 
-        {events.length ? (
+        {accessVerified && events.length ? (
           <div className="space-y-2">
             <strong className="text-sm">Recent sanitized events</strong>
             {events.slice(0, 5).map((event) => (

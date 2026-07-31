@@ -32,6 +32,26 @@ function memoryStorage(initial = {}) {
   };
 }
 
+function quotaStorage(initial, maxCharacters) {
+  const storage = memoryStorage(initial);
+  const setItem = storage.setItem.bind(storage);
+  storage.setItem = (key, value) => {
+    const nextValue = String(value);
+    const nextSize = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+      .filter((candidate) => candidate && candidate !== key)
+      .reduce((total, candidate) => total + candidate.length + (storage.getItem(candidate)?.length ?? 0), 0)
+      + key.length
+      + nextValue.length;
+    if (nextSize > maxCharacters) {
+      const error = new Error("quota exceeded");
+      error.name = "QuotaExceededError";
+      throw error;
+    }
+    setItem(key, nextValue);
+  };
+  return storage;
+}
+
 test("project store merges another tab's projects while holding a Web Lock", async () => {
   const store = await import("../lib/project-store.ts");
   assert.equal(typeof store.saveProjectSafely, "function");
@@ -101,6 +121,52 @@ test("project store fallback preserves projects through versioned per-project re
     store.readProjectsFromStore(storage).map((item) => item.id).sort(),
     ["project-a", "project-b"],
   );
+});
+
+test("project store compacts the compatibility index before writing a large Project V2 record", async () => {
+  const store = await import("../lib/project-store.ts");
+  const first = {
+    ...project("project-a", "2026-07-30T00:01:00.000Z"),
+    projectV2: {
+      schemaVersion: 2,
+      id: "project-a",
+      revision: 1,
+      files: {
+        "app/page.tsx": {
+          path: "app/page.tsx",
+          content: "x".repeat(6_000),
+          encoding: "utf-8",
+          hash: "test-hash",
+          generated: true,
+          editable: true,
+        },
+      },
+    },
+  };
+  const legacyValue = JSON.stringify([first]);
+  const storage = quotaStorage(
+    { "drops-studio-projects-v2": legacyValue },
+    legacyValue.length + 1_500,
+  );
+  const updated = {
+    ...first,
+    updatedAt: "2026-07-30T00:02:00.000Z",
+    projectV2: { ...first.projectV2, revision: 2 },
+  };
+
+  const result = await store.saveProjectSafely(updated, {
+    storage,
+    expectedUpdatedAt: first.updatedAt,
+  });
+
+  assert.equal(result.status, "saved");
+  const compatibilityIndex = JSON.parse(storage.getItem("drops-studio-projects-v2"));
+  assert.equal(compatibilityIndex[0].projectV2, undefined);
+  const item = JSON.parse(
+    storage.getItem(`${store.PROJECT_STORE_ITEM_PREFIX}${encodeURIComponent(first.id)}`),
+  );
+  assert.equal(item.project.projectV2.revision, 2);
+  assert.equal(store.readProjectsFromStore(storage)[0].projectV2.revision, 2);
 });
 
 test("project store keeps the newest copy when the legacy index and item record disagree", async () => {

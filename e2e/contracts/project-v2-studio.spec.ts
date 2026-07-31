@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 
-import { PROJECTS_STORAGE_KEY } from "../../lib/project-types";
+import { PROJECT_STORE_ITEM_PREFIX } from "../../lib/project-store";
 
 import {
   expect,
@@ -28,13 +28,14 @@ test("Project V2 keeps drafts, saves locally, exposes Data and Logic, and reache
   await expect(page.locator(".cm-content")).toContainText("PRESERVED-DRAFT");
   await workspace.getByRole("button", { name: "Save", exact: true }).click();
   await expect(workspace.getByText("Saved", { exact: true })).toBeVisible();
-  await expect.poll(async () => page.evaluate(({ key, id }) => {
-    const projects = JSON.parse(window.localStorage.getItem(key) || "[]") as Array<{
-      id: string;
-      projectV2?: { files?: Record<string, { content?: string }> };
-    }>;
-    return projects.find((candidate) => candidate.id === id)?.projectV2?.files?.["app/page.tsx"]?.content ?? "";
-  }, { key: PROJECTS_STORAGE_KEY, id: project.id })).toContain("PRESERVED-DRAFT");
+  await expect.poll(async () => page.evaluate(({ itemPrefix, id }) => {
+    const item = JSON.parse(
+      window.localStorage.getItem(`${itemPrefix}${encodeURIComponent(id)}`) || "null",
+    ) as {
+      project?: { projectV2?: { files?: Record<string, { content?: string }> } };
+    } | null;
+    return item?.project?.projectV2?.files?.["app/page.tsx"]?.content ?? "";
+  }, { itemPrefix: PROJECT_STORE_ITEM_PREFIX, id: project.id })).toContain("PRESERVED-DRAFT");
 
   await workspace.getByRole("button", { name: "Data", exact: true }).click();
   await expect(workspace.getByText("Declared namespace and capability only", { exact: true })).toBeVisible();

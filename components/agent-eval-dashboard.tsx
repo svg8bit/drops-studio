@@ -72,10 +72,16 @@ function displayDate(value: string): string {
     : "—";
 }
 
-export function AgentEvalDashboard() {
+export function AgentEvalDashboard({
+  initialPlatform,
+}: {
+  initialPlatform: AgentV3PlatformEvidence;
+}) {
   const [secret, setSecret] = useState("");
   const [summary, setSummary] = useState<AgentEvalSummary | null>(null);
-  const [platform, setPlatform] = useState<AgentV3PlatformEvidence | null>(null);
+  const [platform, setPlatform] = useState<AgentV3PlatformEvidence | null>(
+    initialPlatform,
+  );
   const [busy, setBusy] = useState<"load" | "run" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,7 +103,7 @@ export function AgentEvalDashboard() {
 
   const loadSummary = useCallback(async () => {
     if (!secret.trim()) {
-      setError("Enter the configured internal access secret.");
+      setError("Enter the operator access secret to load private run evidence.");
       return;
     }
     setBusy("load");
@@ -108,12 +114,12 @@ export function AgentEvalDashboard() {
       setPlatform(payload.platform ?? null);
     } catch (requestError) {
       setSummary(null);
-      setPlatform(null);
+      setPlatform(initialPlatform);
       setError(requestError instanceof Error ? requestError.message : "Internal evaluation evidence is unavailable.");
     } finally {
       setBusy(null);
     }
-  }, [request, secret]);
+  }, [initialPlatform, request, secret]);
 
   const submit = useCallback((event: FormEvent) => {
     event.preventDefault();
@@ -188,9 +194,7 @@ export function AgentEvalDashboard() {
     { label: "Average latency", value: duration(summary.averageLatencyMs), detail: `recorded model estimate ${cost(summary.estimatedModelCostUsd)}`, icon: Clock3 },
   ] : [], [summary]);
   const gateBlockers = platform?.dataGate.blockers ?? [
-    "Load private evidence to evaluate the immutable V2 baseline.",
-    "Authorized live model matrix evidence is not loaded.",
-    "Failure-cluster and Design Agent reports are not loaded.",
+    "Private candidate evidence is not loaded.",
   ];
 
   return (
@@ -207,9 +211,9 @@ export function AgentEvalDashboard() {
             <p>One truthful view of the deterministic core, model runs, repair evidence, design verification, and the data gate protecting production defaults.</p>
           </div>
           <aside className={styles.heroReceipt} aria-label="Promotion state">
-            <span><ShieldCheck aria-hidden="true" />Promotion gate</span>
-            <strong>{platform?.dataGate.passed ? "Eligible for candidate review" : "Blocked by evidence"}</strong>
-            <small>Production default unchanged</small>
+            <span><ShieldCheck aria-hidden="true" />Candidate gate</span>
+            <strong>{platform?.dataGate.passed ? "Eligible for candidate review" : "Evidence required"}</strong>
+            <small>Studio builds and production remain available</small>
           </aside>
         </div>
       </header>
@@ -236,7 +240,7 @@ export function AgentEvalDashboard() {
         <section className={styles.accessPanel} aria-labelledby="eval-access-title">
           <div>
             <h2 id="eval-access-title"><LockKeyhole aria-hidden="true" />Private execution evidence</h2>
-            <p>The access value stays in page memory and is sent only to the internal API. Traces exclude source, credentials, and private reasoning.</p>
+            <p>This optional operator view controls promotion of a future agent candidate only. It never blocks Studio builds, previews or publishing. The access value stays in page memory and is sent only to the internal API.</p>
           </div>
           <form className={styles.accessForm} onSubmit={submit}>
             <label htmlFor="eval-access-secret">Internal access secret</label>
@@ -247,7 +251,7 @@ export function AgentEvalDashboard() {
                 autoComplete="off"
                 value={secret}
                 onChange={(event) => setSecret(event.target.value)}
-                placeholder="Configured server-side"
+                placeholder="Enter operator secret"
               />
               <Button type="submit" disabled={busy !== null}>
                 {busy === "load" ? <LoaderCircle className={styles.spin} aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
@@ -259,8 +263,8 @@ export function AgentEvalDashboard() {
 
         <section className={styles.gatePanel} aria-labelledby="data-gate-title">
           <div className={styles.panelHeading}>
-            <div><ScanSearch aria-hidden="true" /><h2 id="data-gate-title">Data gate</h2></div>
-            <Badge variant={platform?.dataGate.passed ? "default" : "destructive"}>{platform?.dataGate.passed ? "Passed" : "Blocked"}</Badge>
+            <div><ScanSearch aria-hidden="true" /><h2 id="data-gate-title">Candidate evidence</h2></div>
+            <Badge variant={platform?.dataGate.passed ? "default" : "secondary"}>{platform?.dataGate.passed ? "Passed" : "Required"}</Badge>
           </div>
           <ul className={styles.gateList}>
             {gateBlockers.length ? gateBlockers.map((blocker) => <li key={blocker}><AlertTriangle aria-hidden="true" /><span>{blocker}</span></li>) : <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>All required evidence is recorded for candidate review.</span></li>}
@@ -273,7 +277,7 @@ export function AgentEvalDashboard() {
       {!summary ? (
         <section className={styles.emptyState}>
           <div className={styles.emptyVisual}><DatabaseZap aria-hidden="true" /><Bot aria-hidden="true" /></div>
-          <div><h2>Stored runs stay private</h2><p>Authenticate to inspect real model routes, Sandbox checks, browser receipts, costs, and failures. Repository fixtures above are labeled separately and never presented as live activity.</p></div>
+          <div><h2>Stored runs stay private</h2><p>Studio remains operational. Operators can authenticate here to inspect real model routes, Sandbox checks, browser receipts, costs and failures before promoting a new agent default. Repository fixtures above are labeled separately.</p></div>
         </section>
       ) : (
         <>

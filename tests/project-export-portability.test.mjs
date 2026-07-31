@@ -210,7 +210,7 @@ test("export rejects handcrafted inline SVG artwork", () => {
 
 test("archive creation rejects a secret from project prompt or any generated file", () => {
   const unsafe = project('<html data-project-kind="crypto-game"><body>DropsTab Drops Bot</body></html>', {
-    prompt: "Use 123456789:AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8",
+    prompt: `Use ${["123456789", "AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8"].join(":")}`,
   });
   assert.throws(() => createProjectArchive(unsafe, quality, archiveAssets), /secret/i);
 });

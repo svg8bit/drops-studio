@@ -1,5 +1,11 @@
-import { hashProjectV2CanonicalState } from "./project-v2-hash.ts";
-import { createProjectV2File } from "./project-v2-files.ts";
+import {
+  canonicalProjectV2Json,
+  hashProjectV2CanonicalState,
+} from "./project-v2-hash.ts";
+import {
+  applyProjectV2FileOperations,
+  createProjectV2File,
+} from "./project-v2-files.ts";
 import { assertProjectV2FileSetLimits } from "./project-v2-path.ts";
 import type {
   BuilderTaskV2,
@@ -20,8 +26,8 @@ import {
 import { validateProjectV2 } from "./project-v2-validator.ts";
 import { validateProjectSpec } from "./project-validator.ts";
 import {
-  PROJECT_TEMPLATE_GLOBAL_CSS,
   projectTemplateComponentSource,
+  projectTemplateGlobalCss,
 } from "./project-template-ui.ts";
 import { projectManagedTemplate } from "./project-template-managed.ts";
 
@@ -116,12 +122,12 @@ const categories: Record<GeneratedProjectSpec["presetId"], CategoryTemplate> = {
     blocks: ["Launch feed", "Category filters", "Submission studio"],
   },
   "crypto-radio": {
-    eyebrow: "CRYPTO RADIO",
-    headline: "Build a sourced audio rundown from current crypto context",
-    description: "Arrange segments and scripts locally; recording and distribution remain explicit setup steps.",
-    primaryAction: "Build rundown",
-    metrics: ["Segments queued", "Sources attached", "Minutes planned"],
-    blocks: ["Now playing", "Rundown editor", "Distribution setup"],
+    eyebrow: "DROPS RADIO · MARKET INTELLIGENCE ON AIR",
+    headline: "Crypto intelligence, always on",
+    description: "Listen to a browser-generated market briefing, shape the rundown and inspect the evidence behind every segment.",
+    primaryAction: "Play briefing",
+    metrics: ["Stories queued", "Market sources", "Minutes on air"],
+    blocks: ["Live desk", "Rundown editor", "Market frequency"],
   },
   "crypto-siri": {
     eyebrow: "CRYPTO ASSISTANT",
@@ -211,7 +217,7 @@ function sourceFiles(spec: GeneratedProjectSpec): Array<{
     { path: "app/layout.tsx", content: `import type { Metadata } from "next";\nimport "./globals.css";\n\nexport const metadata: Metadata = { title: ${JSON.stringify(spec.name)}, description: ${JSON.stringify(spec.description)}, icons: { icon: "/icon.svg" } };\n\nexport default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) { return <html lang="en"><body>{children}</body></html>; }\n`, language: "tsx", role: "entry" },
     { path: "app/icon.svg", content: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Drops Studio"><rect width="64" height="64" rx="16" fill="#07111f"/><path d="M32 10 49 29 32 54 15 29Z" fill="#67e8f9"/><path d="m32 19 9 11-9 14-9-14Z" fill="#0f172a"/></svg>\n`, language: "text", role: "asset" },
     { path: "app/page.tsx", content: `import { CryptoProduct } from "../components/crypto-product";\n\nexport default function Page() { return <CryptoProduct />; }\n`, language: "tsx", role: "entry" },
-    { path: "app/globals.css", content: PROJECT_TEMPLATE_GLOBAL_CSS, language: "css", role: "style" },
+    { path: "app/globals.css", content: projectTemplateGlobalCss(spec), language: "css", role: "style" },
     { path: "components/crypto-product.tsx", content: componentSource(spec, category), language: "tsx", role: "component" },
     { path: "app/api/capabilities/dropstab/route.ts", content: PROJECT_TEMPLATE_DROPSTAB_ROUTE, language: "typescript", role: "integration" },
     { path: "lib/dropstab-types.ts", content: PROJECT_TEMPLATE_DROPSTAB_TYPES, language: "typescript", role: "integration" },
@@ -310,4 +316,95 @@ export async function materializeProjectV2Template(input: {
   };
   project.contentHash = await hashProjectV2CanonicalState(project);
   return validateProjectV2(project);
+}
+
+/**
+ * Re-materialize only files still owned by the deterministic template.
+ * Manual and AI-authored files are intentionally preserved, while product
+ * metadata and generated source advance together in one Project V2 revision.
+ */
+export async function refreshGeneratedProjectV2Template(input: {
+  project: ProjectV2;
+  spec: GeneratedProjectSpec;
+  now?: string;
+}): Promise<ProjectV2> {
+  const project = await validateProjectV2(input.project);
+  const spec = validateProjectSpec(input.spec);
+  const now = input.now ?? new Date().toISOString();
+  const fresh = await materializeProjectV2Template({
+    id: project.id,
+    spec,
+    now,
+  });
+  const operations: Parameters<typeof applyProjectV2FileOperations>[2][number][] = [];
+
+  for (const [path, file] of Object.entries(project.files)) {
+    if (file.provenance === "generated" && !fresh.files[path]) {
+      operations.push({ type: "delete", path });
+    }
+  }
+  for (const [path, file] of Object.entries(fresh.files)) {
+    const current = project.files[path];
+    if (current && current.provenance !== "generated") continue;
+    if (current?.hash === file.hash) continue;
+    operations.push({
+      type: "write",
+      path,
+      content: file.content,
+      language: file.language,
+      role: file.role,
+      provenance: "generated",
+      editable: file.editable,
+    });
+  }
+
+  const metadataChanged = canonicalProjectV2Json({
+    manifest: project.manifest,
+    productSpec: project.productSpec,
+    integrations: project.integrations,
+    environment: project.environment,
+    permissions: project.permissions,
+    tasks: project.tasks,
+  }) !== canonicalProjectV2Json({
+    manifest: fresh.manifest,
+    productSpec: fresh.productSpec,
+    integrations: fresh.integrations,
+    environment: fresh.environment,
+    permissions: fresh.permissions,
+    tasks: fresh.tasks,
+  });
+
+  if (!operations.length && !metadataChanged) return project;
+
+  let next = operations.length
+    ? await applyProjectV2FileOperations(project, project.revision, operations, {
+        now: () => new Date(now),
+      })
+    : {
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: now,
+        contentHash: "",
+        preview: project.preview
+          ? {
+              status: "stopped" as const,
+              projectRevision: project.revision + 1,
+              stoppedAt: now,
+            }
+          : undefined,
+      };
+
+  next = {
+    ...next,
+    manifest: fresh.manifest,
+    productSpec: fresh.productSpec,
+    integrations: fresh.integrations,
+    environment: fresh.environment,
+    permissions: fresh.permissions,
+    tasks: fresh.tasks,
+    updatedAt: now,
+    contentHash: "",
+  };
+  next.contentHash = await hashProjectV2CanonicalState(next);
+  return validateProjectV2(next);
 }

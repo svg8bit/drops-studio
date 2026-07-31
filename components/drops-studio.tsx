@@ -93,9 +93,6 @@ const PreviewCanvas = dynamic(
     ssr: false,
     loading: () => (
       <section className="preview-column" aria-busy="true" aria-label="Loading product preview">
-        <div className="preview-status-row">
-          <span className="preview-ready">Preparing category-native preview</span>
-        </div>
         <div className="preview-device" />
       </section>
     ),
@@ -2024,35 +2021,67 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
             aria-busy="true"
             aria-label="Preparing product preview"
           >
-            <div className="preview-status-row">
-              <span className="preview-ready">
-                Preparing category-native preview
-              </span>
-            </div>
             <div className="preview-device" />
           </section>
         )}
       </div>
 
       <footer className="studio-footer">
-        <Brand />
-        <p>
-          Build on real crypto intelligence. You approve every external action.
-        </p>
-        <div>
-          <a href="https://dropstab.com/" target="_blank" rel="noreferrer">
-            DropsTab
-          </a>
-          <a href="https://t.me/Drops" target="_blank" rel="noreferrer">
-            Drops Bot
-          </a>
-          <a
-            href="https://api-docs.dropstab.com/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            API Docs
-          </a>
+        <div className="studio-footer-intro">
+          <DropsBrand compact />
+          <p>
+            Build real crypto products with DropsTab intelligence and approved
+            Drops Bot delivery.
+          </p>
+        </div>
+        <div className="studio-footer-links">
+          <div>
+            <strong>Product</strong>
+            <a href="/templates">Templates</a>
+            <a href="/projects">Projects</a>
+            <a href="/integrations">Integrations</a>
+            <a href="/platform">Platform</a>
+          </div>
+          <div>
+            <strong>Ecosystem</strong>
+            <a href="https://dropstab.com/" target="_blank" rel="noreferrer">
+              DropsTab
+            </a>
+            <a
+              href="https://dropstab.com/products/drops-bot"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Drops Bot
+            </a>
+            <a
+              href="https://api-docs.dropstab.com/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              API documentation
+            </a>
+          </div>
+          <div>
+            <strong>Community</strong>
+            <a href="https://x.com/Dropstab_com" target="_blank" rel="noreferrer">
+              X / Twitter
+            </a>
+            <a href="https://t.me/dropstab_en" target="_blank" rel="noreferrer">
+              Telegram
+            </a>
+            <a
+              href="https://discord.com/invite/8krdPBCvEU"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Discord
+            </a>
+          </div>
+        </div>
+        <div className="studio-footer-bottom">
+          <span>© {new Date().getFullYear()} Drops Studio</span>
+          <span>Session-safe credentials · explicit approval for external actions</span>
         </div>
       </footer>
 

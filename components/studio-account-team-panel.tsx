@@ -72,6 +72,10 @@ interface BillingStatus {
 }
 
 interface ApiPayload {
+  access?: {
+    authenticated?: boolean
+    account?: { connected?: boolean }
+  }
   accountIdentity?: string
   billing?: BillingStatus["billing"]
   capability?: string
@@ -103,7 +107,7 @@ interface OptimisticRevision {
   projectRevision: number
 }
 
-type LoadState = "loading" | "ready" | "signed-out"
+type LoadState = "loading" | "ready" | "signed-out" | "unavailable"
 type PendingAction =
   | "accept-invite"
   | "apply-project"
@@ -304,7 +308,7 @@ export function StudioAccountTeamPanel({
   const applicableProject = selectedWorkspace?.projects.find(
     (item) => item.projectId === selectedTeamProjectId,
   ) ?? sharedProject ?? selectedWorkspace?.projects[0] ?? null
-  const signedOut = loadState === "signed-out"
+  const accessUnverified = loadState !== "ready"
   const teamMessageIsError = /unavailable|required|could not|invalid|expired|changed elsewhere|not created/i.test(teamMessage)
 
   const replaceWorkspace = useCallback((workspace: TeamWorkspace) => {
@@ -552,10 +556,33 @@ export function StudioAccountTeamPanel({
 
   const refresh = useCallback(async () => {
     const version = ++requestVersion.current
+    clearSensitiveState()
+    setBilling(null)
+    setAccountIdentity("")
+    setWorkspaces([])
+    setSelectedWorkspaceId("")
     setLoadState("loading")
     setBillingMessage("")
     setTeamMessage("")
     try {
+      const accessResponse = await fetch("/api/access", {
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      })
+      const accessPayload = await responsePayload(accessResponse)
+      if (version !== requestVersion.current) return
+      const signedAccount = Boolean(
+        accessResponse.ok
+        && (
+          accessPayload.access?.authenticated
+          || accessPayload.access?.account?.connected
+        ),
+      )
+      if (!signedAccount) {
+        markSignedOut()
+        return
+      }
       const [billingResponse, teamsResponse] = await Promise.all([
         fetch("/api/billing/status", {
           credentials: "same-origin",
@@ -610,9 +637,9 @@ export function StudioAccountTeamPanel({
       setWorkspaces([])
       setBillingMessage("Account services could not be reached.")
       setTeamMessage("Team workspaces could not be reached.")
-      setLoadState("ready")
+      setLoadState("unavailable")
     }
-  }, [markSignedOut])
+  }, [clearSensitiveState, markSignedOut])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -625,7 +652,7 @@ export function StudioAccountTeamPanel({
   }, [refresh])
 
   async function openBilling(destination: "checkout" | "portal") {
-    if (!billingConsent || pendingAction || signedOut) return
+    if (!billingConsent || pendingAction || accessUnverified) return
     const action = destination === "checkout" ? "billing-checkout" : "billing-portal"
     setPendingAction(action)
     setBillingMessage("")
@@ -659,7 +686,7 @@ export function StudioAccountTeamPanel({
   }
 
   async function createTeam() {
-    if (!createTeamConsent || billing?.tier !== "pro" || pendingAction || signedOut) return
+    if (!createTeamConsent || billing?.tier !== "pro" || pendingAction || accessUnverified) return
     setPendingAction("create-team")
     setTeamMessage("")
     try {
@@ -692,7 +719,7 @@ export function StudioAccountTeamPanel({
   }
 
   async function createInvite() {
-    if (!selectedWorkspace || !canManage || !teamConsent || pendingAction || signedOut) return
+    if (!selectedWorkspace || !canManage || !teamConsent || pendingAction || accessUnverified) return
     setPendingAction("create-invite")
     setTeamMessage("")
     try {
@@ -737,7 +764,7 @@ export function StudioAccountTeamPanel({
   }
 
   async function acceptInvite() {
-    if (!acceptConsent || !inviteCapability.trim() || pendingAction || signedOut) return
+    if (!acceptConsent || !inviteCapability.trim() || pendingAction || accessUnverified) return
     setPendingAction("accept-invite")
     setTeamMessage("")
     try {
@@ -769,7 +796,7 @@ export function StudioAccountTeamPanel({
   }
 
   async function applySharedProject() {
-    if (!applicableProject || !applyConsent || pendingAction || signedOut) return
+    if (!applicableProject || !applyConsent || pendingAction || accessUnverified) return
     setPendingAction("apply-project")
     try {
       const materialized = await materializeMemberProject({
@@ -805,7 +832,7 @@ export function StudioAccountTeamPanel({
   }
 
   async function shareProject() {
-    if (!selectedWorkspace || !canWrite || !shareConsent || pendingAction || signedOut) return
+    if (!selectedWorkspace || !canWrite || !shareConsent || pendingAction || accessUnverified) return
     const nextRevision = {
       workspaceId: selectedWorkspace.id,
       workspaceRevision: selectedWorkspace.revision + 1,
@@ -930,7 +957,7 @@ export function StudioAccountTeamPanel({
       || !canManage
       || !teamConsent
       || pendingAction
-      || signedOut
+      || accessUnverified
     ) {
       return
     }
@@ -1182,7 +1209,7 @@ export function StudioAccountTeamPanel({
                   type="button"
                   className="w-full"
                   onClick={() => void createTeam()}
-                  disabled={signedOut || !createTeamConsent || teamName.trim().length < 2 || pendingAction !== null}
+                  disabled={accessUnverified || !createTeamConsent || teamName.trim().length < 2 || pendingAction !== null}
                 >
                   {actionLabel(pendingAction, "create-team", "Creating team…") ?? (
                     <><Users data-icon="inline-start" aria-hidden="true" />Create Pro team</>
@@ -1286,7 +1313,7 @@ export function StudioAccountTeamPanel({
                                 variant={member.role === candidate ? "secondary" : "outline"}
                                 aria-pressed={member.role === candidate}
                                 disabled={
-                                  signedOut
+                                  accessUnverified
                                   || !teamConsent
                                   || pendingAction !== null
                                   || member.role === candidate
@@ -1328,7 +1355,7 @@ export function StudioAccountTeamPanel({
                         type="button"
                         className="w-full"
                         onClick={() => void createInvite()}
-                        disabled={signedOut || !teamConsent || pendingAction !== null}
+                        disabled={accessUnverified || !teamConsent || pendingAction !== null}
                       >
                         {actionLabel(pendingAction, "create-invite", "Creating invite…") ?? (
                           <><UserPlus data-icon="inline-start" aria-hidden="true" />Create 7-day invite</>
@@ -1359,9 +1386,9 @@ export function StudioAccountTeamPanel({
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      disabled={signedOut}
+                      disabled={accessUnverified}
                       onClick={() => {
-                        if (signedOut) return
+                        if (accessUnverified) return
                         if (!navigator.clipboard?.writeText) {
                           onToast("Clipboard access is unavailable — copy the visible capability manually")
                           return
@@ -1404,7 +1431,7 @@ export function StudioAccountTeamPanel({
                   type="button"
                   className="w-full"
                   onClick={() => void acceptInvite()}
-                  disabled={signedOut || !acceptConsent || !inviteCapability.trim() || pendingAction !== null}
+                  disabled={accessUnverified || !acceptConsent || !inviteCapability.trim() || pendingAction !== null}
                 >
                   {actionLabel(pendingAction, "accept-invite", "Accepting invite…") ?? (
                     <><Check data-icon="inline-start" aria-hidden="true" />Accept signed capability</>
@@ -1437,7 +1464,9 @@ export function StudioAccountTeamPanel({
                   >
                     {collaborationLabel(collaborationState, collaborationRevision)}
                   </Badge>
-                  {optimisticRevision?.workspaceId === selectedWorkspace?.id ? (
+                  {optimisticRevision
+                  && selectedWorkspace
+                  && optimisticRevision.workspaceId === selectedWorkspace.id ? (
                     <Badge variant="secondary">
                       Optimistic {optimisticRevision.workspaceRevision}/{optimisticRevision.projectRevision}
                     </Badge>
@@ -1452,7 +1481,7 @@ export function StudioAccountTeamPanel({
                     size="sm"
                     variant="outline"
                     disabled={
-                      signedOut
+                      accessUnverified
                       || collaborationState === "checking"
                       || collaborationState === "setup-required"
                     }
@@ -1503,7 +1532,7 @@ export function StudioAccountTeamPanel({
                   variant="outline"
                   className="w-full"
                   onClick={() => void applySharedProject()}
-                  disabled={signedOut || !applicableProject || !applyConsent || pendingAction !== null}
+                  disabled={accessUnverified || !applicableProject || !applyConsent || pendingAction !== null}
                 >
                   {actionLabel(pendingAction, "apply-project", "Opening shared source…") ?? (
                     <><Check data-icon="inline-start" aria-hidden="true" />Open shared source locally</>
@@ -1521,7 +1550,7 @@ export function StudioAccountTeamPanel({
                   type="button"
                   className="w-full"
                   onClick={() => void shareProject()}
-                  disabled={signedOut || !selectedWorkspace || !canWrite || !shareConsent || pendingAction !== null}
+                  disabled={accessUnverified || !selectedWorkspace || !canWrite || !shareConsent || pendingAction !== null}
                 >
                   {actionLabel(pendingAction, "share-project", "Saving revision…") ?? (
                     <><Users data-icon="inline-start" aria-hidden="true" />Share project revision</>

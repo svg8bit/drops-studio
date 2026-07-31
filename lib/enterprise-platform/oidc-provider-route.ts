@@ -263,10 +263,13 @@ export function readDemoFlow(
     throw new OidcProviderError("invalid_request", "OIDC demo flow cookie is invalid.");
   }
   const payload = candidate.slice(0, separator);
-  const suppliedSignature = Buffer.from(candidate.slice(separator + 1), "base64url");
+  const suppliedSignatureText = candidate.slice(separator + 1);
+  const suppliedSignature = Buffer.from(suppliedSignatureText, "base64url");
   const expectedSignature = Buffer.from(demoCookieSignature(payload, config), "base64url");
   if (
-    suppliedSignature.length !== expectedSignature.length
+    !/^[A-Za-z0-9_-]{43}$/.test(suppliedSignatureText)
+    || suppliedSignature.toString("base64url") !== suppliedSignatureText
+    || suppliedSignature.length !== expectedSignature.length
     || !timingSafeEqual(suppliedSignature, expectedSignature)
   ) {
     throw new OidcProviderError("invalid_request", "OIDC demo flow cookie is invalid.");

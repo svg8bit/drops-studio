@@ -29,6 +29,7 @@ import {
   Layers3,
   LoaderCircle,
   Monitor,
+  Minus,
   MousePointer2,
   Palette,
   Play,
@@ -120,6 +121,9 @@ import {
   ProjectV2SyncError,
   saveProjectV2ToCloud,
 } from "@/lib/project-v2-sync-client";
+import { canonicalProjectV2Json } from "@/lib/project-v2-hash";
+import { refreshLegacyProjectV2Migration } from "@/lib/project-v2-migration";
+import { refreshGeneratedProjectV2Template } from "@/lib/project-template-materializer";
 import { validateEditableRuntimeHtml } from "@/lib/source-workspace";
 import {
   addWorkspaceFile,
@@ -521,6 +525,57 @@ type PendingSpecCommit = {
   spec: GeneratedProjectSpec;
 };
 
+const PROJECT_V2_BUILD_TASKS = ["typecheck", "lint", "test", "build"] as const;
+
+function projectV2BuildEvidence(projectV2?: ProjectV2): {
+  passed: number;
+  total: number;
+  verified: boolean;
+} {
+  if (!projectV2) return { passed: 0, total: 5, verified: false };
+  let passed = 0;
+  for (const taskId of PROJECT_V2_BUILD_TASKS) {
+    let latest: ProjectV2["runs"][number] | undefined;
+    for (let index = projectV2.runs.length - 1; index >= 0; index -= 1) {
+      const candidate = projectV2.runs[index];
+      if (
+        candidate.taskId === taskId
+        && candidate.projectRevision === projectV2.revision
+      ) {
+        latest = candidate;
+        break;
+      }
+    }
+    if (latest?.status === "succeeded") passed += 1;
+  }
+  if (
+    projectV2.preview?.status === "ready"
+    && projectV2.preview.projectRevision === projectV2.revision
+    && projectV2.preview.url
+  ) {
+    passed += 1;
+  }
+  return { passed, total: 5, verified: passed === 5 };
+}
+
+function currentProjectV2PreviewUrl(projectV2?: ProjectV2): string | null {
+  if (
+    !projectV2?.preview?.url
+    || projectV2.preview.status !== "ready"
+    || projectV2.preview.projectRevision !== projectV2.revision
+  ) {
+    return null;
+  }
+  try {
+    const url = new URL(projectV2.preview.url);
+    return url.protocol === "https:" && !url.username && !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ProjectStudio() {
   const params = useParams<{ id: string }>();
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -543,6 +598,7 @@ export function ProjectStudio() {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<InspectorTab>("project");
   const [device, setDevice] = useState<DeviceMode>("desktop");
+  const [canvasZoom, setCanvasZoom] = useState(100);
   const [designMode, setDesignMode] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<SelectedCanvasItem | null>(
     null,
@@ -595,8 +651,46 @@ export function ProjectStudio() {
       expectedUpdatedAt: string | null,
     ): Promise<boolean> => {
       const save = async () => {
+        let candidate = next;
+        if (
+          next.projectV2
+          && canonicalProjectV2Json(next.projectV2.productSpec)
+            !== canonicalProjectV2Json(next.spec)
+        ) {
+          try {
+            const refreshed = next.projectV2.manifest.framework.name === "legacy-html"
+              ? await refreshLegacyProjectV2Migration({
+                  project: next.projectV2,
+                  generatedProject: next,
+                })
+              : await refreshGeneratedProjectV2Template({
+                  project: next.projectV2,
+                  spec: next.spec,
+                });
+            candidate = { ...next, projectV2: refreshed };
+            const current = projectRef.current;
+            if (
+              current?.id === next.id
+              && current.updatedAt === next.updatedAt
+              && current.projectV2?.revision === next.projectV2.revision
+              && canonicalProjectV2Json(current.spec)
+                === canonicalProjectV2Json(next.spec)
+            ) {
+              projectRef.current = candidate;
+              committedProjectRef.current = candidate;
+              setProject(candidate);
+              setDirty(true);
+            }
+          } catch {
+            setProjectSyncStatus("error");
+            setToast(
+              "Generated Project V2 files could not be refreshed. Your previous revision is still safe.",
+            );
+            return false;
+          }
+        }
         try {
-          const result = await saveProjectSafely(next, { expectedUpdatedAt });
+          const result = await saveProjectSafely(candidate, { expectedUpdatedAt });
           if (result.status === "conflict") {
             setProjectSyncStatus("conflict");
             setToast(
@@ -613,10 +707,10 @@ export function ProjectStudio() {
         }
 
         if (!cloudSyncAvailableRef.current) {
-          if (next.projectV2 && projectV2SyncAvailableRef.current) {
+          if (candidate.projectV2 && projectV2SyncAvailableRef.current) {
             try {
               const v2Record = await saveProjectV2ToCloud(
-                next.projectV2,
+                candidate.projectV2,
                 projectV2CloudRevisionRef.current ?? 0,
               );
               projectV2CloudRevisionRef.current = v2Record.storageRevision;
@@ -645,13 +739,13 @@ export function ProjectStudio() {
         setProjectSyncStatus("saving");
         try {
           const record = await saveMemberProjectToCloud(
-            next,
+            candidate,
             cloudRevisionRef.current ?? 0,
           );
           cloudRevisionRef.current = record.revision;
-          if (next.projectV2) {
+          if (candidate.projectV2) {
             const v2Record = await saveProjectV2ToCloud(
-              next.projectV2,
+              candidate.projectV2,
               projectV2CloudRevisionRef.current ?? 0,
             );
             projectV2CloudRevisionRef.current = v2Record.storageRevision;
@@ -842,6 +936,24 @@ export function ProjectStudio() {
             ({ migrateGeneratedProjectToV2 }) =>
               migrateGeneratedProjectToV2(projectV2Source),
           );
+        }
+        if (
+          canonicalProjectV2Json(projectV2.productSpec)
+          !== canonicalProjectV2Json(spec)
+        ) {
+          try {
+            projectV2 = projectV2.manifest.framework.name === "legacy-html"
+              ? await refreshLegacyProjectV2Migration({
+                  project: projectV2,
+                  generatedProject: projectV2Source,
+                })
+              : await refreshGeneratedProjectV2Template({
+                  project: projectV2,
+                  spec,
+                });
+          } catch {
+            setToast("Project V2 source refresh will retry when you save");
+          }
         }
         const migrated: GeneratedProject = {
           ...found,
@@ -1196,6 +1308,10 @@ export function ProjectStudio() {
     () => secureEditableRuntimeSrcDoc(runtimeHtml),
     [runtimeHtml],
   );
+  const runtimePreviewUrl = useMemo(
+    () => currentProjectV2PreviewUrl(project?.projectV2),
+    [project?.projectV2],
+  );
   const trustedRuntimeSmoke =
     (runtimeProject?.quality?.runtimeSmoke?.mode === "server-artifact"
       || runtimeProject?.quality?.runtimeSmoke?.mode === "server-inspection")
@@ -1214,9 +1330,12 @@ export function ProjectStudio() {
     [hostDataProvider, runtimeProject, runtimeSmoke, trustedRuntimeSmoke],
   );
   const browserTelemetryReady = Boolean(
-    runtimeSmoke?.mode === "browser"
+    runtimePreviewUrl
+    || (
+      runtimeSmoke?.mode === "browser"
       && runtimeSmoke.executed
-      && runtimeSmoke.runtime,
+      && runtimeSmoke.runtime
+    ),
   );
   const activeProvider = useMemo(() => {
     if (!project) return "free" as ProjectProvider;
@@ -1645,7 +1764,11 @@ export function ProjectStudio() {
     };
     projectRef.current = conversationDraft;
     setProject(conversationDraft);
-    if (activeProject.projectV2 && projectV2SyncAvailableRef.current) {
+    if (
+      activeProject.projectV2
+      && projectV2SyncAvailableRef.current
+      && activeProvider !== "free"
+    ) {
       try {
         await fetch("/api/access", {
           credentials: "same-origin",
@@ -1662,10 +1785,9 @@ export function ProjectStudio() {
           accept: "application/json",
           "content-type": "application/json",
         };
-        const key =
-          provider === "free" || provider === "gateway"
-            ? null
-            : window.sessionStorage.getItem(`drops-studio:${provider}`);
+        const key = provider === "gateway"
+          ? null
+          : window.sessionStorage.getItem(`drops-studio:${provider}`);
         if (provider === "openrouter" && key) {
           headers["x-openrouter-key"] = key;
         } else if (key) {
@@ -1812,7 +1934,27 @@ export function ProjectStudio() {
         provider === "free"
           ? null
           : window.sessionStorage.getItem(`drops-studio:${provider}`);
-      if (provider === "custom" && key) {
+      if (provider === "free") {
+        const deterministic = selectedBlock?.kind === "element"
+          ? createFreeElementDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock,
+            )
+          : createFreeDirectorProposal(
+              activeProject.spec,
+              instruction,
+              selectedBlock?.id,
+            );
+        proposal = {
+          ...deterministic,
+          label: "Free Director deterministic change set",
+          summary: [
+            ...deterministic.summary,
+            "Applying this proposal refreshes the generated Project V2 files; run Builder afterward for a verified Sandbox preview.",
+          ],
+        };
+      } else if (provider === "custom" && key) {
         const endpoint = window.sessionStorage.getItem(
           "drops-studio:custom-endpoint",
         );
@@ -1933,10 +2075,7 @@ export function ProjectStudio() {
           method: "POST",
           headers,
           body: JSON.stringify({
-            provider:
-              provider === "free" || provider === "gateway"
-                ? undefined
-                : provider,
+            provider: provider === "gateway" ? undefined : provider,
             model,
             guestId: window.sessionStorage.getItem("drops-studio:guest-id"),
             prompt: `Revise the existing product without changing its category (${activeProject.spec.presetId}).\nUser change: ${instruction}\nSelected canvas item: ${JSON.stringify(selectedBlock ?? { kind: "product", label: "whole product" })}.\nIf the selected item kind is element, use its exact id in elementEdit and return only the requested focused style/copy change there while preserving the rest of the product.\nCurrent product: ${JSON.stringify({ name: activeProject.spec.name, tagline: activeProject.spec.tagline, description: activeProject.spec.description, tools: activeProject.spec.tools })}\nCurrent blueprint: ${JSON.stringify(activeProject.spec.blueprint)}\nCurrent design: ${JSON.stringify({ theme: activeProject.spec.theme, design: activeProject.spec.design, experience: activeProject.spec.experience, gameDirection: activeProject.spec.gameDirection, elements: activeProject.spec.elements })}`,
@@ -2188,6 +2327,13 @@ export function ProjectStudio() {
     const currentProject =
       commitPendingSpec() ?? projectRef.current ?? project;
     if (!currentProject) return;
+    const sandboxPreviewUrl = currentProjectV2PreviewUrl(
+      currentProject.projectV2,
+    );
+    if (sandboxPreviewUrl) {
+      window.open(sandboxPreviewUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
     if (currentProject.publishedUrl && !dirty)
       window.open(
         currentProject.publishedUrl,
@@ -2950,6 +3096,11 @@ export function ProjectStudio() {
   const legacyPublication = published && !managedPublication;
   const quality =
     qualityReport ?? evaluateProjectQuality(project.spec, project.html);
+  const builderEvidence = projectV2BuildEvidence(project.projectV2);
+  const hasProjectV2 = Boolean(project.projectV2);
+  const releaseEvidenceReady = hasProjectV2
+    ? builderEvidence.verified
+    : quality.readyToPublish;
   const reality = getProductReality(project.spec.presetId);
   const externalSetup = quality.launchStatus === "external-setup-required";
   const researchOnly = quality.launchStatus === "research-only";
@@ -3035,10 +3186,18 @@ export function ProjectStudio() {
                   ? "Research app published"
                   : "Web app published"
                 : dirty
-                  ? "Edits pending"
+                  ? builderEvidence.verified
+                    ? "Verified draft"
+                    : hasProjectV2
+                      ? "Build pending"
+                      : "Edits pending"
                   : externalSetup
                   ? "Needs connection"
-                  : "Draft"}
+                  : hasProjectV2
+                    ? builderEvidence.verified
+                      ? "Verified draft"
+                      : "Build pending"
+                    : "Draft"}
           </b>
         </div>
         <div className="workspace-actions">
@@ -3201,10 +3360,22 @@ export function ProjectStudio() {
                   <b>Foundation</b>
                   <small>DropsTab × guided Drops Bot setup</small>
                 </span>
-                <span className={quality.readyToPublish ? "done" : ""}>
+                <span
+                  className={
+                    releaseEvidenceReady
+                      ? "done"
+                      : ""
+                  }
+                >
                   <i>4</i>
                   <b>Ship</b>
-                  <small>{quality.score}/100 quality</small>
+                  <small>
+                    {builderEvidence.verified
+                      ? `${builderEvidence.passed}/${builderEvidence.total} builder checks`
+                      : hasProjectV2
+                        ? `${builderEvidence.passed}/${builderEvidence.total} checks · run Builder`
+                        : `${quality.score}/100 legacy publish quality`}
+                  </small>
                 </span>
               </div>
               <label>
@@ -4231,7 +4402,11 @@ export function ProjectStudio() {
                 <button
                   type="button"
                   onClick={() => {
-                    window.location.href = "/?connections=1";
+                    window.open(
+                      "/?connections=1",
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
                   }}
                 >
                   <BrainCircuit />
@@ -4247,7 +4422,11 @@ export function ProjectStudio() {
                 <button
                   type="button"
                   onClick={() => {
-                    window.location.href = "/?connections=1";
+                    window.open(
+                      "/?connections=1&provider=dropstab",
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
                   }}
                 >
                   <Database />
@@ -4293,26 +4472,38 @@ export function ProjectStudio() {
                 </span>
                 <b
                   className={
-                    quality.readyToPublish ? "quality-pass" : "quality-fail"
+                    releaseEvidenceReady
+                      ? "quality-pass"
+                      : "quality-fail"
                   }
                 >
-                  {quality.score}/100
+                  {hasProjectV2
+                    ? `${builderEvidence.passed}/${builderEvidence.total}`
+                    : `${quality.score}/100`}
                 </b>
               </div>
               <div
-                className={`quality-hero ${quality.readyToPublish ? "passed" : "failed"}`}
+                className={`quality-hero ${releaseEvidenceReady ? "passed" : "failed"}`}
               >
                 <span>
                   <ShieldCheck />
                 </span>
                 <div>
                   <strong>
-                    {quality.readyToPublish
+                    {builderEvidence.verified
+                      ? "Project V2 build verified"
+                      : hasProjectV2
+                      ? "Project V2 build pending"
+                      : quality.readyToPublish
                       ? releaseLabel
                       : "Build needs attention"}
                   </strong>
                   <small>
-                    {externalSetup
+                    {builderEvidence.verified
+                      ? "Typecheck, lint, tests, production build and live Sandbox preview passed for this file revision. The legacy score below applies only to standalone /p publishing."
+                      : hasProjectV2
+                      ? `${builderEvidence.passed}/${builderEvidence.total} current-revision checks have verified evidence. Open Builder to run the remaining checks and start the live preview.`
+                      : externalSetup
                       ? "The web setup app can publish, but the external outcome is not live until it is connected and verified."
                       : "Deterministic checks run on every edit and before every publish."}
                   </small>
@@ -4505,6 +4696,29 @@ export function ProjectStudio() {
               </button>
             </div>
             <div>
+              <span className="canvas-zoom-controls" role="group" aria-label="Preview zoom">
+                <button
+                  type="button"
+                  aria-label="Zoom out"
+                  onClick={() => setCanvasZoom((value) => Math.max(60, value - 10))}
+                >
+                  <Minus />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Reset preview zoom"
+                  onClick={() => setCanvasZoom(100)}
+                >
+                  {canvasZoom}%
+                </button>
+                <button
+                  type="button"
+                  aria-label="Zoom in"
+                  onClick={() => setCanvasZoom((value) => Math.min(160, value + 10))}
+                >
+                  <Plus />
+                </button>
+              </span>
               <button
                 type="button"
                 className={designMode ? "active" : ""}
@@ -4517,22 +4731,37 @@ export function ProjectStudio() {
               </button>
               <button
                 type="button"
-                className={quality.readyToPublish ? "quality-ready" : ""}
+                className={
+                  releaseEvidenceReady
+                    ? "quality-ready"
+                    : ""
+                }
                 onClick={() => setTab("quality")}
               >
-                <ShieldCheck /> Quality {quality.score}
+                <ShieldCheck />
+                {builderEvidence.verified
+                  ? "Build verified"
+                  : hasProjectV2
+                    ? `Build pending ${builderEvidence.passed}/${builderEvidence.total}`
+                    : `Legacy quality ${quality.score}`}
               </button>
               <button type="button" onClick={openRuntime}>
                 <ExternalLink /> Fullscreen
               </button>
             </div>
           </div>
-          <div
-            className={`runtime-browser ${device}`}
-            tabIndex={0}
-            aria-label="Scrollable live application preview"
-          >
-            <div className="browser-bar">
+          <div className="runtime-canvas-scroll" tabIndex={0} aria-label="Scrollable and zoomable live application preview">
+            <div
+              className="runtime-canvas-viewport"
+              style={{ zoom: canvasZoom / 100 } as React.CSSProperties}
+            >
+              <div
+                className={`runtime-browser ${device}`}
+                role="region"
+                tabIndex={0}
+                aria-label="Live application browser viewport"
+              >
+                <div className="browser-bar">
               <span>
                 <i />
                 <i />
@@ -4552,20 +4781,25 @@ export function ProjectStudio() {
                     : "Loading preview"}
                 </span>
               </b>
+                </div>
+                <iframe
+                  ref={iframeRef}
+                  key={`${runtimeRevision}:${runtimePreviewUrl ?? "local"}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
+                  title={`${project.spec.name} live application`}
+                  src={runtimePreviewUrl ?? undefined}
+                  srcDoc={runtimePreviewUrl ? undefined : runtimeSrcDoc}
+                  sandbox={runtimePreviewUrl ? "allow-scripts allow-forms allow-downloads allow-same-origin" : "allow-scripts allow-forms allow-downloads"}
+                  onLoad={() => {
+                    if (!runtimePreviewUrl) {
+                      iframeRef.current?.contentWindow?.postMessage(
+                        { type: "drops-studio-design-mode", enabled: designMode },
+                        "*",
+                      );
+                    }
+                  }}
+                />
+              </div>
             </div>
-            <iframe
-              ref={iframeRef}
-              key={`${runtimeRevision}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
-              title={`${project.spec.name} live application`}
-              srcDoc={runtimeSrcDoc}
-              sandbox="allow-scripts allow-forms allow-downloads"
-              onLoad={() =>
-                iframeRef.current?.contentWindow?.postMessage(
-                  { type: "drops-studio-design-mode", enabled: designMode },
-                  "*",
-                )
-              }
-            />
           </div>
         </section>
 
@@ -4773,7 +5007,13 @@ export function ProjectStudio() {
           <Bot /> Drops Bot <strong>{externalSetup ? "Needs setup" : "Guided handoff"}</strong>
         </span>
         <span>
-          <ShieldCheck /> Quality <strong>{quality.score}/100</strong>
+          <ShieldCheck />
+          {hasProjectV2 ? "Builder" : "Legacy quality"}{" "}
+          <strong>
+            {hasProjectV2
+              ? `${builderEvidence.passed}/${builderEvidence.total}`
+              : `${quality.score}/100`}
+          </strong>
         </span>
         <span className={externalSetup ? "" : "operational"}>
           <i /> {releaseLabel}

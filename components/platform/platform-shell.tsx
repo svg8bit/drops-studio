@@ -1,11 +1,11 @@
-import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowRight, Plus, ShieldCheck } from "lucide-react";
+import { Plus, ShieldCheck } from "lucide-react";
 
 import "@/app/styles/platform-tailwind.css";
 
 import { Button } from "@/components/ui/button";
+import { DropsBrand } from "@/components/drops-brand";
 
 const navigation = [
   { href: "/projects", label: "Projects" },
@@ -29,10 +29,7 @@ export function PlatformShell({
       <header className="sticky top-0 z-40 border-b border-[#dbe4f1] bg-white/95 backdrop-blur-xl">
         <div className="mx-auto flex min-h-16 w-full max-w-[1500px] flex-wrap items-center gap-3 px-4 py-2 sm:px-6 lg:flex-nowrap lg:px-8">
           <Link href="/" className="flex min-h-11 min-w-11 items-center gap-2.5 rounded-xl pr-3 text-sm font-semibold tracking-[-0.02em] no-underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#316cff]/30">
-            <span className="grid size-9 place-items-center rounded-xl bg-[#eef4ff]">
-              <Image src="/brand/dropstab-mark.svg" alt="" width={22} height={22} priority />
-            </span>
-            <span className="text-lg">Drops <b className="text-[#245fe5]">Studio</b></span>
+            <DropsBrand compact showPartners={false} />
           </Link>
 
           <nav aria-label="Product navigation" className="order-3 flex w-full gap-1 overflow-x-auto border-t border-[#e8eef7] pt-2 lg:order-none lg:ml-6 lg:w-auto lg:border-0 lg:pt-0">
@@ -67,14 +64,18 @@ export function PlatformShell({
       {children}
 
       <footer className="border-t border-[#dbe4f1] bg-white">
-        <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 px-4 py-8 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
-          <div className="flex items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#eef4ff] text-[#245fe5]"><ShieldCheck className="size-5" aria-hidden="true" /></span>
-            <div><strong className="text-sm">Truthful by design</strong><p className="mt-1 max-w-xl text-xs leading-5 text-[#52617a]">Provider, build, integration, and deployment states appear only when Drops Studio has matching evidence.</p></div>
+        <div className="mx-auto grid w-full max-w-[1500px] gap-8 px-4 py-10 sm:px-6 md:grid-cols-[minmax(220px,.8fr)_minmax(0,1.2fr)] lg:px-8">
+          <div className="flex min-w-0 flex-col items-start gap-4">
+            <DropsBrand compact />
+            <p className="max-w-sm text-sm leading-6 text-[#52617a]">Real crypto products powered by DropsTab intelligence and approved Drops Bot delivery.</p>
+            <span className="inline-flex items-start gap-2 rounded-xl bg-[#eef4ff] p-3 text-xs leading-5 text-[#52617a]"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#245fe5]" aria-hidden="true" />Provider and deployment states appear only with matching evidence.</span>
           </div>
-          <Link href="/platform" className="flex min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-[#245fe5] no-underline hover:bg-[#eef4ff] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#316cff]/30">
-            Explore the platform <ArrowRight className="size-4" aria-hidden="true" />
-          </Link>
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3">
+            <div className="flex flex-col items-start"><strong className="mb-2 text-sm">Product</strong><Link className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="/templates">Templates</Link><Link className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="/projects">Projects</Link><Link className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="/integrations">Integrations</Link></div>
+            <div className="flex flex-col items-start"><strong className="mb-2 text-sm">Ecosystem</strong><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://dropstab.com" target="_blank" rel="noreferrer">DropsTab</a><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://dropstab.com/products/drops-bot" target="_blank" rel="noreferrer">Drops Bot</a><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://api-docs.dropstab.com" target="_blank" rel="noreferrer">API Docs</a></div>
+            <div className="flex flex-col items-start"><strong className="mb-2 text-sm">Community</strong><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://x.com/Dropstab_com" target="_blank" rel="noreferrer">X / Twitter</a><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://t.me/dropstab_en" target="_blank" rel="noreferrer">Telegram</a><a className="min-h-11 py-3 text-sm text-[#52617a] no-underline hover:text-[#245fe5]" href="https://discord.com/invite/8krdPBCvEU" target="_blank" rel="noreferrer">Discord</a></div>
+          </div>
+          <div className="flex flex-col gap-2 border-t border-[#e5ebf4] pt-5 text-xs text-[#596980] md:col-span-2 sm:flex-row sm:justify-between"><span>© {new Date().getFullYear()} Drops Studio</span><span>Credentials stay in this browser session · explicit approval for external actions</span></div>
         </div>
       </footer>
     </div>

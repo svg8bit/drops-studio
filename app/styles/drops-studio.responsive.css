@@ -1,6 +1,6 @@
 @media (max-width: 1160px) {
   .studio-grid { grid-template-columns: minmax(0, .9fr) minmax(540px, 1.1fr); }
-  .hero-copy h1 { font-size: 52px; }
+  .hero-copy h1 { font-size: clamp(44px, 3.8vw, 50px); }
   .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .preview-device { min-height: 640px; }
@@ -24,8 +24,6 @@
   .builder-column > .preset-section { order: 3; }
   .builder-column > .setup-card { order: 4; }
   .preview-device { margin: 0 auto; max-width: 580px; }
-  .preview-status-row { margin-left: auto; margin-right: auto; max-width: 580px; }
-  .preview-footnote { margin-left: auto; margin-right: auto; max-width: 580px; }
   .studio-footer { padding-left: 22px; padding-right: 22px; }
 }
 
@@ -60,7 +58,6 @@
   .tool-grid { grid-template-columns: 1fr; }
   .source-strip { align-items: flex-start; flex-direction: column; }
   .source-strip > div span { white-space: normal; }
-  .preview-status-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .preview-device { border-radius: 19px; min-height: 590px; }
   .preview-device-header { height: 70px; padding: 0 16px; }
   .preview-brand-mark { height: 39px; width: 39px; }
@@ -75,8 +72,7 @@
   .aggregator-card, .tamagotchi-card { padding: 0; }
   .preview-actions { flex-wrap: wrap; }
   .preview-action { min-width: 28%; }
-  .studio-footer { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .studio-footer .brand-lockup { transform: none; }
+  .studio-footer { gap: 26px; }
   .connection-layout { display: block; }
   .provider-list { border-bottom: 1px solid var(--line); border-right: 0; flex-direction: row; overflow-x: auto; }
   .provider-list button { flex: 0 0 145px; }

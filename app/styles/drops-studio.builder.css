@@ -4,9 +4,9 @@
 .builder-column > .preset-section { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
 .builder-column > .setup-card { grid-column: 1 / -1; grid-row: 3; min-width: 0; }
 .studio-grid > .preview-column { grid-column: 2; grid-row: 1; }
-.hero-copy { margin-bottom: 28px; }
+.hero-copy { margin-bottom: 28px; padding-top: 8px; }
 .eyebrow { align-items: center; color: var(--blue); display: flex; font-size: 12px; font-weight: 760; gap: 7px; letter-spacing: .13em; margin-bottom: 18px; }
-.hero-copy h1 { font-size: clamp(48px, 4.4vw, 68px); letter-spacing: -.065em; line-height: .98; margin: 0; max-width: 790px; }
+.hero-copy h1 { font-size: clamp(44px, 3.8vw, 60px); letter-spacing: -.058em; line-height: 1.01; margin: 0; max-width: 730px; text-wrap: balance; }
 .hero-copy h1 span { color: var(--blue); }
 .hero-description { display: grid; gap: 2px; margin: 22px 0 0; max-width: 690px; }
 .hero-copy .hero-description p { color: var(--muted); font-size: 16px; line-height: 1.62; margin: 0; max-width: 690px; }
@@ -33,7 +33,8 @@
 .carousel-controls button { align-items: center; background: white; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; display: flex; height: 44px; justify-content: center; width: 44px; }
 .carousel-controls button:hover { border-color: #abc3ff; color: var(--blue); }
 .carousel-controls svg { height: 16px; width: 16px; }
-.preset-carousel { display: flex; gap: 12px; margin: 0 -4px; overflow-x: auto; padding: 4px 4px 18px; scroll-behavior: smooth; scroll-snap-type: x mandatory; scrollbar-color: #d8e1f1 transparent; scrollbar-width: thin; }
+.preset-carousel { display: flex; gap: 12px; margin: 0 -4px; overflow-x: auto; padding: 4px 4px 18px; scroll-behavior: smooth; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.preset-carousel::-webkit-scrollbar { display: none; }
 .preset-card { background: rgba(255, 255, 255, .82); border: 1px solid var(--line); border-radius: 16px; cursor: pointer; display: flex; flex: 0 0 172px; flex-direction: column; min-height: 176px; padding: 17px; position: relative; scroll-snap-align: center; text-align: left; transition: border-color .2s, box-shadow .2s, transform .2s; }
 .preset-card:hover { border-color: color-mix(in srgb, var(--preset-accent) 45%, white); transform: translateY(-2px); }
 .preset-card.selected { background: white; border: 1.5px solid var(--preset-accent); box-shadow: 0 14px 30px color-mix(in srgb, var(--preset-accent) 14%, transparent); flex-basis: 204px; }
