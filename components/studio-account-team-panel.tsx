@@ -37,6 +37,15 @@ import {
   materializeMemberProject,
   memberProjectDraft,
 } from "@/lib/member-project-sync-client"
+import {
+  appendCollaborationInvalidation,
+  CollaborationClientError,
+  createTeamProjectInvalidation,
+  isTeamProjectInvalidation,
+  readAuthoritativeTeamWorkspace,
+  readCollaborationTransport,
+  type CollaborationClientScope,
+} from "@/lib/collaboration-transport-client"
 import type { BillingEntitlements, BillingSubscriptionStatus, BillingTier } from "@/lib/billing"
 import type { GeneratedProject } from "@/lib/project-types"
 import type {
@@ -105,6 +114,27 @@ type PendingAction =
   | "share-project"
   | "update-member-role"
   | null
+
+type CollaborationState =
+  | "action-required"
+  | "checking"
+  | "live"
+  | "read-only"
+  | "setup-required"
+  | "signed-out"
+  | "unavailable"
+
+const COLLABORATION_POLL_INTERVAL_MS = 7_500
+
+function collaborationLabel(state: CollaborationState, revision: number): string {
+  if (state === "action-required") return "Review remote revision"
+  if (state === "checking") return "Checking collaboration"
+  if (state === "live") return `Live collaboration · r${revision}`
+  if (state === "read-only") return `Live read-only · r${revision}`
+  if (state === "signed-out") return "Signed account required"
+  if (state === "unavailable") return "Collaboration unavailable"
+  return "Share once to activate"
+}
 
 function uniqueWorkspaces(items: TeamWorkspace[]): TeamWorkspace[] {
   const byId = new Map<string, TeamWorkspace>()
@@ -205,6 +235,15 @@ export function StudioAccountTeamPanel({
   const [shareConsent, setShareConsent] = useState(false)
   const [shareMessage, setShareMessage] = useState("")
   const [optimisticRevision, setOptimisticRevision] = useState<OptimisticRevision | null>(null)
+  const [collaborationState, setCollaborationState] = useState<CollaborationState>("checking")
+  const [collaborationMessage, setCollaborationMessage] = useState(
+    "Checking for a verified durable collaboration room.",
+  )
+  const [collaborationRevision, setCollaborationRevision] = useState(0)
+  const collaborationRevisionRef = useRef(0)
+  const collaborationScopeRef = useRef("")
+  const collaborationRefreshRef = useRef<() => Promise<void>>(async () => {})
+  const pendingRemoteRevisionRef = useRef<number | null>(null)
 
   const clearSensitiveState = useCallback(() => {
     setBillingConsent(false)
@@ -221,6 +260,12 @@ export function StudioAccountTeamPanel({
     setShareConsent(false)
     setShareMessage("")
     setOptimisticRevision(null)
+    collaborationRevisionRef.current = 0
+    collaborationScopeRef.current = ""
+    pendingRemoteRevisionRef.current = null
+    setCollaborationRevision(0)
+    setCollaborationState("checking")
+    setCollaborationMessage("Checking for a verified durable collaboration room.")
     setPendingAction(null)
   }, [])
 
@@ -232,6 +277,10 @@ export function StudioAccountTeamPanel({
     setWorkspaces([])
     setSelectedWorkspaceId("")
     setTeamMessage("")
+    setCollaborationState("signed-out")
+    setCollaborationMessage(
+      "Sign in before reading or publishing shared-project collaboration receipts.",
+    )
     setLoadState("signed-out")
   }, [clearSensitiveState])
 
@@ -266,6 +315,240 @@ export function StudioAccountTeamPanel({
     setSelectedWorkspaceId(workspace.id)
     setApplyConsent(false)
   }, [])
+
+  const loadAuthoritativeCollaborationRevision = useCallback(async (
+    workspace: TeamWorkspace,
+    previousProjectRevision: number,
+    reason: "event" | "history-gap" | "reconcile",
+    signal?: AbortSignal,
+  ) => {
+    const authoritative = await readAuthoritativeTeamWorkspace(
+      workspace.id,
+      workspace.ownerIdentity,
+      fetch,
+      signal,
+    )
+    const remoteProject = authoritative.projects.find(
+      (item) => item.projectId === project.id,
+    ) ?? null
+    replaceWorkspace(authoritative)
+    if (remoteProject && remoteProject.revision > previousProjectRevision) {
+      pendingRemoteRevisionRef.current = remoteProject.revision
+      setSelectedTeamProjectId(remoteProject.projectId)
+      setApplyConsent(false)
+      setCollaborationState("action-required")
+      setCollaborationMessage(
+        `Verified shared source revision ${remoteProject.revision} arrived. Review it, approve the replacement, then open it locally.`,
+      )
+    } else {
+      setCollaborationState(role === "viewer" ? "read-only" : "live")
+      setCollaborationMessage(
+        reason === "history-gap"
+          ? `The event window advanced; authoritative team revision ${authoritative.revision} was reloaded without changing local source.`
+          : `Authoritative team revision ${authoritative.revision} is current. Local source was not replaced.`,
+      )
+    }
+    return authoritative
+  }, [project.id, replaceWorkspace, role])
+
+  useEffect(() => {
+    if (loadState === "signed-out") {
+      const statusTimer = window.setTimeout(() => {
+        setCollaborationState("signed-out")
+        setCollaborationMessage(
+          "Sign in before reading shared-project collaboration receipts.",
+        )
+      }, 0)
+      collaborationRefreshRef.current = async () => {}
+      return () => window.clearTimeout(statusTimer)
+    }
+    if (!selectedWorkspace) {
+      const statusTimer = window.setTimeout(() => {
+        setCollaborationState("setup-required")
+        setCollaborationMessage("Select a team workspace before collaboration can be verified.")
+      }, 0)
+      collaborationRefreshRef.current = async () => {}
+      return () => window.clearTimeout(statusTimer)
+    }
+    if (!sharedProject) {
+      collaborationRevisionRef.current = 0
+      collaborationScopeRef.current = ""
+      const statusTimer = window.setTimeout(() => {
+        setCollaborationState("setup-required")
+        setCollaborationMessage(
+          "Share the current project once to create its authenticated collaboration room.",
+        )
+        setCollaborationRevision(0)
+      }, 0)
+      collaborationRefreshRef.current = async () => {}
+      return () => window.clearTimeout(statusTimer)
+    }
+    if (!accountIdentity || !role) {
+      const statusTimer = window.setTimeout(() => {
+        setCollaborationState("unavailable")
+        setCollaborationMessage("The signed team role could not be verified for collaboration.")
+      }, 0)
+      collaborationRefreshRef.current = async () => {}
+      return () => window.clearTimeout(statusTimer)
+    }
+
+    const selectedScope: CollaborationClientScope = {
+      workspaceId: selectedWorkspace.id,
+      projectId: sharedProject.projectId,
+    }
+    const selectedScopeKey = `${selectedScope.workspaceId}:${selectedScope.projectId}`
+    if (collaborationScopeRef.current && collaborationScopeRef.current !== selectedScopeKey) {
+      pendingRemoteRevisionRef.current = null
+    }
+    const controller = new AbortController()
+    let cancelled = false
+    let timer: number | null = null
+    let polling = false
+
+    const verifiedState = (revision: number, message?: string) => {
+      if (cancelled) return
+      setCollaborationRevision(revision)
+      if (pendingRemoteRevisionRef.current !== null) {
+        setCollaborationState("action-required")
+        return
+      }
+      setCollaborationState(role === "viewer" ? "read-only" : "live")
+      setCollaborationMessage(
+        message
+        ?? (role === "viewer"
+          ? "Durable polling is verified. Viewer role can receive revisions but cannot publish them."
+          : "Durable polling is verified. Successful shared revisions publish invalidation receipts."),
+      )
+    }
+
+    const failHonestly = (error: unknown) => {
+      if (cancelled) return
+      if (error instanceof CollaborationClientError && error.code === "signed_out") {
+        markSignedOut()
+        return
+      }
+      setCollaborationState("unavailable")
+      setCollaborationMessage(
+        error instanceof Error && error.message
+          ? error.message
+          : "Collaboration polling is unavailable. Use manual team refresh before applying source.",
+      )
+    }
+
+    const poll = async () => {
+      if (polling || cancelled || document.visibilityState === "hidden") return
+      polling = true
+      try {
+        const afterRevision = collaborationRevisionRef.current
+        const receipt = await readCollaborationTransport(
+          selectedScope,
+          afterRevision,
+          fetch,
+          controller.signal,
+        )
+        if (cancelled) return
+        collaborationRevisionRef.current = receipt.revision
+        collaborationScopeRef.current = selectedScopeKey
+        const invalidations = receipt.events.filter((item) => (
+          isTeamProjectInvalidation(item, sharedProject.projectId)
+        ))
+        if (receipt.historyGap || invalidations.length) {
+          await loadAuthoritativeCollaborationRevision(
+            selectedWorkspace,
+            sharedProject.revision,
+            receipt.historyGap ? "history-gap" : "event",
+            controller.signal,
+          )
+        } else {
+          verifiedState(receipt.revision)
+        }
+      } catch (error) {
+        failHonestly(error)
+      } finally {
+        polling = false
+      }
+    }
+
+    const schedule = () => {
+      if (cancelled || document.visibilityState === "hidden") return
+      timer = window.setTimeout(() => {
+        void poll().finally(schedule)
+      }, COLLABORATION_POLL_INTERVAL_MS)
+    }
+
+    const establish = async () => {
+      setCollaborationState("checking")
+      setCollaborationMessage("Reading the durable collaboration room before polling.")
+      try {
+        const receipt = await readCollaborationTransport(
+          selectedScope,
+          0,
+          fetch,
+          controller.signal,
+        )
+        if (cancelled) return
+        collaborationRevisionRef.current = receipt.revision
+        collaborationScopeRef.current = selectedScopeKey
+        const invalidations = receipt.events.filter((item) => (
+          isTeamProjectInvalidation(item, sharedProject.projectId)
+        ))
+        if (
+          receipt.historyGap
+          || invalidations.some((item) => (
+            Number(item.payload.projectRevision) > sharedProject.revision
+          ))
+        ) {
+          await loadAuthoritativeCollaborationRevision(
+            selectedWorkspace,
+            sharedProject.revision,
+            receipt.historyGap ? "history-gap" : "event",
+            controller.signal,
+          )
+        } else {
+          verifiedState(receipt.revision)
+        }
+        schedule()
+      } catch (error) {
+        failHonestly(error)
+        schedule()
+      }
+    }
+
+    const refreshNow = async () => {
+      if (timer !== null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+      await poll()
+      schedule()
+    }
+    collaborationRefreshRef.current = refreshNow
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshNow()
+      else if (timer !== null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    const startTimer = window.setTimeout(() => void establish(), 0)
+    return () => {
+      cancelled = true
+      controller.abort()
+      collaborationRefreshRef.current = async () => {}
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+      window.clearTimeout(startTimer)
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [
+    accountIdentity,
+    loadAuthoritativeCollaborationRevision,
+    loadState,
+    markSignedOut,
+    role,
+    selectedWorkspace,
+    sharedProject,
+  ])
 
   const refresh = useCallback(async () => {
     const version = ++requestVersion.current
@@ -501,6 +784,11 @@ export function StudioAccountTeamPanel({
         throw new Error("Shared source could not be saved in this browser.")
       }
       setApplyConsent(false)
+      pendingRemoteRevisionRef.current = null
+      setCollaborationState(role === "viewer" ? "read-only" : "live")
+      setCollaborationMessage(
+        `Shared source revision ${applicableProject.revision} was applied locally after explicit approval. Durable polling remains active.`,
+      )
       setShareMessage(
         `Applied verified shared source revision ${applicableProject.revision} locally. No team revision was changed.`,
       )
@@ -544,6 +832,15 @@ export function StudioAccountTeamPanel({
       if (response.status === 409 && payload.current) {
         replaceWorkspace(payload.current)
         const projectRevision = payload.currentProject?.revision ?? 0
+        if (projectRevision > (sharedProject?.revision ?? 0)) {
+          pendingRemoteRevisionRef.current = projectRevision
+          setSelectedTeamProjectId(project.id)
+          setApplyConsent(false)
+          setCollaborationState("action-required")
+          setCollaborationMessage(
+            `Verified shared source revision ${projectRevision} is newer. Review it and explicitly approve opening it locally before sharing again.`,
+          )
+        }
         setShareMessage(
           `Revision conflict: the server is at team revision ${payload.current.revision} / project revision ${projectRevision}. No local overwrite occurred. Review and share again.`,
         )
@@ -555,10 +852,65 @@ export function StudioAccountTeamPanel({
       }
       replaceWorkspace(payload.workspace)
       setShareConsent(false)
-      setShareMessage(
-        `Verified server receipt: team revision ${payload.workspace.revision} / project revision ${payload.project.revision}.`,
-      )
-      onToast(`Project shared at revision ${payload.project.revision}`)
+      try {
+        const selectedScope: CollaborationClientScope = {
+          workspaceId: payload.workspace.id,
+          projectId: payload.project.projectId,
+        }
+        const selectedScopeKey = `${selectedScope.workspaceId}:${selectedScope.projectId}`
+        if (collaborationScopeRef.current !== selectedScopeKey) {
+          const baseline = await readCollaborationTransport(selectedScope, 0)
+          collaborationRevisionRef.current = baseline.revision
+          collaborationScopeRef.current = selectedScopeKey
+          setCollaborationRevision(baseline.revision)
+        }
+        const invalidation = await createTeamProjectInvalidation(
+          payload.workspace,
+          payload.project,
+        )
+        const idempotencyKey = `studio-${crypto.randomUUID().replaceAll("-", "")}`
+        const collaborationReceipt = await appendCollaborationInvalidation(
+          selectedScope,
+          collaborationRevisionRef.current,
+          idempotencyKey,
+          invalidation,
+        )
+        collaborationRevisionRef.current = collaborationReceipt.revision
+        collaborationScopeRef.current = selectedScopeKey
+        setCollaborationRevision(collaborationReceipt.revision)
+        const concurrentInvalidation = collaborationReceipt.reconciledEvents.some((item) => (
+          isTeamProjectInvalidation(item, payload.project?.projectId ?? "")
+        ))
+        if (concurrentInvalidation || collaborationReceipt.reconciledHistoryGap) {
+          await loadAuthoritativeCollaborationRevision(
+            payload.workspace,
+            payload.project.revision,
+            "reconcile",
+          )
+        } else {
+          pendingRemoteRevisionRef.current = null
+          setCollaborationState("live")
+          setCollaborationMessage(
+            `Durable invalidation revision ${collaborationReceipt.revision} was confirmed. Collaborators polling this room can reload the authoritative source.`,
+          )
+        }
+        setShareMessage(
+          `Verified server receipt: team revision ${payload.workspace.revision} / project revision ${payload.project.revision}. Durable collaboration invalidation ${collaborationReceipt.revision} confirmed.`,
+        )
+        onToast(`Project shared at revision ${payload.project.revision}; collaboration receipt confirmed`)
+      } catch (collaborationError) {
+        const reason = collaborationError instanceof Error
+          ? collaborationError.message
+          : "Durable collaboration invalidation is unavailable."
+        setCollaborationState("unavailable")
+        setCollaborationMessage(
+          `${reason} The project revision is saved; collaborators must refresh the team workspace manually.`,
+        )
+        setShareMessage(
+          `Verified server receipt: team revision ${payload.workspace.revision} / project revision ${payload.project.revision}. Live invalidation was not confirmed; collaborators must refresh manually.`,
+        )
+        onToast(`Project shared at revision ${payload.project.revision}; live collaboration needs manual refresh`)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Project could not be shared with the team."
       setShareMessage(`Share failed; the last verified revision remains unchanged. ${message}`)
@@ -857,6 +1209,7 @@ export function StudioAccountTeamPanel({
                       className="h-auto min-h-11 w-full justify-between gap-3 whitespace-normal py-2 text-left"
                       aria-pressed={workspace.id === selectedWorkspace?.id}
                       onClick={() => {
+                        pendingRemoteRevisionRef.current = null
                         setSelectedWorkspaceId(workspace.id)
                         setSelectedTeamProjectId("")
                         setApplyConsent(false)
@@ -1073,11 +1426,45 @@ export function StudioAccountTeamPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline">Server project revision {sharedProject?.revision ?? 0}</Badge>
+                  <Badge
+                    variant={
+                      collaborationState === "unavailable"
+                        ? "destructive"
+                        : collaborationState === "live" || collaborationState === "read-only"
+                          ? "secondary"
+                          : "outline"
+                    }
+                  >
+                    {collaborationLabel(collaborationState, collaborationRevision)}
+                  </Badge>
                   {optimisticRevision?.workspaceId === selectedWorkspace?.id ? (
                     <Badge variant="secondary">
                       Optimistic {optimisticRevision.workspaceRevision}/{optimisticRevision.projectRevision}
                     </Badge>
                   ) : null}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
+                  <p aria-live="polite" className="min-w-0 flex-1 text-sm leading-6 text-muted-foreground">
+                    {collaborationMessage}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      signedOut
+                      || collaborationState === "checking"
+                      || collaborationState === "setup-required"
+                    }
+                    onClick={() => void collaborationRefreshRef.current()}
+                  >
+                    <RefreshCw
+                      className={collaborationState === "checking" ? "animate-spin" : ""}
+                      data-icon="inline-start"
+                      aria-hidden="true"
+                    />
+                    Refresh live changes
+                  </Button>
                 </div>
                 {selectedWorkspace?.projects.length ? (
                   <div className="space-y-2" aria-label="Verified shared project revisions">

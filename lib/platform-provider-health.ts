@@ -1,4 +1,10 @@
 import { createHash, createSign, randomUUID } from "node:crypto";
+import { isIP } from "node:net";
+
+import {
+  createPinnedCustomProviderFetch,
+  resolveCustomProviderEndpoint,
+} from "./builder-agent/providers.ts";
 
 import {
   createDurableProjectDataBackend,
@@ -47,6 +53,58 @@ function unavailable(
   evidence: string[] = [],
 ): PlatformProviderHealthCheck {
   return { status: "unavailable", mode, detail, evidence };
+}
+
+function canonicalApplicationOrigin(): string {
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  const candidate = configured || (productionHost ? `https://${productionHost}` : "");
+  if (!candidate) throw new Error("canonical application origin missing");
+  const url = new URL(candidate);
+  if (url.protocol !== "https:") throw new Error("canonical application origin must use https");
+  return url.origin;
+}
+
+function sameOriginHttpsUrl(value: string, expectedOrigin: string): URL {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.origin !== expectedOrigin) {
+    throw new Error("provider endpoint origin mismatch");
+  }
+  return url;
+}
+
+function publicHttpsProviderUrl(value: string): URL {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  const normalizedIpHostname = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+  if (
+    url.protocol !== "https:"
+    || url.username
+    || url.password
+    || hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname.endsWith(".local")
+    || isIP(normalizedIpHostname) !== 0
+  ) {
+    throw new Error("provider endpoint must be a public https URL");
+  }
+  return url;
+}
+
+function formEncodedClientCredential(value: string): string {
+  return new URLSearchParams({ value }).toString().slice("value=".length);
+}
+
+export interface ExternalOidcHealthDependencies {
+  resolvePinnedFetch?: (url: URL) => Promise<typeof fetch>;
+  sameOriginFetch?: typeof fetch;
+}
+
+async function resolvePinnedPublicProviderFetch(url: URL): Promise<typeof fetch> {
+  const endpoint = await resolveCustomProviderEndpoint(url.toString());
+  return createPinnedCustomProviderFetch(endpoint);
 }
 
 async function timed<T>(
@@ -254,12 +312,16 @@ async function organizationsHealth(): Promise<PlatformProviderHealthCheck> {
   }
 }
 
-async function externalOidcHealth(): Promise<PlatformProviderHealthCheck> {
+export async function externalOidcHealth(
+  dependencies: ExternalOidcHealthDependencies = {},
+): Promise<PlatformProviderHealthCheck> {
   const issuer = process.env.DROPS_ENTERPRISE_OIDC_ISSUER?.trim();
+  const clientId = process.env.DROPS_ENTERPRISE_OIDC_CLIENT_ID?.trim();
+  const clientSecret = process.env.DROPS_ENTERPRISE_OIDC_CLIENT_SECRET?.trim();
   if (
     !issuer
-    || !process.env.DROPS_ENTERPRISE_OIDC_CLIENT_ID?.trim()
-    || !process.env.DROPS_ENTERPRISE_OIDC_CLIENT_SECRET?.trim()
+    || !clientId
+    || !clientSecret
   ) {
     return unavailable(
       "enterprise-oidc-not-configured",
@@ -267,29 +329,109 @@ async function externalOidcHealth(): Promise<PlatformProviderHealthCheck> {
     );
   }
   try {
+    let firstParty = false;
     const receipt = await timed(async () => {
-      const origin = new URL(issuer);
-      if (origin.protocol !== "https:") throw new Error("issuer must use https");
-      const response = await fetch(
-        new URL(".well-known/openid-configuration", issuer.endsWith("/") ? issuer : `${issuer}/`),
+      const issuerUrl = publicHttpsProviderUrl(issuer);
+      const normalizedIssuer = issuerUrl.href.replace(/\/$/, "");
+      let firstPartyIssuer: string | null = null;
+      try {
+        firstPartyIssuer = `${canonicalApplicationOrigin()}/api/enterprise/oidc`;
+      } catch {
+        // External providers do not depend on a configured Studio canonical origin.
+      }
+      firstParty = normalizedIssuer === firstPartyIssuer;
+      const discoveryUrl = new URL(".well-known/openid-configuration", `${normalizedIssuer}/`);
+      const discoveryFetch = firstParty
+        ? dependencies.sameOriginFetch ?? fetch
+        : await (dependencies.resolvePinnedFetch ?? resolvePinnedPublicProviderFetch)(discoveryUrl);
+      const response = await discoveryFetch(
+        discoveryUrl,
         { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) },
       );
       const discovery = await response.json() as Record<string, unknown>;
-      if (
-        !response.ok
-        || discovery.issuer !== issuer.replace(/\/$/, "")
-        || !["authorization_endpoint", "token_endpoint", "jwks_uri"].every(
-          (field) => typeof discovery[field] === "string"
-            && new URL(String(discovery[field])).protocol === "https:",
-        )
-      ) {
+      if (!response.ok || discovery.issuer !== normalizedIssuer) {
         throw new Error("invalid discovery");
       }
+      const endpoints: Record<string, URL> = {};
+      for (const field of ["authorization_endpoint", "token_endpoint", "jwks_uri"] as const) {
+        if (typeof discovery[field] !== "string") throw new Error("invalid discovery endpoint");
+        endpoints[field] = firstParty
+          ? sameOriginHttpsUrl(discovery[field], issuerUrl.origin)
+          : publicHttpsProviderUrl(discovery[field]);
+      }
+      if (firstParty) {
+        if (typeof discovery.userinfo_endpoint !== "string") throw new Error("userinfo endpoint missing");
+        endpoints.userinfo_endpoint = sameOriginHttpsUrl(
+          discovery.userinfo_endpoint,
+          issuerUrl.origin,
+        );
+      } else if (typeof discovery.userinfo_endpoint === "string") {
+        endpoints.userinfo_endpoint = publicHttpsProviderUrl(discovery.userinfo_endpoint);
+      }
+
+      const jwksFetch = firstParty
+        ? dependencies.sameOriginFetch ?? fetch
+        : await (dependencies.resolvePinnedFetch ?? resolvePinnedPublicProviderFetch)(endpoints.jwks_uri);
+      const jwksResponse = await jwksFetch(endpoints.jwks_uri, {
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      });
+      const jwks = await jwksResponse.json() as { keys?: Array<Record<string, unknown>> };
+      if (
+        !jwksResponse.ok
+        || !Array.isArray(jwks.keys)
+        || !jwks.keys.some((key) =>
+          ["OKP", "RSA", "EC"].includes(String(key.kty))
+          && typeof key.kid === "string"
+          && !["d", "p", "q", "dp", "dq", "qi", "k"].some((field) => field in key))
+      ) {
+        throw new Error("invalid public jwks");
+      }
+
+      if (!firstParty) return;
+      if (typeof discovery.drops_studio_health_endpoint !== "string") {
+        throw new Error("first-party health endpoint missing");
+      }
+      const healthEndpoint = sameOriginHttpsUrl(discovery.drops_studio_health_endpoint, issuerUrl.origin);
+      const healthResponse = await (dependencies.sameOriginFetch ?? fetch)(healthEndpoint, {
+        headers: {
+          accept: "application/json",
+          authorization: `Basic ${Buffer.from(`${formEncodedClientCredential(clientId)}:${formEncodedClientCredential(clientSecret)}`, "utf8").toString("base64")}`,
+        },
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      });
+      const health = await healthResponse.json() as Record<string, unknown>;
+      const evidence = Array.isArray(health.evidence)
+        ? health.evidence.filter((item): item is string => typeof item === "string")
+        : [];
+      if (
+        !healthResponse.ok
+        || health.status !== "working"
+        || health.issuer !== normalizedIssuer
+        || health.signingAlgorithm !== "EdDSA"
+        || !evidence.includes("ed25519-sign-verify")
+        || !evidence.includes("public-jwks-no-secret")
+        || !evidence.includes("private-blob-cas")
+        || !evidence.includes("authorization-code-pkce-s256")
+        || !evidence.includes("authorization-code-replay-rejected")
+      ) {
+        throw new Error("OIDC live self-check failed");
+      }
     });
+    if (!firstParty) {
+      return unavailable(
+        "external-oidc-auth-receipt-required",
+        "The external OIDC provider passed pinned public discovery and JWKS validation, but client authentication remains unavailable until a real authorization callback receipt succeeds.",
+        ["oidc-discovery-live", "public-jwks-no-secret", "external-provider-secret-not-transmitted"],
+      );
+    }
     return working(
-      "oidc-discovery-live",
-      "The configured enterprise OIDC issuer passed HTTPS discovery validation; callback login remains approval-gated.",
-      ["oidc-discovery-live", "pkce-state-nonce-tests"],
+      "drops-studio-oidc-provider-live",
+      "The first-party OIDC issuer passed discovery, public JWKS, asymmetric signing and durable one-time state checks.",
+      ["oidc-discovery-live", "public-jwks-no-secret", "ed25519-sign-verify", "private-blob-cas", "authorization-code-pkce-s256", "authorization-code-replay-rejected"],
       receipt.latencyMs,
     );
   } catch {
@@ -420,31 +562,58 @@ async function deploymentHealth(): Promise<PlatformProviderHealthCheck> {
   }
 }
 
-async function collaborationHealth(): Promise<PlatformProviderHealthCheck> {
+export async function collaborationHealth(): Promise<PlatformProviderHealthCheck> {
   const url = process.env.DROPS_COLLABORATION_TRANSPORT_URL?.trim();
-  if (!url) {
+  const operatorSecret = process.env.DROPS_PLATFORM_HEALTH_OPERATOR_SECRET?.trim();
+  if (!url || !operatorSecret || Buffer.byteLength(operatorSecret, "utf8") < 32) {
     return unavailable(
       "collaboration-transport-not-configured",
-      "Realtime collaboration needs a production transport URL.",
+      "Realtime collaboration needs its production transport URL and bounded health authorization.",
     );
   }
   try {
     const receipt = await timed(async () => {
-      const endpoint = new URL(url);
-      if (endpoint.protocol !== "https:") throw new Error("transport must use https");
+      const endpoint = sameOriginHttpsUrl(url, canonicalApplicationOrigin());
       endpoint.searchParams.set("health", "1");
       const response = await fetch(endpoint, {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${operatorSecret}`,
+        },
         cache: "no-store",
         redirect: "error",
         signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
       const payload = await response.json() as Record<string, unknown>;
-      if (!response.ok || payload.status !== "working") throw new Error("transport failed");
+      const evidence = Array.isArray(payload.evidence)
+        ? payload.evidence.filter((item): item is string => typeof item === "string")
+        : [];
+      if (
+        !response.ok
+        || payload.status !== "working"
+        || !["neon-postgres", "vercel-blob-private"].includes(String(payload.mode))
+        || ![
+          "collaboration-durable-write-live",
+          "collaboration-durable-read-live",
+          "collaboration-two-actor-order-live",
+          "collaboration-idempotency-live",
+          "collaboration-cleanup-live",
+        ].every((item) => evidence.includes(item))
+      ) {
+        throw new Error("transport failed");
+      }
     });
     return working(
-      "realtime-transport-live",
-      "The configured realtime transport returned a successful HTTPS health response.",
-      ["realtime-transport-health-live"],
+      "durable-realtime-transport-live",
+      "The collaboration transport passed authenticated two-actor append, ordering, idempotency, read and cleanup checks.",
+      [
+        "realtime-transport-health-live",
+        "collaboration-durable-write-live",
+        "collaboration-durable-read-live",
+        "collaboration-two-actor-order-live",
+        "collaboration-idempotency-live",
+        "collaboration-cleanup-live",
+      ],
       receipt.latencyMs,
     );
   } catch {

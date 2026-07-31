@@ -21,6 +21,7 @@ export interface PlatformCapabilityReceipt {
 
 export interface PlatformCapabilitySnapshot {
   generatedAt: string;
+  healthCheckedAt: string | null;
   environment: "development" | "preview" | "production";
   capabilities: PlatformCapabilityReceipt[];
 }
@@ -77,6 +78,9 @@ export function platformCapabilitySnapshot(
     "DROPS_ENTERPRISE_OIDC_ISSUER",
     "DROPS_ENTERPRISE_OIDC_CLIENT_ID",
     "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET",
+    "DROPS_ENTERPRISE_OIDC_SIGNING_SECRET",
+    "DROPS_ENTERPRISE_OIDC_REDIRECT_URIS",
+    "DROPS_ENTERPRISE_OIDC_SUBJECT_SALT",
   ]);
   const audit = managedRelational && Boolean(environment.DROPS_ENTERPRISE_AUDIT_SIGNING_KEY?.trim());
   const receiptCurrent = Boolean(
@@ -171,10 +175,17 @@ export function platformCapabilitySnapshot(
       state: identityHealth?.status === "working" ? "working" : oidc ? "unavailable" : "working-local-test",
       mode: identityHealth?.mode ?? (oidc ? "oidc-health-check-required" : "standards-shaped-reference-runtime"),
       detail: identityHealth?.detail ?? (oidc
-        ? "OIDC values are configured, but sign-in stays disabled until discovery and callback verification succeeds."
-        : "OIDC state/nonce/PKCE, domain mapping, RBAC, policy precedence and scoped service tokens are covered by local reference tests; external SSO is setup-required."),
+        ? "OIDC values are configured, but the issuer stays unavailable until discovery, public JWKS, signing and durable one-time state checks succeed."
+        : "OIDC state/nonce/PKCE, domain mapping, RBAC, policy precedence and scoped service tokens are covered by local reference tests; the first-party issuer is setup-required."),
       evidence: identityHealth?.evidence ?? ["oidc-replay-tests", "rbac-isolation-tests", "policy-resolution-tests"],
-      requiredEnvironment: oidc ? [] : ["DROPS_ENTERPRISE_OIDC_ISSUER", "DROPS_ENTERPRISE_OIDC_CLIENT_ID", "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET"],
+      requiredEnvironment: oidc ? [] : [
+        "DROPS_ENTERPRISE_OIDC_ISSUER",
+        "DROPS_ENTERPRISE_OIDC_CLIENT_ID",
+        "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET",
+        "DROPS_ENTERPRISE_OIDC_SIGNING_SECRET",
+        "DROPS_ENTERPRISE_OIDC_REDIRECT_URIS",
+        "DROPS_ENTERPRISE_OIDC_SUBJECT_SALT",
+      ],
     },
     {
       id: "audit-backup",
@@ -213,6 +224,7 @@ export function platformCapabilitySnapshot(
 
   return {
     generatedAt: now.toISOString(),
+    healthCheckedAt: receiptCurrent ? healthReceipt?.checkedAt ?? null : null,
     environment: runtimeEnvironment(environment),
     capabilities,
   };

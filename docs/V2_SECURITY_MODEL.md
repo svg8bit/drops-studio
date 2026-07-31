@@ -226,6 +226,27 @@ with optional Web Locks, not IndexedDB.
 Storage unavailability returns 503 and leaves the browser project available. It
 does not silently claim cloud sync.
 
+## Realtime collaboration and first-party OIDC
+
+The collaboration transport stores bounded room envelopes in the same durable
+project-data backend. A signed Studio member, workspace membership and shared
+project scope are required for normal requests. Writes additionally require
+same-origin proof and owner/editor RBAC. CAS revisions, idempotency keys,
+retention limits, rate limits and credential scanning fail closed.
+
+The first-party OIDC issuer derives an Ed25519 key from dedicated server-only
+signing material. Its JWKS contains only the public key. Authorization codes are
+random, short-lived, PKCE-bound, exact-redirect-bound and consumed once through
+private Blob ETag CAS; authenticated health performs a bounded expired-code
+cleanup sweep. Client secret, signing secret and pairwise subject salt must be
+independent. The subject salt keeps user identifiers stable across signing-key
+rotation and is changed only with an explicit identity migration. Token,
+provider secret and member-cookie material are excluded from project files,
+ZIPs, checkpoints, logs and public health responses. External OIDC health uses
+DNS-resolved, address-pinned public HTTPS discovery and JWKS without transmitting
+client secrets; discovery alone remains unavailable until a real callback
+receipt proves client authentication.
+
 ## Built-in project data
 
 `/api/project-data` uses an HMAC bearer capability signed with:
