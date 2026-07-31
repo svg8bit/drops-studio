@@ -1,7 +1,22 @@
 import type { ProjectV2 } from "../lib/project-v2-types.ts";
 import { validateProjectV2 } from "../lib/project-v2-validator.ts";
+import {
+  durableProjectDataPostgresConfigured,
+  neonProjectDataSqlClient,
+  type ProjectDataSqlClient,
+} from "../lib/project-data/durable-backend.ts";
 
 export const PROJECT_V2_SNAPSHOT_LIMIT_BYTES = 8_000_000;
+const PROJECT_V2_POSTGRES_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS drops_project_v2_snapshots (
+    actor_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    storage_revision BIGINT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (actor_id, project_id)
+  )
+`;
 
 interface ProjectV2SnapshotEnvelope {
   schemaVersion: 2;
@@ -20,6 +35,9 @@ export type ProjectV2SnapshotWriteResult =
 declare global {
   var __DROPS_STUDIO_LOCAL_PROJECT_V2__: Map<string, ProjectV2SnapshotEnvelope> | undefined;
 }
+
+let projectV2SqlClientPromise: Promise<ProjectDataSqlClient> | null = null;
+let projectV2SqlSchemaPromise: Promise<void> | null = null;
 
 export class ProjectV2SnapshotStorageUnavailableError extends Error {
   constructor(message = "Project V2 snapshot storage is temporarily unavailable.") {
@@ -52,7 +70,11 @@ function durableBlobConfigured(): boolean {
 }
 
 export function projectV2SnapshotStorageConfigured(): boolean {
-  return localStoreEnabled() || durableBlobConfigured();
+  return (
+    localStoreEnabled()
+    || durableProjectDataPostgresConfigured()
+    || durableBlobConfigured()
+  );
 }
 
 function localStore(): Map<string, ProjectV2SnapshotEnvelope> {
@@ -128,10 +150,202 @@ async function readBlob(
   return { envelope: await parseEnvelope(value), etag: current.blob.etag };
 }
 
+async function projectV2SqlClient(
+  override?: ProjectDataSqlClient,
+): Promise<ProjectDataSqlClient> {
+  if (override) return override;
+  projectV2SqlClientPromise ??= neonProjectDataSqlClient();
+  return projectV2SqlClientPromise;
+}
+
+async function ensureProjectV2SqlSchema(
+  client: ProjectDataSqlClient,
+  override?: ProjectDataSqlClient,
+): Promise<void> {
+  if (override) {
+    await client.query(PROJECT_V2_POSTGRES_SCHEMA);
+    return;
+  }
+  projectV2SqlSchemaPromise ??= client
+    .query(PROJECT_V2_POSTGRES_SCHEMA)
+    .then(() => undefined);
+  try {
+    await projectV2SqlSchemaPromise;
+  } catch {
+    projectV2SqlSchemaPromise = null;
+    throw new ProjectV2SnapshotStorageUnavailableError();
+  }
+}
+
+async function readPostgres(
+  identity: string,
+  projectId: string,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<ProjectV2SnapshotEnvelope | null> {
+  try {
+    const client = await projectV2SqlClient(sqlOverride);
+    await ensureProjectV2SqlSchema(client, sqlOverride);
+    const result = await client.query(
+      `SELECT storage_revision, snapshot_json, updated_at
+       FROM drops_project_v2_snapshots
+       WHERE actor_id = $1 AND project_id = $2`,
+      [identity, projectId],
+    );
+    if (!result.rows.length) return null;
+    const row = result.rows[0] as Record<string, unknown>;
+    const value =
+      typeof row.snapshot_json === "string"
+        ? JSON.parse(row.snapshot_json) as unknown
+        : row.snapshot_json;
+    const envelope = await parseEnvelope(value);
+    if (
+      envelope.storageRevision !== Number(row.storage_revision)
+      || envelope.project.id !== projectId
+    ) {
+      throw new ProjectV2SnapshotStorageUnavailableError(
+        "Project V2 database snapshot failed its integrity check.",
+      );
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof ProjectV2SnapshotStorageUnavailableError) throw error;
+    throw new ProjectV2SnapshotStorageUnavailableError();
+  }
+}
+
+async function insertPostgresEnvelope(
+  identity: string,
+  projectId: string,
+  envelope: ProjectV2SnapshotEnvelope,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<boolean> {
+  const serialized = JSON.stringify(envelope);
+  if (encodedBytes(serialized) > PROJECT_V2_SNAPSHOT_LIMIT_BYTES) return false;
+  try {
+    const client = await projectV2SqlClient(sqlOverride);
+    await ensureProjectV2SqlSchema(client, sqlOverride);
+    const result = await client.query(
+      `INSERT INTO drops_project_v2_snapshots
+       (actor_id, project_id, storage_revision, snapshot_json, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (actor_id, project_id) DO NOTHING
+       RETURNING storage_revision`,
+      [identity, projectId, envelope.storageRevision, serialized],
+    );
+    return result.rowCount === 1;
+  } catch {
+    throw new ProjectV2SnapshotStorageUnavailableError();
+  }
+}
+
+async function writePostgres(
+  identity: string,
+  project: ProjectV2,
+  expectedStorageRevision: number,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<ProjectV2SnapshotWriteResult> {
+  const envelope: ProjectV2SnapshotEnvelope = {
+    schemaVersion: 2,
+    storageRevision: expectedStorageRevision + 1,
+    updatedAt: new Date().toISOString(),
+    project,
+  };
+  const serialized = JSON.stringify(envelope);
+  if (encodedBytes(serialized) > PROJECT_V2_SNAPSHOT_LIMIT_BYTES) {
+    return { status: "too-large" };
+  }
+  try {
+    const client = await projectV2SqlClient(sqlOverride);
+    await ensureProjectV2SqlSchema(client, sqlOverride);
+    const result = expectedStorageRevision === 0
+      ? await client.query(
+        `INSERT INTO drops_project_v2_snapshots
+         (actor_id, project_id, storage_revision, snapshot_json, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (actor_id, project_id) DO NOTHING
+         RETURNING storage_revision`,
+        [identity, project.id, envelope.storageRevision, serialized],
+      )
+      : await client.query(
+        `UPDATE drops_project_v2_snapshots
+         SET storage_revision = $3, snapshot_json = $4, updated_at = NOW()
+         WHERE actor_id = $1 AND project_id = $2 AND storage_revision = $5
+         RETURNING storage_revision`,
+        [
+          identity,
+          project.id,
+          envelope.storageRevision,
+          serialized,
+          expectedStorageRevision,
+        ],
+      );
+    if (result.rowCount === 1) {
+      return {
+        status: "saved",
+        storageRevision: envelope.storageRevision,
+        project: structuredClone(project),
+      };
+    }
+    const current = await readPostgres(identity, project.id, sqlOverride);
+    return current
+      ? {
+          status: "conflict",
+          storageRevision: current.storageRevision,
+          project: structuredClone(current.project),
+        }
+      : {
+          status: "conflict",
+          storageRevision: 0,
+          project: structuredClone(project),
+        };
+  } catch (error) {
+    if (error instanceof ProjectV2SnapshotStorageUnavailableError) throw error;
+    throw new ProjectV2SnapshotStorageUnavailableError();
+  }
+}
+
+async function deletePostgres(
+  identity: string,
+  projectId: string,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<void> {
+  try {
+    const client = await projectV2SqlClient(sqlOverride);
+    await ensureProjectV2SqlSchema(client, sqlOverride);
+    await client.query(
+      `DELETE FROM drops_project_v2_snapshots
+       WHERE actor_id = $1 AND project_id = $2`,
+      [identity, projectId],
+    );
+  } catch {
+    throw new ProjectV2SnapshotStorageUnavailableError();
+  }
+}
+
+async function migrateBlobSnapshotToPostgres(
+  identity: string,
+  projectId: string,
+  storage: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<ProjectV2SnapshotEnvelope | null> {
+  const legacy = await readBlob(identity, projectId, storage);
+  if (!legacy.envelope) return null;
+  const inserted = await insertPostgresEnvelope(
+    identity,
+    projectId,
+    legacy.envelope,
+    sqlOverride,
+  );
+  return inserted
+    ? legacy.envelope
+    : readPostgres(identity, projectId, sqlOverride);
+}
+
 export async function readProjectV2Snapshot(
   identity: string,
   projectId: string,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<{ storageRevision: number; project: ProjectV2 } | null> {
   validIdentity(identity);
   validProjectId(projectId);
@@ -140,6 +354,33 @@ export async function readProjectV2Snapshot(
     return value
       ? { storageRevision: value.storageRevision, project: structuredClone(value.project) }
       : null;
+  }
+  if (
+    sqlOverride
+    || (!storageOverride && durableProjectDataPostgresConfigured())
+  ) {
+    const current = await readPostgres(identity, projectId, sqlOverride);
+    if (current) {
+      return {
+        storageRevision: current.storageRevision,
+        project: structuredClone(current.project),
+      };
+    }
+    if (!storageOverride && durableBlobConfigured()) {
+      const migrated = await migrateBlobSnapshotToPostgres(
+        identity,
+        projectId,
+        await blobClient(),
+        sqlOverride,
+      );
+      return migrated
+        ? {
+            storageRevision: migrated.storageRevision,
+            project: structuredClone(migrated.project),
+          }
+        : null;
+    }
+    return null;
   }
   if (!storageOverride && !durableBlobConfigured()) {
     throw new ProjectV2SnapshotStorageUnavailableError();
@@ -158,6 +399,7 @@ export async function writeProjectV2Snapshot(
   value: unknown,
   expectedStorageRevision: number,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<ProjectV2SnapshotWriteResult> {
   validIdentity(identity);
   if (!Number.isSafeInteger(expectedStorageRevision) || expectedStorageRevision < 0) {
@@ -192,6 +434,27 @@ export async function writeProjectV2Snapshot(
       storageRevision: envelope.storageRevision,
       project: structuredClone(project),
     };
+  }
+  if (
+    sqlOverride
+    || (!storageOverride && durableProjectDataPostgresConfigured())
+  ) {
+    if (expectedStorageRevision > 0 && !await readPostgres(identity, project.id, sqlOverride)) {
+      if (!storageOverride && durableBlobConfigured()) {
+        await migrateBlobSnapshotToPostgres(
+          identity,
+          project.id,
+          await blobClient(),
+          sqlOverride,
+        );
+      }
+    }
+    return writePostgres(
+      identity,
+      project,
+      expectedStorageRevision,
+      sqlOverride,
+    );
   }
   if (!storageOverride && !durableBlobConfigured()) {
     throw new ProjectV2SnapshotStorageUnavailableError();
@@ -238,11 +501,22 @@ export async function deleteProjectV2Snapshot(
   identity: string,
   projectId: string,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<void> {
   validIdentity(identity);
   validProjectId(projectId);
   if (!storageOverride && localStoreEnabled()) {
     localStore().delete(storageKey(identity, projectId));
+    return;
+  }
+  if (
+    sqlOverride
+    || (!storageOverride && durableProjectDataPostgresConfigured())
+  ) {
+    await deletePostgres(identity, projectId, sqlOverride);
+    if (!storageOverride && durableBlobConfigured()) {
+      await (await blobClient()).del(blobPath(identity, projectId));
+    }
     return;
   }
   if (!storageOverride && !durableBlobConfigured()) {

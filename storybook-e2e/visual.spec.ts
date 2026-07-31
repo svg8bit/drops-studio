@@ -92,6 +92,15 @@ test.describe("approved Storybook visual states", () => {
       await settleStory(page)
 
       expect(errors, errors.join("\n")).toEqual([])
+      if (story === "crypto-game-desktop") {
+        // The same DropsTab SVG is covered by the other approved stories.
+        // Hide this downscaled copy to prevent cross-run Skia antialias noise
+        // (single-channel changes in a handful of edge pixels) from making the
+        // otherwise static game reference flaky.
+        await page.locator(".preview-brand-mark img").evaluate((image) => {
+          image.style.visibility = "hidden"
+        })
+      }
       requireApprovedSnapshot(testInfo, `${story}.png`)
       await expect(page).toHaveScreenshot(`${story}.png`, {
         fullPage: false,
