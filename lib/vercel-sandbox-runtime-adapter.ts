@@ -455,7 +455,11 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
     try {
       const sandbox = await (await this.#provider()).get({
         name,
-        resume: true,
+        // Status, logs and stop use resume() as a passive lookup. Merely
+        // inspecting a project must never restart a stopped paid runtime.
+        // Executing actions use ensure(), whose getOrCreate call opts into
+        // provider resume explicitly.
+        resume: false,
         ...this.#credentialsInput(),
       });
       this.#sandboxes.set(name, sandbox);
@@ -468,18 +472,29 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
 
   async status(handle: RuntimeHandle): Promise<RuntimeState> {
     const sandbox = await this.#sandbox(handle);
-    const preview = this.#previews.get(sandbox.name) ?? this.#previewFromTags(sandbox);
+    const status = normalizeStatus(sandbox.status);
+    const preview = status === "running"
+      ? await this.#livePreview(sandbox)
+      : null;
     return {
       provider: this.provider,
-      status: normalizeStatus(sandbox.status),
+      status,
       sandboxName: sandbox.name,
       sessionId: sandbox.currentSession().sessionId,
       vcpus: sandbox.vcpus ?? null,
       memoryMb: sandbox.memory ?? (sandbox.vcpus ? sandbox.vcpus * 2048 : null),
-      createdAt: sandbox.createdAt.toISOString(),
+      // The current workspace treats createdAt as the start of a live timer.
+      // Do not expose a live-timer anchor once execution is terminal.
+      createdAt:
+        status === "stopped" || status === "failed"
+          ? null
+          : sandbox.createdAt.toISOString(),
       updatedAt: sandbox.updatedAt.toISOString(),
       expiresAt: sandbox.expiresAt?.toISOString() ?? null,
-      activeDurationMs: Math.max(0, Date.now() - sandbox.createdAt.getTime()),
+      activeDurationMs:
+        status === "creating" || status === "running" || status === "stopping"
+          ? Math.max(0, Date.now() - sandbox.createdAt.getTime())
+          : null,
       previewUrl: preview?.url ?? null,
       previewCommandId: preview?.commandId ?? null,
     };
@@ -633,7 +648,7 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
       Math.max(input.timeoutMs ?? 30_000, 1_000),
       MAX_PREVIEW_START_TIMEOUT_MS,
     );
-    const existing = this.#previews.get(sandbox.name);
+    const existing = this.#previews.get(sandbox.name) ?? this.#previewFromTags(sandbox);
     if (existing) {
       await this.stopProcess(handle, existing.commandId).catch(() => undefined);
     }
@@ -902,6 +917,7 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
 
   async stop(handle: RuntimeHandle): Promise<void> {
     const sandbox = await this.#sandbox(handle);
+    await this.#clearPreviewMetadata(sandbox).catch(() => undefined);
     await sandbox.stop();
     this.#previews.delete(sandbox.name);
     this.#sandboxes.delete(sandbox.name);
@@ -909,6 +925,7 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
 
   async destroy(handle: RuntimeHandle): Promise<void> {
     const sandbox = await this.#sandbox(handle);
+    await this.#clearPreviewMetadata(sandbox).catch(() => undefined);
     await sandbox.delete();
     this.#previews.delete(sandbox.name);
     this.#sandboxes.delete(sandbox.name);
@@ -1143,6 +1160,43 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
       return { commandId, port: rawPort, url: url.toString() };
     } catch {
       return null;
+    }
+  }
+
+  async #livePreview(sandbox: VercelSandboxClient): Promise<PreviewRecord | null> {
+    const preview = this.#previews.get(sandbox.name) ?? this.#previewFromTags(sandbox);
+    if (!preview) return null;
+    try {
+      const command = await withDeadline(2_000, (signal) =>
+        sandbox.getCommand(preview.commandId, { signal })
+      );
+      if (command.exitCode === null) return preview;
+    } catch (error) {
+      if (!isMissingProviderError(error)) {
+        throw new ProjectRuntimeProviderError(
+          secretFreeRuntimeMessage(
+            error,
+            "Sandbox preview status is temporarily unavailable.",
+          ),
+        );
+      }
+    }
+    await this.#clearPreviewMetadata(sandbox).catch(() => undefined);
+    return null;
+  }
+
+  async #clearPreviewMetadata(sandbox: VercelSandboxClient): Promise<void> {
+    this.#previews.delete(sandbox.name);
+    const tags = Object.fromEntries(
+      Object.entries(sandbox.tags ?? {}).filter(
+        ([key]) => key !== "previewCommand" && key !== "previewPort",
+      ),
+    );
+    if (
+      sandbox.tags?.previewCommand !== undefined
+      || sandbox.tags?.previewPort !== undefined
+    ) {
+      await sandbox.update({ tags });
     }
   }
 

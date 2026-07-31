@@ -50,6 +50,8 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
+const BUILDER_EXECUTION_TIMEOUT_MS = 270_000;
+const BUILDER_TIMEOUT_CLEANUP_MS = 5_000;
 
 const requestSchema = z.object({
   projectId: z.string().regex(/^[a-z0-9][a-z0-9:._-]{0,127}$/i),
@@ -95,6 +97,91 @@ export interface BuilderAgentRouteDependencies {
   resolveApprovedTools?: (
     request: NextRequest,
   ) => Promise<ReadonlyArray<"delete_file" | "rename_file" | "restore_checkpoint" | "publish_project">>;
+  executionTimeoutMs?: number;
+}
+
+async function boundedCleanup(operation: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, BUILDER_TIMEOUT_CLEANUP_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function withBuilderExecutionDeadline<T>(input: {
+  timeoutMs: number;
+  controller: AbortController;
+  operation: () => Promise<T>;
+  cleanup: () => Promise<void>;
+}): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    return await Promise.race([
+      input.operation(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          input.controller.abort();
+          reject(new Error("builder-execution-timeout"));
+        }, input.timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (!timedOut) throw error;
+    await boundedCleanup(input.cleanup);
+    throw new BuilderRouteError(
+      504,
+      "BUILDER_EXECUTION_TIMEOUT",
+      "Builder verification exceeded its bounded server window. The Sandbox was stopped; run Build & verify to restart it.",
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function stopTimedOutSession(input: {
+  actorId: string;
+  repository: BuilderProjectRepository;
+  runtime: ProjectRuntimeAdapter;
+  session: BuilderAgentSession;
+}): Promise<void> {
+  const handle = await input.runtime.resume(input.session.runtimeContext).catch(() => null);
+  if (handle) await input.runtime.stop(handle).catch(() => undefined);
+  const project = input.session.project;
+  const now = new Date().toISOString();
+  const next = {
+    ...project,
+    ...(project.preview
+      ? {
+          preview: {
+            status: "failed" as const,
+            projectRevision: project.revision,
+            ...(project.preview.sandboxId ? { sandboxId: project.preview.sandboxId } : {}),
+            ...(project.preview.startedAt ? { startedAt: project.preview.startedAt } : {}),
+            stoppedAt: now,
+            error: "Builder execution exceeded its bounded server window.",
+          },
+        }
+      : {}),
+    runs: project.runs.map((run) =>
+      run.status === "running"
+        ? { ...run, status: "stopped" as const, finishedAt: now, exitCode: null }
+        : run
+    ),
+    updatedAt: now,
+  };
+  await input.repository.saveAuthorized(
+    input.actorId,
+    next,
+    project.revision,
+  ).catch(() => undefined);
 }
 
 export async function handleBuilderAgentRequest(
@@ -137,6 +224,7 @@ export async function handleBuilderAgentRequest(
     const audit = dependencies.audit ?? new ServerBuilderAuditSink();
     const sandboxRuntime =
       dependencies.runtime ?? new VercelSandboxRuntimeAdapter({ audit });
+    const executionController = new AbortController();
     const session = new BuilderAgentSession({
       actorId,
       requestId: randomUUID(),
@@ -145,6 +233,7 @@ export async function handleBuilderAgentRequest(
       runtime: sandboxRuntime,
       permissions: ALL_AGENT_PERMISSIONS,
       audit,
+      signal: executionController.signal,
       browser: dependencies.browser ?? new VercelAgentBrowserChecker(),
       connections: dependencies.connections,
       publisher: dependencies.publisher,
@@ -175,31 +264,48 @@ export async function handleBuilderAgentRequest(
       modelResolver: dependencies.modelResolver,
       runnerFactory: dependencies.runnerFactory,
     };
-    const flags = resolveAgentIntelligenceFlags();
-    // Initial builds are owned by the deterministic server release pipeline.
-    // Letting the composite model choose lifecycle tools allowed checks to run
-    // before dependency installation and left projects permanently pending.
-    const useCompositeIntelligence =
-      flags.compositeModelRouting && parsed.data.mode !== "build";
-    const intelligence = useCompositeIntelligence
-      ? await (dependencies.intelligenceRunner ?? runIntelligentBuilderAgent)({
-          request: agentRequest,
-          dependencies: agentDependencies,
-          actor: {
-            actorId,
-            tenantId: actorId,
-            workspaceId: actorId,
-            branch: `project:${project.id}`,
-          },
-          project,
-          flags,
-          evalStore: dependencies.evalStore ?? new DefaultAgentEvalStore(),
-        })
-      : null;
-    const result = intelligence?.result ?? await runBuilderAgent(
-      agentRequest,
-      agentDependencies,
-    );
+    const execution = await withBuilderExecutionDeadline({
+      timeoutMs: Math.min(
+        Math.max(dependencies.executionTimeoutMs ?? BUILDER_EXECUTION_TIMEOUT_MS, 25),
+        BUILDER_EXECUTION_TIMEOUT_MS,
+      ),
+      controller: executionController,
+      operation: async () => {
+        const flags = resolveAgentIntelligenceFlags();
+        // Initial builds are owned by the deterministic server release pipeline.
+        // Letting the composite model choose lifecycle tools allowed checks to run
+        // before dependency installation and left projects permanently pending.
+        const useCompositeIntelligence =
+          flags.compositeModelRouting && parsed.data.mode !== "build";
+        const intelligence = useCompositeIntelligence
+          ? await (dependencies.intelligenceRunner ?? runIntelligentBuilderAgent)({
+              request: agentRequest,
+              dependencies: agentDependencies,
+              actor: {
+                actorId,
+                tenantId: actorId,
+                workspaceId: actorId,
+                branch: `project:${project.id}`,
+              },
+              project,
+              flags,
+              evalStore: dependencies.evalStore ?? new DefaultAgentEvalStore(),
+            })
+          : null;
+        const result = intelligence?.result ?? await runBuilderAgent(
+          agentRequest,
+          agentDependencies,
+        );
+        return { intelligence, result };
+      },
+      cleanup: () => stopTimedOutSession({
+        actorId,
+        repository,
+        runtime: sandboxRuntime,
+        session,
+      }),
+    });
+    const { intelligence, result } = execution;
     if (result.releaseGate.ok) {
       const checkpoint = result.project.checkpoints.at(-1);
       if (

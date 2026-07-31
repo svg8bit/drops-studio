@@ -77,6 +77,7 @@ export function TelegramChannelWizard({
   const [delivery, setDelivery] = useState<"telegram" | "sms">("telegram");
   const [account, setAccount] = useState<TelegramAccount | null>(null);
   const [accountToken, setAccountToken] = useState("");
+  const [accountRemembered, setAccountRemembered] = useState(false);
   const [title, setTitle] = useState(defaultTitle);
   const [about, setAbout] = useState(defaultAbout);
   const [username, setUsername] = useState("");
@@ -90,26 +91,57 @@ export function TelegramChannelWizard({
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
     const saved = window.sessionStorage.getItem(ACCOUNT_STORAGE_KEY) || "";
-    void fetch("/api/telegram/account/status", {
-      method: "POST",
-      headers: sessionHeaders(),
-      body: JSON.stringify({ accountToken: saved }),
-    })
-      .then((response) => response.json())
-      .then((payload: { connected?: boolean; account?: TelegramAccount }) => {
-        if (!payload.connected || !payload.account) throw new Error("Expired");
+    void (async () => {
+      try {
+        const response = await fetch("/api/telegram/account/status", {
+          method: "POST",
+          headers: sessionHeaders(),
+          body: JSON.stringify({ accountToken: saved }),
+        });
+        const payload = await response.json() as {
+          connected?: boolean;
+          remembered?: boolean;
+          account?: TelegramAccount;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(requestError(payload, "Telegram connection status is temporarily unavailable."));
+        }
+        if (cancelled) return;
+        if (!payload.connected || !payload.account) {
+          window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
+          setAccountToken("");
+          setAccountRemembered(false);
+          window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
+            detail: { provider: "telegram", connected: false },
+          }));
+          setCheckingExisting(false);
+          setPhase("phone");
+          return;
+        }
         setAccount(payload.account);
         setAccountToken(saved);
+        setAccountRemembered(payload.remembered === true);
+        window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
+          detail: { provider: "telegram", connected: true },
+        }));
         setCheckingExisting(false);
         setPhase("connected");
-      })
-      .catch(() => {
-        window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
-        setAccountToken("");
+      } catch (caught) {
+        if (cancelled) return;
+        // Preserve the session on transient verification errors. A later open
+        // retries both the browser session and the encrypted account copy.
+        setAccountToken(saved);
+        setError(caught instanceof Error ? caught.message : "Telegram connection status is temporarily unavailable.");
         setCheckingExisting(false);
         setPhase("phone");
-      });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function sendCode() {
@@ -141,7 +173,14 @@ export function TelegramChannelWizard({
         headers: sessionHeaders(),
         body: JSON.stringify({ flowToken, phoneCode, ...(includePassword ? { password } : {}) }),
       });
-      const payload = await response.json() as { requiresPassword?: boolean; flowToken?: string; account?: TelegramAccount; accountToken?: string; error?: string };
+      const payload = await response.json() as {
+        requiresPassword?: boolean;
+        flowToken?: string;
+        account?: TelegramAccount;
+        accountToken?: string;
+        accountPersistence?: { available?: boolean; remembered?: boolean };
+        error?: string;
+      };
       if (!response.ok) throw new Error(requestError(payload, "Telegram sign-in failed."));
       if (payload.requiresPassword && payload.flowToken) {
         setFlowToken(payload.flowToken);
@@ -152,6 +191,10 @@ export function TelegramChannelWizard({
       window.sessionStorage.setItem(ACCOUNT_STORAGE_KEY, payload.accountToken);
       setAccount(payload.account);
       setAccountToken(payload.accountToken);
+      setAccountRemembered(payload.accountPersistence?.remembered === true);
+      window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
+        detail: { provider: "telegram", connected: true },
+      }));
       setPassword("");
       setPhase("connected");
     } catch (caught) {
@@ -201,6 +244,10 @@ export function TelegramChannelWizard({
     window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
     setAccount(null);
     setAccountToken("");
+    setAccountRemembered(false);
+    window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
+      detail: { provider: "telegram", connected: false },
+    }));
     setResult(null);
     setFlowToken("");
     setPhoneCode("");
@@ -262,7 +309,7 @@ export function TelegramChannelWizard({
 
       {(["connected", "creating"].includes(phase)) && account && (
         <div className="telegram-channel-builder">
-          <div className="telegram-account-row"><span><UserRoundCheck /></span><div><strong>{account.displayName}</strong><small>{account.username || "Telegram account connected"}</small></div><b>CONNECTED</b><button type="button" onClick={disconnect}>Change</button></div>
+          <div className="telegram-account-row"><span><UserRoundCheck /></span><div><strong>{account.displayName}</strong><small>{accountRemembered ? "Encrypted in your Studio account" : account.username || "Connected for this browser tab"}</small></div><b>CONNECTED</b><button type="button" onClick={disconnect}>Change</button></div>
           <div className="telegram-form-grid">
             <label><span>Channel name</span><input value={title} maxLength={64} onChange={(event) => setTitle(event.target.value)} /></label>
             <label><span>Public username <i>optional</i></span><div className="telegram-username"><b>@</b><input value={username} maxLength={32} onChange={(event) => setUsername(event.target.value.replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, ""))} placeholder="my_alpha_channel" /></div></label>

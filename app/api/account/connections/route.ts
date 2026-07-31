@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server.js";
+import { createHash } from "node:crypto";
 
 import {
   deleteStudioConnection,
@@ -11,6 +12,11 @@ import {
 } from "@/lib/access-tier";
 import { consumeRequestLimit, requestIdentity } from "@/lib/request-rate-limit";
 import {
+  durableProjectDataPostgresConfigured,
+  neonProjectDataSqlClient,
+  type ProjectDataSqlClient,
+} from "@/lib/project-data/durable-backend";
+import {
   connectionVaultConfigured,
   isStudioConnectionProvider,
   publicConnectionStatuses,
@@ -20,6 +26,20 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 40 * 1_024;
+const CONNECTION_WRITE_LIMIT = 20;
+const CONNECTION_WRITE_WINDOW_MS = 10 * 60 * 1_000;
+const CONNECTION_RATE_LIMIT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS drops_studio_account_connection_limits (
+    bucket_key TEXT PRIMARY KEY,
+    request_count INTEGER NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT drops_studio_account_connection_limit_count
+      CHECK (request_count > 0)
+  )
+`;
+
+let connectionRateSqlClientPromise: Promise<ProjectDataSqlClient> | null = null;
+let connectionRateSchemaPromise: Promise<void> | null = null;
 
 function response(payload: unknown, status = 200) {
   return NextResponse.json(payload, { status, headers: { "cache-control": "no-store" } });
@@ -63,17 +83,73 @@ function account(request: NextRequest) {
   return resolveStudioAccount(request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value);
 }
 
+async function consumePostgresConnectionWriteLimit(
+  accountIdentity: string,
+): Promise<"allowed" | "limited" | "unavailable"> {
+  if (!durableProjectDataPostgresConfigured()) return "unavailable";
+  try {
+    connectionRateSqlClientPromise ??= neonProjectDataSqlClient();
+    const client = await connectionRateSqlClientPromise;
+    connectionRateSchemaPromise ??= client
+      .query(CONNECTION_RATE_LIMIT_SCHEMA)
+      .then(() => undefined);
+    try {
+      await connectionRateSchemaPromise;
+    } catch {
+      connectionRateSchemaPromise = null;
+      throw new Error("Connection limiter schema unavailable.");
+    }
+    const windowId = Math.floor(Date.now() / CONNECTION_WRITE_WINDOW_MS);
+    const bucketKey = createHash("sha256")
+      .update(`account-connection-write:${accountIdentity}:${windowId}`, "utf8")
+      .digest("hex");
+    const windowEndsAt = (windowId + 1) * CONNECTION_WRITE_WINDOW_MS;
+    const result = await client.query(
+      `WITH pruned AS (
+         DELETE FROM drops_studio_account_connection_limits
+         WHERE expires_at < NOW() - INTERVAL '1 hour'
+       ), counted AS (
+         INSERT INTO drops_studio_account_connection_limits
+           (bucket_key, request_count, expires_at)
+         VALUES ($1, 1, to_timestamp($2 / 1000.0))
+         ON CONFLICT (bucket_key) DO UPDATE SET
+           request_count = drops_studio_account_connection_limits.request_count + 1,
+           expires_at = EXCLUDED.expires_at
+         RETURNING request_count
+       )
+       SELECT request_count FROM counted`,
+      [bucketKey, windowEndsAt],
+    );
+    const row = result.rows[0] as { request_count?: unknown } | undefined;
+    const count = Number(row?.request_count);
+    if (!Number.isSafeInteger(count) || count < 1) return "unavailable";
+    return count > CONNECTION_WRITE_LIMIT ? "limited" : "allowed";
+  } catch {
+    return "unavailable";
+  }
+}
+
+async function consumeConnectionWriteLimit(
+  request: NextRequest,
+  accountIdentity: string,
+): Promise<"allowed" | "limited" | "unavailable"> {
+  const primary = await consumeRequestLimit({
+    identity: requestIdentity(request),
+    namespace: "account-connection-write",
+    max: CONNECTION_WRITE_LIMIT,
+    windowMs: CONNECTION_WRITE_WINDOW_MS,
+  }).catch(() => "unavailable" as const);
+  return primary === "unavailable"
+    ? consumePostgresConnectionWriteLimit(accountIdentity)
+    : primary;
+}
+
 export async function PUT(request: NextRequest) {
   const actor = account(request);
   if (!actor) return response({ error: "Sign in to remember this connection." }, 401);
   if (!sameOrigin(request)) return response({ error: "Cross-origin connection storage rejected." }, 403);
   if (!connectionVaultConfigured()) return response({ error: "Encrypted connection vault is not configured." }, 503);
-  const limit = await consumeRequestLimit({
-    identity: requestIdentity(request),
-    namespace: "account-connection-write",
-    max: 20,
-    windowMs: 10 * 60 * 1_000,
-  }).catch(() => "unavailable" as const);
+  const limit = await consumeConnectionWriteLimit(request, actor.identity);
   if (limit === "limited") return response({ error: "Too many connection changes. Try again later." }, 429);
   if (limit === "unavailable" && process.env.NODE_ENV === "production") {
     return response({ error: "Connection write protection is temporarily unavailable." }, 503);

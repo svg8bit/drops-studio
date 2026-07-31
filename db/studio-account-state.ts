@@ -9,8 +9,30 @@ import {
   encryptStudioConnection,
   isStudioConnectionProvider,
 } from "../lib/studio-account-state.ts";
+import {
+  durableProjectDataPostgresConfigured,
+  neonProjectDataSqlClient,
+  type ProjectDataSqlClient,
+} from "../lib/project-data/durable-backend.ts";
 
 type BlobStorage = Pick<typeof import("@vercel/blob"), "get" | "put">;
+
+const ACCOUNT_STATE_POSTGRES_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS drops_studio_account_states (
+    account_identity TEXT PRIMARY KEY,
+    state_revision BIGINT NOT NULL,
+    state_json TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT drops_studio_account_identity_shape
+      CHECK (account_identity ~ '^[a-f0-9]{64}$'),
+    CONSTRAINT drops_studio_account_state_size
+      CHECK (octet_length(state_json) <= 98304)
+  )
+`;
+const ACCOUNT_STATE_LIMIT_BYTES = 96 * 1_024;
+
+let accountStateSqlClientPromise: Promise<ProjectDataSqlClient> | null = null;
+let accountStateSqlSchemaPromise: Promise<void> | null = null;
 
 interface StoredState {
   state: StudioAccountState;
@@ -39,12 +61,19 @@ function localStoreEnabled(): boolean {
 function durableBlobConfigured(): boolean {
   return Boolean(
     process.env.BLOB_READ_WRITE_TOKEN
-      || (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN),
+      || (
+        process.env.BLOB_STORE_ID
+        && (process.env.VERCEL_OIDC_TOKEN || process.env.VERCEL)
+      ),
   );
 }
 
 export function studioAccountStateConfigured(): boolean {
-  return localStoreEnabled() || durableBlobConfigured();
+  return (
+    localStoreEnabled()
+    || durableProjectDataPostgresConfigured()
+    || durableBlobConfigured()
+  );
 }
 
 function emptyState(): StudioAccountState {
@@ -168,6 +197,110 @@ async function blobClient(override?: BlobStorage): Promise<BlobStorage> {
   return override ?? import("@vercel/blob");
 }
 
+async function postgresClient(
+  override?: ProjectDataSqlClient,
+): Promise<ProjectDataSqlClient> {
+  if (override) return override;
+  accountStateSqlClientPromise ??= neonProjectDataSqlClient().catch((error) => {
+    accountStateSqlClientPromise = null;
+    throw error;
+  });
+  return accountStateSqlClientPromise;
+}
+
+async function ensurePostgresSchema(
+  client: ProjectDataSqlClient,
+  override?: ProjectDataSqlClient,
+): Promise<void> {
+  if (override) {
+    await client.query(ACCOUNT_STATE_POSTGRES_SCHEMA);
+    return;
+  }
+  accountStateSqlSchemaPromise ??= client
+    .query(ACCOUNT_STATE_POSTGRES_SCHEMA)
+    .then(() => undefined);
+  try {
+    await accountStateSqlSchemaPromise;
+  } catch {
+    accountStateSqlSchemaPromise = null;
+    throw new StudioAccountStateUnavailableError();
+  }
+}
+
+function serializedState(state: StudioAccountState): string {
+  const serialized = JSON.stringify(state);
+  if (new TextEncoder().encode(serialized).byteLength > ACCOUNT_STATE_LIMIT_BYTES) {
+    throw new StudioAccountStateUnavailableError(
+      "Studio account state exceeded its bounded size.",
+    );
+  }
+  return serialized;
+}
+
+async function readPostgres(
+  identity: string,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<StudioAccountState | null> {
+  try {
+    const client = await postgresClient(sqlOverride);
+    await ensurePostgresSchema(client, sqlOverride);
+    const result = await client.query(
+      `SELECT state_revision, state_json
+       FROM drops_studio_account_states
+       WHERE account_identity = $1`,
+      [identity],
+    );
+    if (!result.rows.length) return null;
+    const row = result.rows[0] as Record<string, unknown>;
+    const value = typeof row.state_json === "string"
+      ? JSON.parse(row.state_json) as unknown
+      : row.state_json;
+    const state = parseState(value);
+    if (state.revision !== Number(row.state_revision)) {
+      throw new StudioAccountStateUnavailableError(
+        "Studio account database state failed its integrity check.",
+      );
+    }
+    return state;
+  } catch (error) {
+    if (error instanceof StudioAccountStateUnavailableError) throw error;
+    throw new StudioAccountStateUnavailableError();
+  }
+}
+
+async function writePostgres(
+  identity: string,
+  expectedRevision: number,
+  state: StudioAccountState,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<boolean> {
+  const serialized = serializedState(state);
+  try {
+    const client = await postgresClient(sqlOverride);
+    await ensurePostgresSchema(client, sqlOverride);
+    const result = expectedRevision === 0
+      ? await client.query(
+        `INSERT INTO drops_studio_account_states
+         (account_identity, state_revision, state_json, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (account_identity) DO NOTHING
+         RETURNING state_revision`,
+        [identity, state.revision, serialized],
+      )
+      : await client.query(
+        `UPDATE drops_studio_account_states
+         SET state_revision = $2, state_json = $3, updated_at = NOW()
+         WHERE account_identity = $1 AND state_revision = $4
+         RETURNING state_revision`,
+        [identity, state.revision, serialized, expectedRevision],
+      );
+    return result.rowCount === 1;
+  } catch (error) {
+    if (error instanceof StudioAccountStateUnavailableError) throw error;
+    throw new StudioAccountStateUnavailableError();
+  }
+}
+
 async function readStored(identity: string, storage: BlobStorage): Promise<StoredState> {
   const current = await storage.get(blobPath(identity), {
     access: "private",
@@ -194,10 +327,7 @@ async function writeStored(
   state: StudioAccountState,
   storage: BlobStorage,
 ): Promise<boolean> {
-  const serialized = JSON.stringify(state);
-  if (new TextEncoder().encode(serialized).byteLength > 96 * 1_024) {
-    throw new StudioAccountStateUnavailableError("Studio account state exceeded its bounded size.");
-  }
+  const serialized = serializedState(state);
   try {
     await storage.put(blobPath(identity), serialized, {
       access: "private",
@@ -213,18 +343,71 @@ async function writeStored(
   }
 }
 
+async function migrateBlobStateToPostgres(
+  identity: string,
+  storage: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<StudioAccountState | null> {
+  // A failed legacy read cannot be treated as an empty account. Doing so would
+  // create a new Postgres row and permanently block migration of the existing
+  // encrypted provider envelope after Blob recovers.
+  const legacy = await readStored(identity, storage);
+  if (legacy.state.revision === 0) return null;
+  if (await writePostgres(identity, 0, legacy.state, sqlOverride)) {
+    return legacy.state;
+  }
+  return readPostgres(identity, sqlOverride);
+}
+
+async function readPostgresWithBlobMigration(
+  identity: string,
+  storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
+): Promise<StudioAccountState> {
+  const current = await readPostgres(identity, sqlOverride);
+  if (current) return current;
+  const legacyStorage = storageOverride
+    ? storageOverride
+    : durableBlobConfigured()
+      ? await blobClient()
+      : null;
+  if (!legacyStorage) return emptyState();
+  return (await migrateBlobStateToPostgres(identity, legacyStorage, sqlOverride))
+    ?? emptyState();
+}
+
 async function mutateState(
   identity: string,
   mutate: (state: StudioAccountState, now: string) => StudioAccountState,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<StudioAccountState> {
   validIdentity(identity);
-  if (!storageOverride && localStoreEnabled()) {
+  if (!storageOverride && !sqlOverride && localStoreEnabled()) {
     const now = new Date().toISOString();
     const current = structuredClone(localStore().get(identity) ?? emptyState());
     const next = mutate(current, now);
     localStore().set(identity, structuredClone(next));
     return structuredClone(next);
+  }
+  if (
+    sqlOverride
+    || (!storageOverride && durableProjectDataPostgresConfigured())
+  ) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const current = await readPostgresWithBlobMigration(
+        identity,
+        storageOverride,
+        sqlOverride,
+      );
+      const next = mutate(current, new Date().toISOString());
+      if (await writePostgres(identity, current.revision, next, sqlOverride)) {
+        return structuredClone(next);
+      }
+    }
+    throw new StudioAccountStateUnavailableError(
+      "Studio account database stayed busy after safe retries.",
+    );
   }
   if (!storageOverride && !durableBlobConfigured()) throw new StudioAccountStateUnavailableError();
   const storage = await blobClient(storageOverride);
@@ -239,10 +422,21 @@ async function mutateState(
 export async function readStudioAccountState(
   identity: string,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<StudioAccountState> {
   validIdentity(identity);
-  if (!storageOverride && localStoreEnabled()) {
+  if (!storageOverride && !sqlOverride && localStoreEnabled()) {
     return structuredClone(localStore().get(identity) ?? emptyState());
+  }
+  if (
+    sqlOverride
+    || (!storageOverride && durableProjectDataPostgresConfigured())
+  ) {
+    return structuredClone(await readPostgresWithBlobMigration(
+      identity,
+      storageOverride,
+      sqlOverride,
+    ));
   }
   if (!storageOverride && !durableBlobConfigured()) throw new StudioAccountStateUnavailableError();
   return structuredClone((await readStored(identity, await blobClient(storageOverride))).state);
@@ -252,6 +446,7 @@ export async function saveStudioAccountProfile(
   identity: string,
   profile: Omit<StudioAccountProfile, "updatedAt">,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<StudioAccountState> {
   const checked = parseProfile({ ...profile, updatedAt: new Date().toISOString() });
   if (!checked) throw new Error("Studio account profile is invalid.");
@@ -260,7 +455,7 @@ export async function saveStudioAccountProfile(
     revision: state.revision + 1,
     updatedAt: now,
     profile: { ...checked, updatedAt: now },
-  }), storageOverride);
+  }), storageOverride, sqlOverride);
 }
 
 export async function saveStudioConnection(
@@ -273,6 +468,7 @@ export async function saveStudioConnection(
     label?: string;
   },
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<StudioAccountState> {
   const endpoint = input.endpoint ? safeUrl(input.endpoint) : undefined;
   if (input.endpoint && !endpoint) {
@@ -299,13 +495,14 @@ export async function saveStudioConnection(
         now,
       }),
     },
-  }), storageOverride);
+  }), storageOverride, sqlOverride);
 }
 
 export async function deleteStudioConnection(
   identity: string,
   provider: StudioConnectionProvider,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<StudioAccountState> {
   return mutateState(identity, (state, now) => {
     const connections = { ...state.connections };
@@ -316,13 +513,14 @@ export async function deleteStudioConnection(
       updatedAt: now,
       connections,
     };
-  }, storageOverride);
+  }, storageOverride, sqlOverride);
 }
 
 export async function readStudioConnectionSecret(
   identity: string,
   provider: StudioConnectionProvider,
   storageOverride?: BlobStorage,
+  sqlOverride?: ProjectDataSqlClient,
 ): Promise<{
   credential: string;
   endpoint?: string;
@@ -330,7 +528,7 @@ export async function readStudioConnectionSecret(
   endpointHost?: string;
   label?: string;
 } | null> {
-  const state = await readStudioAccountState(identity, storageOverride);
+  const state = await readStudioAccountState(identity, storageOverride, sqlOverride);
   const connection = state.connections[provider];
   if (!connection) return null;
   const decrypted = decryptStudioConnection({ identity, connection });

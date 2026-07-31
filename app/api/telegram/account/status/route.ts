@@ -31,10 +31,14 @@ export async function POST(request: NextRequest) {
   const token = (typeof body?.accountToken === "string" ? body.accountToken : "")
     || remembered?.credential
     || "";
-  if (!token) return telegramAccountJson({ connected: false });
+  if (!token) return telegramAccountJson({ connected: false, remembered: false });
   try {
-    return telegramAccountJson({ connected: true, account: inspectTelegramAccountToken(token) });
+    return telegramAccountJson({
+      connected: true,
+      remembered: Boolean(remembered),
+      account: inspectTelegramAccountToken(token),
+    });
   } catch {
-    return telegramAccountJson({ connected: false });
+    return telegramAccountJson({ connected: false, remembered: false });
   }
 }

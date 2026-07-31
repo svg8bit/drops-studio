@@ -36,14 +36,29 @@ export async function POST(request: NextRequest) {
     const account = resolveStudioAccount(
       request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
     );
+    let remembered = false;
     if (account && "accountToken" in result && typeof result.accountToken === "string") {
-      await saveStudioConnection(account.identity, {
-        provider: "telegram",
-        credential: result.accountToken,
-        label: "Telegram account session",
-      }).catch(() => undefined);
+      try {
+        await saveStudioConnection(account.identity, {
+          provider: "telegram",
+          credential: result.accountToken,
+          label: "Telegram account session",
+        });
+        remembered = true;
+      } catch (error) {
+        console.warn(
+          "[telegram-account] encrypted account persistence unavailable",
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
     }
-    return telegramAccountJson(result);
+    return telegramAccountJson({
+      ...result,
+      accountPersistence: {
+        available: Boolean(account),
+        remembered,
+      },
+    });
   } catch (error) {
     return telegramAccountJson({ error: error instanceof Error ? error.message : "Telegram sign-in failed." }, 422);
   }

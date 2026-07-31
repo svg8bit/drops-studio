@@ -9,7 +9,9 @@ import {
 import type {
   ProjectRuntimeAdapter,
   RuntimeAuditSink,
+  RuntimeState,
 } from "../../../../lib/project-runtime-adapter.ts";
+import type { ProjectV2 } from "../../../../lib/project-v2-types.ts";
 import { VercelSandboxRuntimeAdapter } from "../../../../lib/vercel-sandbox-runtime-adapter.ts";
 import {
   ServerBuilderAuditSink,
@@ -67,6 +69,84 @@ export interface BuilderRuntimeRouteDependencies {
   repository?: BuilderProjectRepository;
   runtime?: ProjectRuntimeAdapter;
   audit?: BuilderAgentAuditSink & RuntimeAuditSink;
+}
+
+function stoppedProject(
+  project: ProjectV2,
+  state: "failed" | "stopped",
+  error?: string,
+): ProjectV2 | null {
+  const hasRunningRun = project.runs.some((run) => run.status === "running");
+  if (!project.preview && !hasRunningRun) return null;
+  const now = new Date().toISOString();
+  const preview = project.preview;
+  return {
+    ...project,
+    ...(preview
+      ? {
+          preview: {
+            status: state,
+            projectRevision: project.revision,
+            ...(preview.sandboxId ? { sandboxId: preview.sandboxId } : {}),
+            ...(preview.startedAt ? { startedAt: preview.startedAt } : {}),
+            stoppedAt: now,
+            ...(state === "failed" && error ? { error } : {}),
+          },
+        }
+      : {}),
+    runs: project.runs.map((run) =>
+      run.status === "running"
+        ? { ...run, status: "stopped" as const, finishedAt: now, exitCode: null }
+        : run
+    ),
+    updatedAt: now,
+  };
+}
+
+async function persistStoppedProject(
+  repository: BuilderProjectRepository,
+  actorId: string,
+  project: ProjectV2,
+  state: "failed" | "stopped",
+  error?: string,
+): Promise<void> {
+  const next = stoppedProject(project, state, error);
+  if (!next) return;
+  // Runtime status must remain available even if another browser revision won
+  // the optimistic-concurrency race. That next snapshot will be reconciled by
+  // its own passive runtime status refresh.
+  await repository.saveAuthorized(actorId, next, project.revision).catch(() => undefined);
+}
+
+async function reconcileRuntimeState(
+  repository: BuilderProjectRepository,
+  actorId: string,
+  project: ProjectV2,
+  state: RuntimeState,
+): Promise<void> {
+  if (state.status === "failed") {
+    await persistStoppedProject(
+      repository,
+      actorId,
+      project,
+      "failed",
+      "Vercel Sandbox reported a failed runtime.",
+    );
+    return;
+  }
+  if (state.status === "stopped") {
+    await persistStoppedProject(repository, actorId, project, "stopped");
+    return;
+  }
+  if (project.preview?.status === "ready" && !state.previewUrl) {
+    await persistStoppedProject(
+      repository,
+      actorId,
+      project,
+      "failed",
+      "The Sandbox preview process is no longer running.",
+    );
+  }
 }
 
 export async function handleBuilderRuntimeRequest(
@@ -142,6 +222,7 @@ export async function handleBuilderRuntimeRequest(
       : null;
     if (!existingHandle && existingOnly) {
       if (input.action === "status") {
+        await persistStoppedProject(repository, actorId, project, "stopped");
         return builderJson({
           action: input.action,
           result: {
@@ -161,6 +242,7 @@ export async function handleBuilderRuntimeRequest(
         });
       }
       if (input.action === "stop" || input.action === "destroy") {
+        await persistStoppedProject(repository, actorId, project, "stopped");
         return builderJson({
           action: input.action,
           result: input.action === "stop" ? { stopped: true } : { destroyed: true },
@@ -183,6 +265,12 @@ export async function handleBuilderRuntimeRequest(
         break;
       case "status":
         result = await runtimeAdapter.status(handle);
+        await reconcileRuntimeState(
+          repository,
+          actorId,
+          project,
+          result as RuntimeState,
+        );
         break;
       case "install":
         result = await runtimeAdapter.installDependencies(session.runtimeContext, handle);
@@ -221,10 +309,12 @@ export async function handleBuilderRuntimeRequest(
         break;
       case "stop":
         await runtimeAdapter.stop(handle);
+        await persistStoppedProject(repository, actorId, project, "stopped");
         result = { stopped: true };
         break;
       case "destroy":
         await runtimeAdapter.destroy(handle);
+        await persistStoppedProject(repository, actorId, project, "stopped");
         result = { destroyed: true };
         break;
     }

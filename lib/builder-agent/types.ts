@@ -187,6 +187,7 @@ export interface BuilderAgentSessionDependencies {
   runtime: ProjectRuntimeAdapter;
   permissions: ReadonlySet<BuilderPermission>;
   audit: BuilderAgentAuditSink;
+  signal?: AbortSignal;
   browser?: BuilderBrowserChecker;
   connections?: BuilderConnectionRequester;
   publisher?: BuilderProjectPublisher;
