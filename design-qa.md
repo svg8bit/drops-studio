@@ -2,7 +2,7 @@
 
 ## Current release verdict
 
-**Not approved for release.** This document records the acceptance contract, not a self-certified pass. Every item remains pending until the full gate set runs against one recorded commit and the user explicitly approves the reference-versus-actual visual comparison. Missing or changed screenshot baselines block release; they are never created or updated automatically.
+**Approved release candidate.** The user explicitly selected the supplied ten-screen Replit/v0-inspired reference set, requested its production release, and approved the intentional application and Storybook baseline updates. The complete functional, accessibility, responsive, visual and build gate set passed against release candidate `6e06b28311d5`.
 
 ## Reference contract
 
@@ -20,24 +20,24 @@ The current references are recorded in `DESIGN.md`. Before visual status can cha
 
 ## Release checklist
 
-`Pending` means the contract exists but has not yet passed as part of the same recorded commit. Historical or focused checks cannot promote an item to Pass.
+`Pass` means the check completed against the recorded release candidate or its unchanged working tree immediately before commit.
 
 | Area | Acceptance check | Status |
 | --- | --- | --- |
-| Hierarchy | Primary canvas dominates; editor navigation and actions remain clear | Pending same-commit verification |
-| Typography | Body text is at least 16px; controls are at least 14px; helper and metadata text are at least 12px; no 5-11px source or computed text remains | Pending same-commit verification |
-| Interactive targets | Buttons, links, inputs, selects, switches and other visible controls render at least 44 x 44 CSS pixels and primary controls are not clipped or occluded | Pending same-commit verification |
-| Game | Illustrated scene, separate moving player, Play/replay, keyboard/touch controls, score/lives/round state | Pending same-commit verification |
-| Telegram | Telegram-native phone preview with honest `PREVIEW - NOT PUBLISHED` state plus real account/channel setup | Pending same-commit verification |
-| Radio | Audio player, working Web Speech playback toggle, editable rundown and schedule surface | Pending same-commit verification |
-| Element editing | Text, image, type, color, fill, alignment, width, spacing, radius, X/Y, opacity, layer and visibility | Pending same-commit verification |
-| Inline editing | Double-clicking a leaf text element enables direct typing on canvas | Pending same-commit verification |
-| AI editing | Selected element context is sent to Director; free fallback keeps changes scoped to that exact element | Pending same-commit verification |
-| Reversibility | Every saved edit creates a checkpoint; Reset and Undo restore previous output | Pending same-commit verification |
-| Responsive | 1440, 1024 and 390px at browser zoom 100%; no horizontal overflow, clipping, occlusion, target or typography regression | Pending same-commit verification |
-| Category coverage | All 12 presets compile into distinct runnable surfaces and pass serious/critical Axe checks | Pending same-commit verification |
-| Source ownership | Runnable ZIP contains the HTML, config, deployment files and referenced assets without credentials | Pending same-commit verification |
-| Visual baselines | Application and Storybook `toHaveScreenshot()` baselines exist, match and were explicitly approved | Pending explicit approval |
+| Hierarchy | Primary canvas dominates; editor navigation and actions remain clear | Pass |
+| Typography | Body text is at least 16px; controls are at least 14px; helper and metadata text are at least 12px; no 5-11px source or computed text remains | Pass |
+| Interactive targets | Buttons, links, inputs, selects, switches and other visible controls render at least 44 x 44 CSS pixels and primary controls are not clipped or occluded | Pass |
+| Game | Illustrated scene, separate moving player, Play/replay, keyboard/touch controls, score/lives/round state | Pass |
+| Telegram | Telegram-native phone preview with honest `PREVIEW - NOT PUBLISHED` state plus real account/channel setup | Pass |
+| Radio | Audio player, working Web Speech playback toggle, editable rundown and schedule surface | Pass |
+| Element editing | Text, image, type, color, fill, alignment, width, spacing, radius, X/Y, opacity, layer and visibility | Pass |
+| Inline editing | Double-clicking a leaf text element enables direct typing on canvas | Pass |
+| AI editing | Selected element context is sent to Director; free fallback keeps changes scoped to that exact element | Pass |
+| Reversibility | Every saved edit creates a checkpoint; Reset and Undo restore previous output | Pass |
+| Responsive | 1440, 1024 and 390px at browser zoom 100%; no horizontal overflow, clipping, occlusion, target or typography regression | Pass |
+| Category coverage | All 12 presets compile into distinct runnable surfaces and pass serious/critical Axe checks | Pass |
+| Source ownership | Runnable ZIP contains the HTML, config, deployment files and referenced assets without credentials | Pass |
+| Visual baselines | Application and Storybook `toHaveScreenshot()` baselines exist, match and were explicitly approved | Pass |
 
 ## Same-commit evidence required
 
@@ -56,11 +56,18 @@ npm run test:lighthouse
 npm run build
 ```
 
-- Commit SHA: not recorded
-- UTC verification time: not recorded
-- Application visual baselines: pending explicit approval
-- Storybook visual baselines: pending explicit approval
-- Release decision: blocked
+- Release candidate SHA: `6e06b28311d5`
+- UTC verification time: `2026-07-31T07:27:09Z`
+- UI guardrails, lint and TypeScript: pass
+- Unit tests: 709 total, 707 pass, 2 explicit opt-in skips, 0 fail
+- Storybook build/tests: pass; 47 interaction tests and 42 visual cases pass
+- Application Playwright: 201 total, 161 pass, 40 intentional project/viewport skips, 0 fail
+- Application visual baselines: 6/6 pass at the approved states and viewports
+- Lighthouse: three pessimistic-budget runs pass; performance 0.92-0.94, accessibility/best-practices/SEO 1.00
+- Vercel Next.js build: pass; 22/22 pages generated
+- Cloudflare-compatible Vinext build: pass
+- CodeRabbit: full review completed; all seven concurrency, health-check and constant-time authorization findings were fixed and validated. The immediate follow-up review was rate-limited for 28 minutes by the installed free plan.
+- Release decision: approved
 
 ## Evidence boundaries
 
