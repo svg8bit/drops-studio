@@ -7,6 +7,11 @@ import {
   telegramAccountRequestErrorResponse,
 } from "@/lib/telegram-account-request";
 import { consumeRequestLimit, requestIdentity } from "@/lib/request-rate-limit";
+import { readStudioConnectionSecret } from "@/db/studio-account-state";
+import {
+  resolveStudioAccount,
+  STUDIO_ACCOUNT_COOKIE,
+} from "@/lib/access-tier";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,7 +23,15 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     return telegramAccountRequestErrorResponse(error);
   }
-  const accountToken = typeof body?.accountToken === "string" ? body.accountToken : "";
+  const account = resolveStudioAccount(
+    request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+  );
+  const remembered = account
+    ? await readStudioConnectionSecret(account.identity, "telegram").catch(() => null)
+    : null;
+  const accountToken = (typeof body?.accountToken === "string" ? body.accountToken : "")
+    || remembered?.credential
+    || "";
   const requestId = typeof body?.requestId === "string" ? body.requestId : "";
   if (!accountToken) return telegramAccountJson({ error: "Connect your Telegram account first." }, 400);
   if (!/^[a-f0-9-]{16,64}$/i.test(requestId)) return telegramAccountJson({ error: "Start a fresh channel creation request." }, 400);

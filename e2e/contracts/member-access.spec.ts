@@ -34,9 +34,36 @@ test("signed-in member allowance and OpenRouter session state stay coherent in t
       body: JSON.stringify({ disconnected: true }),
     })
   })
+  await page.route("**/api/account", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        signedIn
+          ? {
+              authenticated: true,
+              account: { provider: "openrouter" },
+              profile: {
+                provider: "openrouter",
+                name: "Studio member",
+                email: "member@example.test",
+              },
+              connections: [
+                {
+                  provider: "openrouter",
+                  connected: true,
+                  model: "openrouter/free",
+                },
+              ],
+              vault: { available: true },
+            }
+          : { authenticated: false, profile: null, connections: [] },
+      ),
+    })
+  })
 
   await prepareHomePage(page)
-  await expect(page.getByText("8 signed-in AI builds left today", { exact: true })).toBeVisible()
+  await expect(page.getByText("OpenRouter · your budget", { exact: true })).toBeVisible()
 
   const desktopConnections = page.locator(".api-vault-button")
   if (await desktopConnections.isVisible()) {
@@ -48,10 +75,12 @@ test("signed-in member allowance and OpenRouter session state stay coherent in t
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByText("Connections Hub", { exact: true })).toBeVisible()
   await dialog.getByRole("button", { name: /^OpenRouter/ }).click()
-  await expect(dialog.getByText("Studio member session connected", { exact: true })).toBeVisible()
-  await expect(dialog.getByText(/key still stays only in this browser tab/i)).toBeVisible()
+  await expect(dialog.getByText("OpenRouter connected", { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/encrypted in your signed-in account vault/i)).toBeVisible()
 
-  await dialog.getByRole("button", { name: /Disconnect account/i }).click()
+  await dialog.getByRole("button", { name: "Sign out", exact: true }).click()
   await dialog.getByRole("button", { name: "Close connections" }).click()
-  await expect(page.getByText("3 guest AI builds left today", { exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
+  await expect(page.getByText("OpenRouter · your budget", { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/AI builds left today|Local build available/)).toBeVisible()
 })

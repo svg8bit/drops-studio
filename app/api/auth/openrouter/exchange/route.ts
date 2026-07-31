@@ -3,8 +3,10 @@ import {
   createStudioAccountCookie,
   memberProjectSyncReadiness,
   resolveAccountCookieSecret,
+  resolveStudioAccount,
   STUDIO_ACCOUNT_COOKIE,
 } from "../../../../../lib/access-tier.ts";
+import { saveStudioConnection } from "../../../../../db/studio-account-state.ts";
 import { consumeRequestLimit, requestIdentity } from "../../../../../lib/request-rate-limit.ts";
 
 export const runtime = "nodejs";
@@ -90,26 +92,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const accountCookie = createStudioAccountCookie({ provider: "openrouter", subject: payload.user_id }, secret);
-    // The API key is returned once to the initiating browser and is never persisted server-side.
+    const existingAccount = resolveStudioAccount(
+      request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+    );
+    const accountCookie = existingAccount
+      ? request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value ?? ""
+      : createStudioAccountCookie({ provider: "openrouter", subject: payload.user_id }, secret);
+    const account = existingAccount ?? resolveStudioAccount(accountCookie);
+    if (account) {
+      await saveStudioConnection(account.identity, {
+        provider: "openrouter",
+        credential: payload.key,
+        model: "openrouter/free",
+        label: "OpenRouter OAuth",
+      }).catch(() => undefined);
+    }
+    // The API key is returned once to the initiating browser. For a signed-in
+    // Studio profile it is also stored only as an AES-GCM encrypted vault entry.
     const result = NextResponse.json(
       {
         key: payload.key,
         account: {
-          provider: "openrouter",
+          provider: account?.provider ?? "openrouter",
           connected: true,
           projectSync: memberProjectSyncReadiness(),
         },
       },
       { headers: { "cache-control": "no-store" } },
     );
-    result.cookies.set(STUDIO_ACCOUNT_COOKIE, accountCookie, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 90,
-      path: "/",
-    });
+    if (!existingAccount) {
+      result.cookies.set(STUDIO_ACCOUNT_COOKIE, accountCookie, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 60 * 60 * 24 * 90,
+        path: "/",
+      });
+    }
     return result;
   } catch (error) {
     console.error("[openrouter-auth] key exchange failed", error);

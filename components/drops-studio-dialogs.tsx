@@ -13,10 +13,13 @@ import {
   Database,
   ExternalLink,
   LoaderCircle,
+  LogOut,
   LockKeyhole,
   Rocket,
   Save,
   Sparkles,
+  Trash2,
+  UserRound,
   X,
 } from "lucide-react";
 import { ProviderModelPicker } from "@/components/provider-model-picker";
@@ -34,6 +37,10 @@ import {
   type ProviderModelCatalog,
 } from "@/lib/provider-models";
 import type { GeneratedProject } from "@/lib/project-types";
+import {
+  studioAccountDisplayName,
+  studioAccountInitial,
+} from "@/lib/studio-account-profile";
 
 type ProviderId =
   | "free"
@@ -79,10 +86,20 @@ interface DropsStudioDialogsProps {
   onCustomEndpointChange: (value: string) => void;
   onConnectOpenRouter: () => void;
   memberConnected: boolean;
+  accountProfile: {
+    provider: "google" | "openrouter";
+    name: string;
+    email?: string;
+    picture?: string;
+  } | null;
+  onSignInGoogle: () => void;
+  onSignOut: () => void;
   projectSyncAvailable: boolean;
   onDisconnectOpenRouter: () => void;
   onConnectProvider: () => void;
   onOpenProject: (id: string) => void;
+  onDeleteProject: (project: GeneratedProject) => Promise<void>;
+  onDeleteAllProjects: () => Promise<void>;
 }
 
 export function DropsStudioDialogs({
@@ -109,11 +126,17 @@ export function DropsStudioDialogs({
   onCustomEndpointChange,
   onConnectOpenRouter,
   memberConnected,
+  accountProfile,
+  onSignInGoogle,
+  onSignOut,
   projectSyncAvailable,
   onDisconnectOpenRouter,
   onConnectProvider,
   onOpenProject,
+  onDeleteProject,
+  onDeleteAllProjects,
 }: DropsStudioDialogsProps) {
+  const accountDisplayName = studioAccountDisplayName(accountProfile?.name);
   return (
     <>
       <Dialog
@@ -130,8 +153,9 @@ export function DropsStudioDialogs({
                 <DialogTitle>Connections Hub</DialogTitle>
                 <DialogDescription>
                   Connect AI, DropsTab data, Telegram accounts and bots.
-                  Sensitive credentials remain scoped to this browser session
-                  and are never compiled into public projects.
+                  {accountProfile
+                    ? " Verified credentials are encrypted for this account and never enter generated source, logs, exports or public projects."
+                    : " Sensitive credentials stay in this browser session until you sign in, and are never compiled into public projects."}
                 </DialogDescription>
               </div>
               <DialogClose
@@ -141,6 +165,31 @@ export function DropsStudioDialogs({
                 <X />
               </DialogClose>
             </div>
+            <section className={`studio-account-card ${accountProfile ? "connected" : ""}`}>
+              <span className="studio-account-avatar">
+                {accountProfile
+                  ? studioAccountInitial(accountProfile.name)
+                  : <UserRound />}
+              </span>
+              <div>
+                <strong>{accountProfile
+                  ? accountDisplayName
+                  : "Your Drops Studio profile"}</strong>
+                <small>
+                  {accountProfile?.email
+                    ?? (accountProfile
+                      ? "Private projects and encrypted connections sync to this account."
+                      : "Sign in with Google to restore projects and verified connections on another device.")}
+                </small>
+              </div>
+              <button
+                type="button"
+                onClick={accountProfile ? onSignOut : onSignInGoogle}
+              >
+                {accountProfile ? <LogOut /> : <UserRound />}
+                {accountProfile ? "Sign out" : "Continue with Google"}
+              </button>
+            </section>
             <div className="connection-layout">
               <div className="provider-list">
                 {providers.map((item) => (
@@ -221,18 +270,20 @@ export function DropsStudioDialogs({
                         <div>
                           <BadgeCheck />
                           <span>
-                            <strong>{memberConnected ? "Studio member session connected" : "Connect account in one click"}</strong>
+                            <strong>{connections.openrouter ? "OpenRouter connected" : "Connect OpenRouter in one click"}</strong>
                             <small>
-                              {memberConnected
-                                ? "Your signed member identity is active. The OpenRouter key still stays only in this browser tab."
-                                : "OpenRouter creates a user-controlled key. It stays only in this browser tab."}
+                              {connections.openrouter
+                                ? memberConnected
+                                  ? "The credential is available to this tab and encrypted in your signed-in account vault."
+                                  : "The credential is available only in this browser tab."
+                                : "OpenRouter creates a user-controlled key for the models you choose."}
                             </small>
                           </span>
                         </div>
-                        <button type="button" onClick={memberConnected ? onDisconnectOpenRouter : onConnectOpenRouter}>
-                          {memberConnected ? "Disconnect account" : "Continue with OpenRouter"} <ArrowRight size={15} />
+                        <button type="button" onClick={connections.openrouter ? onDisconnectOpenRouter : onConnectOpenRouter}>
+                          {connections.openrouter ? "Disconnect OpenRouter" : "Continue with OpenRouter"} <ArrowRight size={15} />
                         </button>
-                        <em>{memberConnected ? "Use the session key below or switch back to Free Auto." : "or use an existing API key below"}</em>
+                        <em>{connections.openrouter ? "Switch models below or return to Free Auto." : "or use an existing API key below"}</em>
                       </div>
                     )}
                     {provider.endpoint && (
@@ -289,9 +340,11 @@ export function DropsStudioDialogs({
                     <div className="privacy-note">
                       <LockKeyhole size={15} />
                       <p>
-                        <strong>Session-only storage.</strong> The key is never
-                        written to the project, database or local project
-                        history.
+                        <strong>{memberConnected ? "Encrypted account vault." : "Session-only storage."}</strong>{" "}
+                        The key is never written to project files, logs, ZIPs or checkpoints.
+                        {memberConnected
+                          ? " After verification it is encrypted server-side and can be removed here."
+                          : " Sign in to remember it across sessions."}
                         {provider.id === "custom"
                           ? " Custom requests go directly from your browser to the endpoint you choose."
                           : ""}
@@ -378,26 +431,44 @@ export function DropsStudioDialogs({
                 {projects.map((project) => {
                   const projectPreset = getProjectPreset(project.spec.presetId);
                   return (
-                    <button
-                      type="button"
-                      key={project.id}
-                      onClick={() => onOpenProject(project.id)}
-                    >
-                      <span>
-                        <Save size={17} />
-                      </span>
-                      <div>
-                        <strong>{project.spec.name}</strong>
-                        <small>
-                          {projectPreset?.output ?? "Live application"} ·{" "}
-                          {project.publishedUrl ? "Published" : "Ready to run"}{" "}
-                          · {new Date(project.createdAt).toLocaleDateString()}
-                        </small>
-                      </div>
-                      <ChevronRight />
-                    </button>
+                    <div className="project-list-row" key={project.id}>
+                      <button
+                        className="project-open-button"
+                        type="button"
+                        onClick={() => onOpenProject(project.id)}
+                      >
+                        <span>
+                          <Save size={17} />
+                        </span>
+                        <div>
+                          <strong>{project.spec.name}</strong>
+                          <small>
+                            {projectPreset?.output ?? "Live application"} ·{" "}
+                            {project.publishedUrl ? "Published" : "Ready to run"}{" "}
+                            · {new Date(project.createdAt).toLocaleDateString()}
+                          </small>
+                        </div>
+                        <ChevronRight />
+                      </button>
+                      <button
+                        className="project-delete-button"
+                        type="button"
+                        aria-label={`Delete ${project.spec.name}`}
+                        title={`Delete ${project.spec.name}`}
+                        onClick={() => void onDeleteProject(project)}
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
                   );
                 })}
+                <button
+                  className="delete-all-projects"
+                  type="button"
+                  onClick={() => void onDeleteAllProjects()}
+                >
+                  <Trash2 /> Delete all projects
+                </button>
               </div>
             ) : (
               <div className="empty-projects">

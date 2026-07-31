@@ -91,13 +91,6 @@ export function TelegramChannelWizard({
 
   useEffect(() => {
     const saved = window.sessionStorage.getItem(ACCOUNT_STORAGE_KEY) || "";
-    if (!saved) {
-      const timer = window.setTimeout(() => {
-        setCheckingExisting(false);
-        setPhase("phone");
-      }, 0);
-      return () => window.clearTimeout(timer);
-    }
     void fetch("/api/telegram/account/status", {
       method: "POST",
       headers: sessionHeaders(),
@@ -200,6 +193,11 @@ export function TelegramChannelWizard({
   }
 
   function disconnect() {
+    void fetch("/api/account/connections?provider=telegram", {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+    }).catch(() => undefined);
     window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
     setAccount(null);
     setAccountToken("");
@@ -234,14 +232,14 @@ export function TelegramChannelWizard({
 
       {error && <div className="telegram-error"><CircleAlert /><span>{error}</span></div>}
 
-      {checkingExisting && <div className="telegram-auth-card"><div className="telegram-auth-copy"><LoaderCircle className="spin" /><div><strong>Checking Telegram connection</strong><p>Restoring the encrypted session from this browser tab.</p></div></div></div>}
+      {checkingExisting && <div className="telegram-auth-card"><div className="telegram-auth-copy"><LoaderCircle className="spin" /><div><strong>Checking Telegram connection</strong><p>Restoring the encrypted session from this tab or your signed-in Studio vault.</p></div></div></div>}
 
       {!checkingExisting && (phase === "phone" || phase === "loading" && !flowToken && !account) && (
         <div className="telegram-auth-card">
           <div className="telegram-auth-copy"><UserRoundCheck /><div><strong>Connect your Telegram account</strong><p>Required once because Telegram allows only user accounts—not bots—to create channels.</p></div></div>
           <label><span>Phone number with country code</span><input type="tel" autoComplete="tel" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="+44 7700 900000" /></label>
           <button type="button" className="telegram-primary" onClick={() => void sendCode()} disabled={phase === "loading" || !phoneNumber.trim()}>{phase === "loading" ? <LoaderCircle className="spin" /> : <Send />} Send secure code</button>
-          <small><LockKeyhole /> The encrypted session stays only in this browser tab and expires automatically.</small>
+          <small><LockKeyhole /> The session stays in this tab; signed-in users also get encrypted cross-session restore.</small>
         </div>
       )}
 

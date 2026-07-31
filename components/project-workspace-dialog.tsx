@@ -280,7 +280,7 @@ export function ProjectWorkspaceDialog({
             </ScrollArea>
           </aside>
 
-          <main className="grid min-h-0 grid-rows-[auto_auto_minmax(220px,1fr)_auto_minmax(150px,0.48fr)] bg-background">
+          <main className="grid min-h-0 grid-rows-[auto_auto_minmax(220px,40vh)_auto_minmax(150px,36vh)] overflow-y-auto overscroll-contain bg-background lg:grid-rows-[auto_auto_minmax(220px,1fr)_auto_minmax(150px,0.48fr)] lg:overflow-hidden">
             <section className="space-y-2 border-b border-border bg-blue-50/70 p-3 text-blue-950" aria-label="AI workspace change">
               <div className="flex flex-wrap items-center gap-2">
                 <WandSparkles className="size-4" aria-hidden="true" />
@@ -325,9 +325,9 @@ export function ProjectWorkspaceDialog({
               {aiError ? <p className="text-sm leading-6 text-destructive" role="alert">{aiError}</p> : null}
             </section>
 
-            <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+            <div className="relative z-10 flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-white px-3 py-2 text-slate-950">
               <Code2 className="size-4 text-muted-foreground" aria-hidden="true" />
-              <code className="min-w-0 truncate text-sm font-medium">{activePath}</code>
+              <code className="min-w-0 truncate rounded-md bg-slate-100 px-2 py-1 text-sm font-medium text-slate-950">{activePath}</code>
               {!editable ? <Badge variant="outline">Read only</Badge> : null}
               <div className="ml-auto flex items-center gap-2">
                 <Button

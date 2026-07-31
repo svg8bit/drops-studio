@@ -47,7 +47,16 @@ function requireSameOrigin(request: NextRequest): void {
   }
 
   try {
-    if (new URL(origin).origin !== request.nextUrl.origin) throw new Error();
+    const host = request.headers.get("host")?.split(",")[0]?.trim();
+    const protocol =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().replace(/:$/, "")
+      || request.nextUrl.protocol.replace(/:$/, "");
+    const visibleOrigin = host ? `${protocol}://${host}` : request.nextUrl.origin;
+    const parsedOrigin = new URL(origin).origin;
+    if (
+      parsedOrigin !== request.nextUrl.origin
+      && parsedOrigin !== visibleOrigin
+    ) throw new Error();
   } catch {
     throw new TelegramAccountRequestError(
       403,

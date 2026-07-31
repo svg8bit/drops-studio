@@ -262,7 +262,10 @@ test("signed-in home restores and opens a remote-only runnable project", async (
   await page.getByRole("button", { name: /My Projects/ }).click()
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByText("Private cloud + browser", { exact: true })).toBeVisible()
-  await dialog.getByRole("button", { name: new RegExp(REMOTE_PROJECT_NAME) }).click()
+  await dialog
+    .locator(".project-open-button")
+    .filter({ hasText: REMOTE_PROJECT_NAME })
+    .click()
 
   await expect(page).toHaveURL(new RegExp(`/studio/${REMOTE_PROJECT_ID}$`))
   await expect(page.getByRole("main")).toHaveClass(/project-studio-shell/)
@@ -335,11 +338,11 @@ test("a new build keeps its runnable browser copy when cloud sync fails", async 
   await page.getByLabel("Describe your crypto project").fill(BUILD_PROMPT)
   await page.getByRole("button", { name: "Build now", exact: true }).click()
 
-  await page.waitForURL(/\/studio\/[a-f0-9-]+$/i)
+  await page.waitForURL(/\/studio\/[a-f0-9-]+(?:\?.*)?$/i)
   expect(cloudPutCount).toBe(1)
   expect(cloudWrite).not.toBeNull()
 
-  const projectId = page.url().split("/").at(-1)
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)
   const storedProject = await page.evaluate(
     ({ key, id }) => {
       const stored = window.localStorage.getItem(key)

@@ -44,6 +44,7 @@ import {
   Redo2,
   Undo2,
   UploadCloud,
+  UserRound,
   WandSparkles,
   X,
   Zap,
@@ -136,6 +137,11 @@ import {
   type ProjectWorkspaceTask,
 } from "@/lib/project-workspace";
 import { createWorkspaceRunDigest } from "@/lib/workspace-run-digest";
+import { safeSameOriginReturnPath } from "@/lib/safe-return-to";
+import {
+  studioAccountDisplayName,
+  studioAccountInitial,
+} from "@/lib/studio-account-profile";
 
 type InspectorTab =
   | "project"
@@ -514,7 +520,7 @@ function assistantWelcome(spec: GeneratedProjectSpec): ProjectChatMessage {
     createdAt: new Date().toISOString(),
     content: game
       ? `I directed this as a ${game.artStyle} ${game.genre.replace(/-/g, " ")} in ${game.world.replace(/-/g, " ")}. Ask me to change the world, mascots, game loop, difficulty, timer or any selected block.`
-      : `Your working ${spec.presetId.replace(/-/g, " ")} is ready. Describe a product or design change, or select a block in Design Mode for a targeted edit.`,
+      : `I have the ${spec.presetId.replace(/-/g, " ")} brief, screens, data sources and safe actions. I’ll keep the working preview visible while files, checks and repairs run. Tell me what to change, or select a block in Design Mode for a targeted edit.`,
   };
 }
 
@@ -592,6 +598,13 @@ export function ProjectStudio() {
   const cloudRevisionRef = useRef<number | null>(null);
   const projectV2CloudRevisionRef = useRef<number | null>(null);
   const [project, setProject] = useState<GeneratedProject | null>(null);
+  const [accountProfile, setAccountProfile] = useState<{
+    name: string;
+    email?: string;
+  } | null>(null);
+  const [accountBrain, setAccountBrain] = useState<ProjectProvider | null>(
+    null,
+  );
   const [runtimeProject, setRuntimeProject] =
     useState<GeneratedProject | null>(null);
   const [runtimeRevision, setRuntimeRevision] = useState(0);
@@ -997,7 +1010,12 @@ export function ProjectStudio() {
         setRuntimeSmoke(null);
         setProject(migrated);
         setRuntimeProject(migrated);
-        if (projectV2.manifest.framework.name === "nextjs") {
+        const requestedPanel = new URLSearchParams(window.location.search).get(
+          "panel",
+        );
+        if (requestedPanel === "director") {
+          setTab("director");
+        } else if (projectV2.manifest.framework.name === "nextjs") {
           setTab("code");
         }
         setRuntimeRevision((revision) => revision + 1);
@@ -1337,12 +1355,73 @@ export function ProjectStudio() {
       && runtimeSmoke.runtime
     ),
   );
+  useEffect(() => {
+    let cancelled = false;
+    let sessionBrainTimer: number | null = null;
+    const providers: ProjectProvider[] = [
+      "openai",
+      "anthropic",
+      "openrouter",
+      "kimi",
+      "custom",
+    ];
+    const current = window.sessionStorage.getItem("drops-studio:active-brain");
+    if (current && providers.includes(current as ProjectProvider)) {
+      sessionBrainTimer = window.setTimeout(() => {
+        if (!cancelled) setAccountBrain(current as ProjectProvider);
+      }, 0);
+    }
+    void fetch("/api/account", {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const payload = (await response.json()) as {
+          profile?: { name?: string; email?: string } | null;
+          connections?: Array<{
+            provider?: string;
+            connected?: boolean;
+            model?: string;
+          }>;
+        };
+        if (payload.profile?.name) {
+          setAccountProfile({
+            name: payload.profile.name,
+            ...(payload.profile.email ? { email: payload.profile.email } : {}),
+          });
+        }
+        if (current) return;
+        const preferred = payload.connections?.find(
+          (connection) =>
+            connection.connected
+            && providers.includes(connection.provider as ProjectProvider),
+        );
+        if (!preferred?.provider) return;
+        const provider = preferred.provider as ProjectProvider;
+        window.sessionStorage.setItem("drops-studio:active-brain", provider);
+        if (preferred.model) {
+          window.sessionStorage.setItem(
+            `drops-studio:${provider}:model`,
+            preferred.model,
+          );
+        }
+        setAccountBrain(provider);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (sessionBrainTimer !== null) {
+        window.clearTimeout(sessionBrainTimer);
+      }
+    };
+  }, []);
+
   const activeProvider = useMemo(() => {
-    if (!project) return "free" as ProjectProvider;
-    return (window.sessionStorage?.getItem("drops-studio:active-brain") ||
-      project.spec.brain.provider ||
-      "free") as ProjectProvider;
-  }, [project]);
+    if (accountBrain) return accountBrain;
+    return project?.spec.brain.provider || "free";
+  }, [accountBrain, project]);
 
   const adoptProject = useCallback((next: GeneratedProject) => {
     if (quietCommitTimerRef.current !== null) {
@@ -1403,6 +1482,52 @@ export function ProjectStudio() {
       saveQueueRef.current = queued;
     },
     [],
+  );
+
+  const recordBuilderAgentEvent = useCallback(
+    (event: {
+      phase: "snapshot" | "sandbox" | "verification" | "preview";
+      status: "active" | "done" | "blocked";
+      message: string;
+    }) => {
+      const current = projectRef.current;
+      if (!current) return;
+      const eventId = `builder-${current.id}-${event.phase}`;
+      const content =
+        event.status === "active"
+          ? `Working · ${event.message}`
+          : event.status === "done"
+            ? `Verified · ${event.message}`
+            : `Paused · ${event.message}`;
+      const existing = current.conversation ?? [];
+      if (existing.some((item) => item.id === eventId && item.content === content)) {
+        return;
+      }
+      const conversation = existing.some((item) => item.id === eventId)
+        ? existing.map((item) =>
+            item.id === eventId
+              ? { ...item, content, createdAt: new Date().toISOString() }
+              : item,
+          )
+        : [
+            ...existing,
+            {
+              id: eventId,
+              role: "assistant" as const,
+              content,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+      const next: GeneratedProject = {
+        ...current,
+        conversation,
+        updatedAt: new Date().toISOString(),
+      };
+      projectRef.current = next;
+      setProject(next);
+      void persistProject(next, current.updatedAt);
+    },
+    [persistProject],
   );
 
   const replaceProject = useCallback(
@@ -1859,7 +1984,6 @@ export function ProjectStudio() {
         committedProjectRef.current = next;
         setProject(next);
         setProjectSyncStatus(remote ? "synced" : "local");
-        setTab("code");
         const save = () =>
           saveProjectSafely(next, {
             expectedUpdatedAt: activeProject.updatedAt,
@@ -1887,11 +2011,12 @@ export function ProjectStudio() {
               : "Blocking check evidence is saved in this browser because private cloud sync could not be confirmed.",
         );
       } catch (error) {
+        void error;
         const assistant: ProjectChatMessage = {
           id: nowId("assistant"),
           role: "assistant",
           createdAt: new Date().toISOString(),
-          content: `${error instanceof Error ? error.message : "The Project V2 agent is unavailable."} No deployment or external action was performed.`,
+          content: "The connected model could not finish this change, so I kept the last verified revision unchanged. Retry once or switch to Free Auto in Connections; no deployment or external action was performed.",
         };
         const next: GeneratedProject = {
           ...conversationDraft,
@@ -3149,6 +3274,19 @@ export function ProjectStudio() {
     }
   };
 
+  const openConnectionsHub = (provider?: string) => {
+    const returnTo = safeSameOriginReturnPath(
+      `${window.location.pathname}${window.location.search}`,
+      window.location.origin,
+    );
+    const search = new URLSearchParams({
+      connections: "1",
+      returnTo,
+    });
+    if (provider) search.set("provider", provider);
+    window.location.assign(`/?${search.toString()}`);
+  };
+
   return (
     <main
       className="project-studio-shell"
@@ -3249,6 +3387,24 @@ export function ProjectStudio() {
             <KeyRound /> <span>Connections</span>
           </button>
           <button
+            className="workspace-account-action"
+            type="button"
+            aria-label={accountProfile
+              ? `Open Connections Hub for ${studioAccountDisplayName(accountProfile.name)}`
+              : "Sign in to Drops Studio"}
+            title={accountProfile?.email ?? "Sign in with Google"}
+            onClick={() => openConnectionsHub()}
+          >
+            <span className="workspace-account-avatar">
+              {accountProfile
+                ? studioAccountInitial(accountProfile.name)
+                : <UserRound />}
+            </span>
+            <span>{accountProfile
+              ? studioAccountDisplayName(accountProfile.name)
+              : "Sign in"}</span>
+          </button>
+          <button
             className="workspace-icon-action"
             type="button"
             aria-label="Share"
@@ -3321,6 +3477,7 @@ export function ProjectStudio() {
           >
             <ProjectV2StudioSurface
               key={project.projectV2.id}
+              onAgentEvent={recordBuilderAgentEvent}
               onNotify={setToast}
               onProjectChange={adoptProjectV2}
               project={project.projectV2}
@@ -4401,13 +4558,7 @@ export function ProjectStudio() {
               <div className="connection-summary-grid">
                 <button
                   type="button"
-                  onClick={() => {
-                    window.open(
-                      "/?connections=1",
-                      "_blank",
-                      "noopener,noreferrer",
-                    );
-                  }}
+                  onClick={() => openConnectionsHub()}
                 >
                   <BrainCircuit />
                   <span>
@@ -4421,13 +4572,7 @@ export function ProjectStudio() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    window.open(
-                      "/?connections=1&provider=dropstab",
-                      "_blank",
-                      "noopener,noreferrer",
-                    );
-                  }}
+                  onClick={() => openConnectionsHub("dropstab")}
                 >
                   <Database />
                   <span>
@@ -4866,7 +5011,10 @@ export function ProjectStudio() {
               </div>
             )}
             {(project.conversation ?? []).map((message) => (
-              <article className={message.role} key={message.id}>
+              <article
+                className={`${message.role}${message.id.startsWith("builder-") ? " build-event" : ""}`}
+                key={message.id}
+              >
                 <span>
                   {message.role === "assistant" ? <Sparkles /> : "You"}
                 </span>

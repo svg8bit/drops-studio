@@ -7,6 +7,11 @@ import {
   telegramAccountRequestErrorResponse,
 } from "@/lib/telegram-account-request";
 import { consumeRequestLimit, requestIdentity } from "@/lib/request-rate-limit";
+import { saveStudioConnection } from "@/db/studio-account-state";
+import {
+  resolveStudioAccount,
+  STUDIO_ACCOUNT_COOKIE,
+} from "@/lib/access-tier";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,6 +33,16 @@ export async function POST(request: NextRequest) {
   if (limit === "unavailable") return telegramAccountJson({ error: "Secure Telegram sign-in is temporarily unavailable." }, 503);
   try {
     const result = await signInTelegramAccount(flowToken, phoneCode, password);
+    const account = resolveStudioAccount(
+      request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+    );
+    if (account && "accountToken" in result && typeof result.accountToken === "string") {
+      await saveStudioConnection(account.identity, {
+        provider: "telegram",
+        credential: result.accountToken,
+        label: "Telegram account session",
+      }).catch(() => undefined);
+    }
     return telegramAccountJson(result);
   } catch (error) {
     return telegramAccountJson({ error: error instanceof Error ? error.message : "Telegram sign-in failed." }, 422);

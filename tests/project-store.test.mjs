@@ -255,3 +255,77 @@ test("project store reports quota failures and rolls back the partial item write
   );
   assert.deepEqual(JSON.parse(storage.getItem("drops-studio-projects-v2")), [first]);
 });
+
+test("project store deletes a project atomically while holding the shared Web Lock", async () => {
+  const store = await import("../lib/project-store.ts");
+  const first = project("project-a", "2026-07-30T00:01:00.000Z");
+  const second = project("project-b", "2026-07-30T00:02:00.000Z");
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": JSON.stringify([first, second]),
+    [`${store.PROJECT_STORE_ITEM_PREFIX}${encodeURIComponent(first.id)}`]: JSON.stringify({
+      schemaVersion: 1,
+      version: 1,
+      project: first,
+    }),
+  });
+  let lockCalls = 0;
+  const locks = {
+    async request(name, options, callback) {
+      lockCalls += 1;
+      assert.equal(name, store.PROJECT_STORE_LOCK_NAME);
+      assert.equal(options.mode, "exclusive");
+      return callback();
+    },
+  };
+
+  const result = await store.deleteProjectSafely(first.id, {
+    storage,
+    locks,
+    expectedUpdatedAt: first.updatedAt,
+  });
+
+  assert.equal(result.status, "deleted");
+  assert.equal(lockCalls, 1);
+  assert.equal(storage.getItem(`${store.PROJECT_STORE_ITEM_PREFIX}${encodeURIComponent(first.id)}`), null);
+  assert.deepEqual(store.readProjectsFromStore(storage).map((item) => item.id), [second.id]);
+});
+
+test("project store refuses stale deletion and rolls back an interrupted deletion", async () => {
+  const store = await import("../lib/project-store.ts");
+  const current = project("project-a", "2026-07-30T00:03:00.000Z");
+  const itemKey = `${store.PROJECT_STORE_ITEM_PREFIX}${encodeURIComponent(current.id)}`;
+  const itemValue = JSON.stringify({ schemaVersion: 1, version: 2, project: current });
+  const indexValue = JSON.stringify([current]);
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": indexValue,
+    [itemKey]: itemValue,
+  });
+
+  const conflict = await store.deleteProjectSafely(current.id, {
+    storage,
+    locks: null,
+    expectedUpdatedAt: "2026-07-30T00:01:00.000Z",
+  });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(storage.getItem(itemKey), itemValue);
+
+  const setItem = storage.setItem.bind(storage);
+  let rejectIndexWrite = true;
+  storage.setItem = (key, value) => {
+    if (key === "drops-studio-projects-v2" && rejectIndexWrite) {
+      rejectIndexWrite = false;
+      throw new Error("interrupted write");
+    }
+    setItem(key, value);
+  };
+  await assert.rejects(
+    store.deleteProjectSafely(current.id, {
+      storage,
+      locks: null,
+      expectedUpdatedAt: current.updatedAt,
+    }),
+    /could not be deleted/i,
+  );
+  assert.equal(storage.getItem(itemKey), itemValue);
+  assert.equal(storage.getItem("drops-studio-projects-v2"), indexValue);
+});

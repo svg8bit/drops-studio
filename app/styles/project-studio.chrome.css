@@ -33,6 +33,10 @@
 .workspace-actions button svg { height: 13px; width: 13px; }
 .workspace-actions .publish-top { background: linear-gradient(135deg,#3c79ff,#2462ed); border-color: transparent; box-shadow: 0 7px 20px rgba(49,108,255,.24); color: white; }
 .workspace-actions .publish-top svg:last-child { border-left: 1px solid rgba(255,255,255,.25); box-sizing: content-box; margin-left: 3px; padding-left: 7px; }
+.workspace-actions .workspace-account-action { gap: 8px; max-width: 170px; padding: 0 10px 0 5px; }
+.workspace-account-action > span:last-child { max-width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-account-avatar { align-items: center; background: linear-gradient(145deg,#e8f3ff,#dce8ff); border: 1px solid #c4d6f6; border-radius: 9px; color: #245fdf; display: flex; flex: 0 0 auto; font-size: 12px; font-weight: 820; height: 32px; justify-content: center; width: 32px; }
+.workspace-account-avatar svg { height: 15px!important; width: 15px!important; }
 
 .project-studio-layout {
   display: grid;

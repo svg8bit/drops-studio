@@ -100,6 +100,11 @@ export interface ProjectV2StudioSurfaceProps {
   project: ProjectV2;
   provider: ProjectProvider;
   onProjectChange: (project: ProjectV2, storageRevision?: number) => void;
+  onAgentEvent?: (event: {
+    phase: "snapshot" | "sandbox" | "verification" | "preview";
+    status: "active" | "done" | "blocked";
+    message: string;
+  }) => void;
   onNotify?: (message: string) => void;
 }
 
@@ -308,6 +313,7 @@ export function ProjectV2StudioSurface({
   project,
   provider,
   onProjectChange,
+  onAgentEvent,
   onNotify,
 }: ProjectV2StudioSurfaceProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(() =>
@@ -539,6 +545,7 @@ export function ProjectV2StudioSurface({
     prompt: string,
   ) => {
     if (busy) return;
+    let activePhase: "snapshot" | "sandbox" | "verification" = "snapshot";
     setBusy("task:build");
     setAgentState("running");
     setAgentSummary(
@@ -547,6 +554,11 @@ export function ProjectV2StudioSurface({
         : "Sandbox is installing, checking, building, and starting the preview.",
     );
     setSandbox((current) => ({ ...current, status: "creating" }));
+    onAgentEvent?.({
+      phase: "snapshot",
+      status: "active",
+      message: "Saving the private Project V2 file snapshot…",
+    });
     try {
       const snapshot = await syncSnapshot();
       if (!snapshot.persisted) {
@@ -554,6 +566,17 @@ export function ProjectV2StudioSurface({
           "Sandbox build requires an actor-owned private Project V2 snapshot. Browser-local files remain editable and safe.",
         );
       }
+      onAgentEvent?.({
+        phase: "snapshot",
+        status: "done",
+        message: "Private multi-file snapshot saved.",
+      });
+      activePhase = "sandbox";
+      onAgentEvent?.({
+        phase: "sandbox",
+        status: "active",
+        message: "Starting the isolated Node 24 Sandbox and syncing real project files…",
+      });
       const response = await fetch("/api/builder/agent", {
         method: "POST",
         credentials: "same-origin",
@@ -569,6 +592,17 @@ export function ProjectV2StudioSurface({
       if (!payload.result) {
         throw new Error(payload.error ?? "Builder agent returned no verifiable result.");
       }
+      onAgentEvent?.({
+        phase: "sandbox",
+        status: "done",
+        message: "Project files are running inside the isolated Node 24 Sandbox.",
+      });
+      activePhase = "verification";
+      onAgentEvent?.({
+        phase: "verification",
+        status: "active",
+        message: "Running typecheck, lint, tests, production build and browser verification…",
+      });
       await absorbBuilderResult(payload.result, snapshot.project.files, payload.intelligence?.trace);
       if (!response.ok && payload.result.status !== "blocked") {
         throw new Error(payload.error ?? "Builder request failed.");
@@ -580,7 +614,31 @@ export function ProjectV2StudioSurface({
             : "AI build verified — preview and diff are ready."
           : payload.result.summary,
       );
+      if (payload.result.releaseGate.ok) {
+        onAgentEvent?.({
+          phase: "verification",
+          status: "done",
+          message: "Release checks passed against the real generated files.",
+        });
+        onAgentEvent?.({
+          phase: "preview",
+          status: "done",
+          message: "Live Sandbox preview is ready. You can keep chatting to edit multiple files.",
+        });
+      } else {
+        window.sessionStorage.removeItem(
+          `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
+        );
+        onAgentEvent?.({
+          phase: "verification",
+          status: "blocked",
+          message: payload.result.summary,
+        });
+      }
     } catch (error) {
+      window.sessionStorage.removeItem(
+        `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
+      );
       const failure = message(error, "Builder execution failed safely.");
       if (mounted.current) {
         setAgentState("blocked");
@@ -589,11 +647,25 @@ export function ProjectV2StudioSurface({
         setSandbox((current) => ({ ...current, status: "failed", message: failure }));
         setActiveView("checks");
       }
+      onAgentEvent?.({
+        phase: activePhase,
+        status: "blocked",
+        message: failure,
+      });
       onNotify?.(failure);
     } finally {
       if (mounted.current) setBusy(null);
     }
-  }, [absorbBuilderResult, busy, onNotify, provider, syncSnapshot]);
+  }, [
+    absorbBuilderResult,
+    busy,
+    onAgentEvent,
+    onNotify,
+    project.id,
+    project.revision,
+    provider,
+    syncSnapshot,
+  ]);
 
   useEffect(() => {
     if (

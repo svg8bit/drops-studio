@@ -39,11 +39,11 @@ import {
   SnapshotBuilderProjectRepository,
   BuilderRouteError,
   builderActor,
-  builderCredentials,
   builderJson,
   builderRouteError,
   consumeBuilderLimit,
   readBuilderBody,
+  rememberedBuilderConnection,
   requireBuilderSameOrigin,
 } from "../shared.ts";
 
@@ -152,14 +152,19 @@ export async function handleBuilderAgentRequest(
     // Approval evidence is resolved server-side. Tool names are intentionally
     // absent from the public JSON body so a model cannot approve its own call.
     const approvedTools = await (dependencies.resolveApprovedTools?.(request) ?? []);
+    const remembered = await rememberedBuilderConnection(
+      request,
+      parsed.data.provider,
+    );
     const agentRequest = {
       ...parsed.data,
+      provider: remembered.selection,
       approvedTools: [...approvedTools],
     };
     const agentDependencies = {
       services: session,
       audit,
-      credentials: builderCredentials(request),
+      credentials: remembered.credentials,
       deterministicFallback:
         dependencies.deterministicFallback ??
         materializedProjectDeterministicFallback,

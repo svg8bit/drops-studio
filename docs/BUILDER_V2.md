@@ -254,9 +254,19 @@ Vercel function, server-side `AI_GATEWAY_API_KEY`, or `VERCEL_OIDC_TOKEN`. Custo
 base URLs reject credentials in the URL, query/hash components, localhost,
 literal private addresses and DNS results that resolve to private/local ranges.
 
-The existing browser connection vault keeps provider keys in `sessionStorage`.
-That is tab/session-local storage, not durable project storage. Consumer ChatGPT
-or Claude subscriptions are not API credentials.
+Guests keep provider keys in `sessionStorage`, so their connection remains
+tab/session-local. A user who explicitly signs in with Google may choose to
+remember a verified connection: the server stores an account-bound AES-256-GCM
+envelope using `DROPS_CONNECTION_VAULT_KEY`, while all public account responses
+contain status/model/endpoint-host metadata only. Decrypted credentials are
+resolved only for an explicit user-triggered plan or edit request and never
+enter project files, Sandbox environment, logs, checkpoints, exports or API
+responses. Consumer ChatGPT or Claude subscriptions are not API credentials.
+
+Google profile sign-in uses OIDC Authorization Code + PKCE, a signed bounded
+transaction cookie, nonce verification and the exact callback
+`/api/auth/google/callback`. Configure `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET`; this login is independent from model-provider billing.
 
 ## Ownership and persistence
 

@@ -154,7 +154,7 @@ test("a Russian free prompt builds and runs the illustrated retro wolf game", as
     .fill(RETRO_WOLF_PROMPT)
   await page.getByRole("button", { name: "Build now", exact: true }).click()
 
-  await page.waitForURL(/\/studio\/[a-f0-9-]+$/i)
+  await page.waitForURL(/\/studio\/[a-f0-9-]+(?:\?.*)?$/i)
   expect(planRequests).toBe(1)
   expect(buildRequests()).toBe(1)
 
