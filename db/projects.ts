@@ -23,7 +23,16 @@ function database(): D1Database | null {
 }
 
 function blobAvailable(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN));
+  // Legacy `/p/{slug}` records are intentionally public. The project may also
+  // have a private OIDC Blob store connected for mutable control-plane state,
+  // so every public operation must explicitly select the public store token.
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+}
+
+function publicBlobToken(): string {
+  const token = process.env.BLOB_READ_WRITE_TOKEN?.trim() ?? "";
+  if (!token) throw new Error("Drops Studio public Blob storage is not configured.");
+  return token;
 }
 
 function localProjectStore(): Map<string, PublishedProjectRecord> | null {
@@ -87,6 +96,7 @@ export async function insertPublishedProject(project: PublishedProjectRecord): P
   }
   if (blobAvailable()) {
     const { BlobPreconditionFailedError, put } = await import("@vercel/blob");
+    const token = publicBlobToken();
     try {
       await put(blobPath(publicProject.slug), JSON.stringify(publicProject), {
         access: "public",
@@ -94,6 +104,7 @@ export async function insertPublishedProject(project: PublishedProjectRecord): P
         allowOverwrite: false,
         cacheControlMaxAge: 60,
         contentType: "application/json; charset=utf-8",
+        token,
       });
       return true;
     } catch (error) {
@@ -140,8 +151,9 @@ export async function updatePublishedProject(project: PublishedProjectRecord): P
       head,
       put,
     } = await import("@vercel/blob");
+    const token = publicBlobToken();
     try {
-      const currentHead = await head(blobPath(publicProject.slug));
+      const currentHead = await head(blobPath(publicProject.slug), { token });
       const current = await getPublishedProject(publicProject.slug);
       if (!current) return false;
       await put(
@@ -158,6 +170,7 @@ export async function updatePublishedProject(project: PublishedProjectRecord): P
           cacheControlMaxAge: 60,
           contentType: "application/json; charset=utf-8",
           ifMatch: currentHead.etag,
+          token,
         },
       );
       return true;
@@ -192,9 +205,10 @@ export async function deletePublishedProject(slug: string): Promise<boolean> {
       del,
       head,
     } = await import("@vercel/blob");
+    const token = publicBlobToken();
     try {
-      const currentHead = await head(blobPath(slug));
-      await del(blobPath(slug), { ifMatch: currentHead.etag });
+      const currentHead = await head(blobPath(slug), { token });
+      await del(blobPath(slug), { ifMatch: currentHead.etag, token });
       return true;
     } catch (error) {
       if (
@@ -238,7 +252,11 @@ export async function getPublishedProject(slug: string): Promise<PublishedProjec
   }
   if (blobAvailable()) {
     const { get } = await import("@vercel/blob");
-    const result = await get(blobPath(slug), { access: "public", useCache: false });
+    const result = await get(blobPath(slug), {
+      access: "public",
+      token: publicBlobToken(),
+      useCache: false,
+    });
     if (!result || result.statusCode !== 200) return null;
     const text = await new Response(result.stream).text();
     let parsed: unknown;

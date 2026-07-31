@@ -107,6 +107,10 @@ test("publishing recompiles validated specs and persists recoverable public buil
   assert.match(migration, /CREATE TABLE `published_projects`/);
   assert.equal(JSON.parse(hosting).d1, "DB");
   assert.match(persistence, /process\.env\.BLOB_READ_WRITE_TOKEN/);
+  assert.match(persistence, /function publicBlobToken\(\)/);
+  assert.match(persistence, /token: publicBlobToken\(\)/);
+  assert.match(persistence, /head\(blobPath\(slug\), \{ token \}\)/);
+  assert.match(persistence, /del\(blobPath\(slug\), \{ ifMatch: currentHead\.etag, token \}\)/);
   assert.match(persistence, /await import\("@vercel\/blob"\)/);
   assert.match(persistence, /presetIds\.has\(record\.presetId\)/);
   assert.match(persistence, /await put\(blobPath\(publicProject\.slug\)/);

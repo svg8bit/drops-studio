@@ -252,10 +252,12 @@ limits.
 
 ## Storage and rate-limit prerequisites
 
-Private Blob project snapshots and durable request counters use either
-`BLOB_READ_WRITE_TOKEN`, or `BLOB_STORE_ID` plus `VERCEL_OIDC_TOKEN`. If these
-are absent in production, protected routes return unavailable rather than using
-unbounded process memory.
+Private Blob project snapshots and durable request counters use the dedicated
+`BLOB_STORE_ID` plus Vercel's runtime-injected `VERCEL_OIDC_TOKEN`. Consistent
+reads bypass the private Blob CDN after mutable counter overwrites. The separate
+`BLOB_READ_WRITE_TOKEN` is reserved for the public legacy publication store. If
+private OIDC storage is absent in production, protected routes return unavailable
+rather than using unbounded process memory.
 
 Local proof toggles are:
 
