@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from "next/server.js";
 import { DROPSTAB_MAX_ATTEMPTS, dropsTabErrorHttpStatus, fetchDropsTabIntelligence } from "../../../lib/dropstab-client.ts";
+import { readStudioConnectionSecret } from "../../../db/studio-account-state.ts";
+import {
+  resolveStudioAccount,
+  STUDIO_ACCOUNT_COOKIE,
+} from "../../../lib/access-tier.ts";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const key = request.headers.get("x-dropstab-api-key")?.trim();
+  const account = resolveStudioAccount(
+    request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+  );
+  const remembered = account
+    ? await readStudioConnectionSecret(account.identity, "dropstab").catch(() => null)
+    : null;
+  const key = request.headers.get("x-dropstab-api-key")?.trim()
+    || remembered?.credential;
   if (!key) return NextResponse.json({ error: "A DropsTab API key is required." }, { status: 401 });
 
   try {
@@ -22,7 +34,7 @@ export async function GET(request: NextRequest) {
         maxAttemptsPerRequest: DROPSTAB_MAX_ATTEMPTS,
         requestBudget: "One required coins request plus up to three independent enrichment requests per explicit refresh.",
       },
-    }, { headers: { "cache-control": "private, no-store", vary: "x-dropstab-api-key" } });
+    }, { headers: { "cache-control": "private, no-store", vary: "Cookie, x-dropstab-api-key" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "DropsTab is temporarily unreachable.";
     const status = dropsTabErrorHttpStatus(error);

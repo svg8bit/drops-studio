@@ -26,6 +26,7 @@ import {
   RequestBodyBoundaryError,
 } from "../../../../lib/http-request-boundary.ts";
 import { secretFreeRuntimeMessage } from "../../../../lib/project-runtime-adapter.ts";
+import { readStudioConnectionSecret } from "../../../../db/studio-account-state.ts";
 
 export const runtime = "nodejs";
 
@@ -481,7 +482,11 @@ export async function POST(request: NextRequest) {
 
   const account = resolveStudioAccount(request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value);
 
-  const openRouterKey = requestCredential(request, "x-openrouter-key");
+  const rememberedProvider = body?.provider === "openrouter" && account
+    ? await readStudioConnectionSecret(account.identity, "openrouter").catch(() => null)
+    : null;
+  const openRouterKey = requestCredential(request, "x-openrouter-key")
+    || rememberedProvider?.credential;
   if (openRouterKey) {
     try {
       const model = body?.model?.trim() || "openrouter/free";
@@ -500,7 +505,11 @@ export async function POST(request: NextRequest) {
   }
 
   const directProvider = ["openai", "anthropic", "kimi"].includes(body?.provider ?? "") ? body?.provider as DirectProvider : null;
-  const directKey = requestCredential(request, "x-provider-key");
+  const rememberedDirect = directProvider && account
+    ? await readStudioConnectionSecret(account.identity, directProvider).catch(() => null)
+    : null;
+  const directKey = requestCredential(request, "x-provider-key")
+    || rememberedDirect?.credential;
   if (directProvider && !directKey) {
     return NextResponse.json({ error: `Connect ${directProvider} with an API key before using it.` }, { status: 400 });
   }

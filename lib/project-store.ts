@@ -24,6 +24,11 @@ export type ProjectStoreWriteResult =
   | { status: "saved"; projects: GeneratedProject[]; version: number }
   | { status: "conflict"; projects: GeneratedProject[]; current?: GeneratedProject };
 
+export type ProjectStoreDeleteResult =
+  | { status: "deleted"; projects: GeneratedProject[] }
+  | { status: "not-found"; projects: GeneratedProject[] }
+  | { status: "conflict"; projects: GeneratedProject[]; current: GeneratedProject };
+
 function isProject(value: unknown): value is GeneratedProject {
   if (!value || typeof value !== "object") return false;
   const project = value as Partial<GeneratedProject>;
@@ -202,4 +207,72 @@ export async function saveProjectSafely(
     return detectedLocks.request(PROJECT_STORE_LOCK_NAME, { mode: "exclusive" }, write);
   }
   return write();
+}
+
+function deleteProject(
+  projectId: string,
+  storage: StorageLike,
+  expectedUpdatedAt?: string,
+): ProjectStoreDeleteResult {
+  const projects = readProjectsFromStore(storage);
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) return { status: "not-found", projects };
+  if (expectedUpdatedAt && current.updatedAt !== expectedUpdatedAt) {
+    return { status: "conflict", projects, current };
+  }
+
+  const key = itemKey(projectId);
+  const previousItem = storage.getItem(key);
+  const previousIndex = storage.getItem(PROJECTS_STORAGE_KEY);
+  const remaining = projects.filter((project) => project.id !== projectId);
+  try {
+    storage.removeItem(key);
+    storage.setItem(
+      PROJECTS_STORAGE_KEY,
+      JSON.stringify(remaining.map(compactProjectForCompatibilityIndex)),
+    );
+  } catch (error) {
+    try {
+      restoreValue(storage, key, previousItem);
+      restoreValue(storage, PROJECTS_STORAGE_KEY, previousIndex);
+    } catch {
+      throw new Error(
+        "Project deletion failed and browser storage could not be fully restored. Reload before continuing.",
+        { cause: error },
+      );
+    }
+    throw new Error("Project could not be deleted from browser storage.", {
+      cause: error,
+    });
+  }
+  return { status: "deleted", projects: remaining };
+}
+
+export async function deleteProjectSafely(
+  projectId: string,
+  options: {
+    storage?: StorageLike;
+    locks?: LockManagerLike | null;
+    expectedUpdatedAt?: string;
+  } = {},
+): Promise<ProjectStoreDeleteResult> {
+  const storage = options.storage ?? window.localStorage;
+  const detectedLocks = options.locks === undefined
+    ? (typeof navigator !== "undefined" && "locks" in navigator
+        ? navigator.locks as unknown as LockManagerLike
+        : null)
+    : options.locks;
+  const remove = () => deleteProject(
+    projectId,
+    storage,
+    options.expectedUpdatedAt,
+  );
+  if (detectedLocks) {
+    return detectedLocks.request(
+      PROJECT_STORE_LOCK_NAME,
+      { mode: "exclusive" },
+      remove,
+    );
+  }
+  return remove();
 }

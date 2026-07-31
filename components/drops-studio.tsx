@@ -25,6 +25,7 @@ import {
   Sparkles,
   Sun,
   TableProperties,
+  UserRound,
   UsersRound,
   WalletCards,
   WandSparkles,
@@ -52,15 +53,20 @@ import type {
   ProjectQualityReport,
 } from "@/lib/project-types";
 import {
+  deleteProjectSafely,
   readProjectsFromStore,
   saveProjectSafely,
 } from "@/lib/project-store";
 import {
+  deleteMemberProjectFromCloud,
   listMemberProjectsFromCloud,
   materializeMemberProject,
   saveMemberProjectToCloud,
 } from "@/lib/member-project-sync-client";
-import { saveProjectV2ToCloud } from "@/lib/project-v2-sync-client";
+import {
+  deleteProjectV2FromCloud,
+  saveProjectV2ToCloud,
+} from "@/lib/project-v2-sync-client";
 import { customProductPreset, defaultPresetId, getProjectPreset, presets, type PresetId } from "@/lib/presets";
 import {
   isModelProviderId,
@@ -71,6 +77,11 @@ import {
   type ProviderModelCatalog,
 } from "@/lib/provider-models";
 import { parseStudioConnectionHandoff } from "@/lib/studio-connection-handoff";
+import { safeSameOriginReturnPath } from "@/lib/safe-return-to";
+import {
+  studioAccountDisplayName,
+  studioAccountInitial,
+} from "@/lib/studio-account-profile";
 
 // Defer the Connections Hub and My Projects overlays until either is opened.
 const DropsStudioDialogs = dynamic(
@@ -124,6 +135,20 @@ interface StudioAccessStatus {
   projectSync?: boolean;
   platformAi?: { available?: boolean; remaining?: number | null };
   account?: { connected?: boolean; projectSync?: boolean };
+}
+
+interface StudioAccountProfileView {
+  provider: "google" | "openrouter";
+  name: string;
+  email?: string;
+  picture?: string;
+}
+
+interface StudioAccountConnectionView {
+  provider: Exclude<ProviderId, "free"> | "telegram";
+  connected: boolean;
+  model?: string;
+  endpointHost?: string;
 }
 
 const initialBuildActivity: BuildActivityItem[] = [
@@ -385,6 +410,9 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [toast, setToast] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const [connectionReturnTo, setConnectionReturnTo] = useState<string | null>(
+    null,
+  );
   const [telegramProjectSlug, setTelegramProjectSlug] = useState<string | null>(
     null,
   );
@@ -414,6 +442,8 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   const [guestRemaining, setGuestRemaining] = useState<number | null>(null);
   const [platformAiAvailable, setPlatformAiAvailable] = useState(false);
   const [memberConnected, setMemberConnected] = useState(false);
+  const [accountProfile, setAccountProfile] =
+    useState<StudioAccountProfileView | null>(null);
   const [projectSyncAvailable, setProjectSyncAvailable] = useState(false);
   const [planLabel, setPlanLabel] = useState("Ready to build");
   const [buildActivity, setBuildActivity] = useState<BuildActivityItem[]>([]);
@@ -475,9 +505,78 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     };
   }, []);
 
+  const hydrateAccountState = useCallback(async () => {
+    const response = await fetch("/api/account", {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { accept: "application/json" },
+    });
+    if (response.status === 401) {
+      setAccountProfile(null);
+      return;
+    }
+    const payload = (await response.json().catch(() => ({}))) as {
+      profile?: StudioAccountProfileView | null;
+      connections?: StudioAccountConnectionView[];
+    };
+    if (!response.ok) return;
+    setAccountProfile(payload.profile ?? null);
+    const remembered = payload.connections ?? [];
+    setConnections((current) => {
+      const next = { ...current };
+      for (const connection of remembered) {
+        if (connection.provider !== "telegram" && connection.provider in next) {
+          next[connection.provider as Exclude<ProviderId, "free">] = connection.connected;
+        }
+      }
+      return next;
+    });
+    for (const connection of remembered) {
+      if (
+        connection.connected
+        && connection.model
+        && isModelProviderId(connection.provider)
+      ) {
+        window.sessionStorage.setItem(
+          `drops-studio:${connection.provider}:model`,
+          connection.model,
+        );
+      }
+    }
+    if (!window.sessionStorage.getItem("drops-studio:active-brain")) {
+      const preferred = remembered.find(
+        (connection) =>
+          connection.connected && isModelProviderId(connection.provider),
+      );
+      if (preferred && isModelProviderId(preferred.provider)) {
+        window.sessionStorage.setItem(
+          "drops-studio:active-brain",
+          preferred.provider,
+        );
+        setActiveBrain(preferred.provider);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(async () => {
       const params = new URLSearchParams(window.location.search);
+      const requestedReturnTo = safeSameOriginReturnPath(
+        params.get("returnTo"),
+        window.location.origin,
+        "",
+      );
+      if (requestedReturnTo) {
+        setConnectionReturnTo(requestedReturnTo);
+      }
+      const authState = params.get("auth");
+      if (authState === "google-connected") {
+        setToast("Google profile connected. Private projects and verified connections can now follow your account.");
+      } else if (authState === "google-unavailable") {
+        setToast("Google sign-in needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel.");
+      } else if (authState?.startsWith("google-")) {
+        setToast("Google sign-in could not be verified. Please try again.");
+      }
       const presetParam = params.get("preset");
       const requestedCatalogPreset = presets.find(
         (preset) => preset.id === presetParam,
@@ -592,6 +691,9 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         if (accessResponse.ok && accessPayload.access) {
           hydratedAccess = accessPayload.access;
           const accessState = applyAccessStatus(hydratedAccess);
+          if (accessState.authenticated) {
+            await hydrateAccountState().catch(() => undefined);
+          }
           if (accessState.authenticated && accessState.projectSync) {
             try {
               const cloud = await listMemberProjectsFromCloud();
@@ -669,7 +771,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [applyAccessStatus]);
+  }, [applyAccessStatus, hydrateAccountState]);
 
   useEffect(() => {
     if (!toast) return;
@@ -808,7 +910,11 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           : (window.sessionStorage.getItem(`drops-studio:${activeBrain}`) ??
             "");
 
-      if (activeBrain !== "free" && !key) {
+      if (
+        activeBrain !== "free"
+        && !key
+        && (activeBrain === "custom" || !connections[activeBrain])
+      ) {
         openProvider(activeBrain);
         throw new Error(
           `Connect ${providerList.find((item) => item.id === activeBrain)?.name ?? "this AI"} first.`,
@@ -949,8 +1055,8 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           "content-type": "application/json",
           "x-drops-guest": guestIdRef.current,
         };
-        if (activeBrain === "openrouter") headers["x-openrouter-key"] = key;
-        else if (["openai", "anthropic", "kimi"].includes(activeBrain))
+        if (activeBrain === "openrouter" && key) headers["x-openrouter-key"] = key;
+        else if (["openai", "anthropic", "kimi"].includes(activeBrain) && key)
           headers["x-provider-key"] = key;
         const response = await fetch("/api/agent/plan", {
           method: "POST",
@@ -1056,7 +1162,24 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         status: index === 0 ? "active" : "queued",
       })),
     );
-    const spec = await planPrompt();
+    let spec: GeneratedProjectSpec | null = null;
+    if (mode === "build") {
+      if (!prompt.trim()) {
+        setActivity(
+          "intent",
+          "done",
+          `${selectedPreset.title} selected from the recipe catalog`,
+        );
+        setActivity(
+          "blueprint",
+          "done",
+          "Recipe screens, interactions and integrations are editable in Studio",
+        );
+        await buildProject();
+        return;
+      }
+    }
+    spec = await planPrompt();
     if (!spec) {
       setActivity("intent", "failed", "The product brief needs attention");
       return;
@@ -1139,6 +1262,85 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     setConnectionOpen(true);
   }
 
+  function closeConnectionsHub() {
+    setConnectionOpen(false);
+    if (connectionReturnTo) {
+      window.location.assign(connectionReturnTo);
+      return;
+    }
+    const url = new URL(window.location.href);
+    for (const key of ["connections", "provider", "flow", "project", "returnTo", "auth"]) {
+      url.searchParams.delete(key);
+    }
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function startGoogleSignIn() {
+    const returnTo = safeSameOriginReturnPath(
+      `${window.location.pathname}${window.location.search}`,
+      window.location.origin,
+    );
+    window.location.assign(
+      `/api/auth/google/start?returnTo=${encodeURIComponent(returnTo)}`,
+    );
+  }
+
+  async function signOutStudioAccount() {
+    const response = await fetch("/api/auth/session", {
+      method: "DELETE",
+      credentials: "same-origin",
+    }).catch(() => null);
+    if (!response?.ok) {
+      setToast("Could not sign out. Your account session was left unchanged.");
+      return;
+    }
+    setAccountProfile(null);
+    setMemberConnected(false);
+    setProjectSyncAvailable(false);
+    const accountBackedProviders = [
+      "dropstab",
+      "openai",
+      "anthropic",
+      "openrouter",
+      "kimi",
+      "custom",
+    ] as const;
+    setConnections((current) => {
+      const next = { ...current };
+      for (const provider of accountBackedProviders) {
+        if (!window.sessionStorage.getItem(`drops-studio:${provider}`)?.trim()) {
+          next[provider] = false;
+        }
+      }
+      return next;
+    });
+    if (
+      activeBrain !== "free"
+      && activeBrain !== "dropsbot"
+      && !window.sessionStorage.getItem(`drops-studio:${activeBrain}`)?.trim()
+    ) {
+      setActiveBrain("free");
+      window.sessionStorage.setItem("drops-studio:active-brain", "free");
+    }
+    setToast("Signed out. Browser projects and session-only connections remain available.");
+  }
+
+  async function rememberConnection(input: {
+    provider: Exclude<ProviderId, "free" | "dropsbot">;
+    credential: string;
+    model?: string;
+    endpoint?: string;
+  }): Promise<boolean> {
+    if (!memberConnected) return false;
+    const response = await fetch("/api/account/connections", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }).catch(() => null);
+    return Boolean(response?.ok);
+  }
+
   async function connectOpenRouterAccount() {
     const bytes = crypto.getRandomValues(new Uint8Array(48));
     const verifier = btoa(String.fromCharCode(...bytes))
@@ -1163,16 +1365,12 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   }
 
   async function disconnectOpenRouterAccount() {
-    let response: Response;
-    try {
-      response = await fetch("/api/auth/session", { method: "DELETE" });
-    } catch {
-      setToast("Could not disconnect OpenRouter. Your current session was left unchanged.");
-      return;
-    }
-    if (!response.ok) {
-      setToast("Could not disconnect OpenRouter. Your current session was left unchanged.");
-      return;
+    if (memberConnected) {
+      await fetch("/api/account/connections?provider=openrouter", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      }).catch(() => undefined);
     }
     for (const key of [
       "drops-studio:openrouter",
@@ -1191,18 +1389,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       return next;
     });
     setProviderId("free");
-    try {
-      const accessResponse = await fetch("/api/access", { cache: "no-store" });
-      const payload = await accessResponse.json() as { access?: StudioAccessStatus };
-      if (!accessResponse.ok || !payload.access) throw new Error("Access status unavailable.");
-      applyAccessStatus(payload.access);
-    } catch {
-      setMemberConnected(false);
-      setPlatformAiAvailable(false);
-      setGuestRemaining(null);
-      setPlanLabel("Local compiler ready");
-    }
-    setToast("OpenRouter and the signed-in member session were disconnected from this browser.");
+    setToast("OpenRouter disconnected. Your Studio profile remains signed in.");
   }
 
   async function connectProvider() {
@@ -1211,7 +1398,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       setActiveBrain("free");
       window.sessionStorage.setItem("drops-studio:active-brain", "free");
       setToast("Free Auto is ready.");
-      setConnectionOpen(false);
+      closeConnectionsHub();
       return;
     }
     if (providerId === "dropsbot") {
@@ -1227,7 +1414,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       setToast(
         "Official Drops Bot opened. Telegram account verification remains separate; follow the documented Profile steps before treating alerts as configured.",
       );
-      setConnectionOpen(false);
+      closeConnectionsHub();
       return;
     }
     const connectionKey =
@@ -1265,10 +1452,18 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       window.sessionStorage.setItem("drops-studio:active-brain", "custom");
       setConnections((current) => ({ ...current, custom: true }));
       setActiveBrain("custom");
+      const remembered = await rememberConnection({
+        provider: "custom",
+        credential: connectionKey,
+        model: providerModel.trim(),
+        endpoint: customEndpoint.trim(),
+      });
       setToast(
-        "Custom API configured for this tab. It will be called directly by your browser when you plan.",
+        remembered
+          ? "Custom API verified for this tab and encrypted in your Studio account vault."
+          : "Custom API configured for this tab. Sign in to remember it across sessions.",
       );
-      setConnectionOpen(false);
+      closeConnectionsHub();
       return;
     }
     setTestingConnection(true);
@@ -1356,15 +1551,28 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
             `drops-studio:${providerId}:model`,
           );
         }
+        const remembered = await rememberConnection({
+          provider: providerId,
+          credential: connectionKey,
+          ...(selectedModel ? { model: selectedModel } : {}),
+        });
         setToast(
           returnedModels.length
-            ? `${provider.name} verified. Choose from ${verifiedCatalog?.totalModelCount ?? returnedModels.length} provider-returned models.`
+            ? `${provider.name} verified${remembered ? " and encrypted for your account" : " for this tab"}. Choose from ${verifiedCatalog?.totalModelCount ?? returnedModels.length} provider-returned models.`
             : `${provider.name} verified, but no model list was returned. Enter the exact model ID to continue.`,
         );
         return;
       }
-      setToast(`${provider.name} verified and connected for this browser tab.`);
-      setConnectionOpen(false);
+      const remembered = await rememberConnection({
+        provider: providerId,
+        credential: connectionKey,
+      });
+      setToast(
+        remembered
+          ? `${provider.name} verified and encrypted for your Studio account.`
+          : `${provider.name} verified and connected for this browser tab.`,
+      );
+      closeConnectionsHub();
     } catch (error) {
       setToast(
         error instanceof Error ? error.message : "Connection test failed.",
@@ -1376,7 +1584,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
 
   async function refreshMarket() {
     const key = window.sessionStorage.getItem("drops-studio:dropstab");
-    if (!key) {
+    if (!key && !connections.dropstab) {
       openProvider("dropstab");
       setToast(
         "Connect a DropsTab API key to switch this preview to live data.",
@@ -1386,7 +1594,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     setToast("Refreshing live DropsTab data…");
     try {
       const response = await fetch("/api/dropstab", {
-        headers: { "x-dropstab-api-key": key },
+        ...(key ? { headers: { "x-dropstab-api-key": key } } : {}),
       });
       const payload = await response.json();
       if (!response.ok)
@@ -1479,16 +1687,11 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
               origin: window.location.origin,
             });
 
-      // Every Build action goes through the authoritative server BuildRun.
-      // The planner already produced a rich specification, so Free/Gateway and
-      // custom-endpoint plans are validated and inspected without spending a
-      // redundant model call. Connected first-party providers receive one
-      // bounded enhancement plus at most one repair attempt.
-      const buildProvider = provider === "custom" ? "free" : provider;
-      const providerKey =
-        buildProvider === "free"
-          ? ""
-          : window.sessionStorage.getItem(`drops-studio:${buildProvider}`) || "";
+      // The initial release inspection is deterministic and server-owned so
+      // the browser can open Studio quickly without executing generated code.
+      // The selected BYOK provider is used by the visible Project V2 agent
+      // loop after navigation, where file edits, Sandbox checks and repairs
+      // are streamed into the Director conversation.
       const buildResponse = await fetch("/api/generate", {
         method: "POST",
         headers: {
@@ -1496,13 +1699,12 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           "x-drops-session": guestIdRef.current,
         },
         body: JSON.stringify({
-          provider: buildProvider,
-          ...(providerKey ? { key: providerKey } : {}),
-          model,
+          provider: "free",
+          model: "Free Auto",
           prompt: prompt || selectedPreset.description,
           spec,
         }),
-        signal: AbortSignal.timeout(55_000),
+        signal: AbortSignal.timeout(20_000),
       });
       const buildPayload = (await buildResponse.json().catch(() => ({}))) as {
         spec?: GeneratedProjectSpec;
@@ -1582,14 +1784,27 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         html,
         projectV2,
         quality,
+        conversation: [
+          {
+            id: `user-${projectId}`,
+            role: "user",
+            content:
+              prompt.trim() || targetPreset.title.replace(/^Build Your\s+/i, "Build "),
+            createdAt: now,
+          },
+          {
+            id: `assistant-${projectId}`,
+            role: "assistant",
+            content: `I prepared an editable ${spec.blueprint.productType} plan with ${spec.blueprint.screens.length} screens and ${spec.blueprint.interactions.length} working interactions. I’m opening Studio now; the isolated build, checks, preview and any repair will continue visibly in this chat.`,
+            createdAt: now,
+          },
+        ],
         createdAt: now,
         updatedAt: now,
       };
-      const studioHref = `/studio/${project.id}`;
-      const studioWarmup = Promise.allSettled([
-        Promise.resolve().then(() => router.prefetch(studioHref)),
-        warmProjectExperience(spec),
-      ]);
+      const studioHref = `/studio/${project.id}?panel=director&autobuild=1`;
+      void router.prefetch(studioHref);
+      void warmProjectExperience(spec);
       const stored = await saveProjectSafely(project, {
         expectedUpdatedAt: null,
       });
@@ -1600,9 +1815,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       }
       let builderSnapshotSaved = false;
       try {
-        // /api/access creates and signs the anonymous actor cookie when this
-        // is a first-visit build. Project V2 storage remains private and
-        // actor-scoped for guests as well as signed-in members.
         const accessResponse = await fetch("/api/access", {
           credentials: "same-origin",
           cache: "no-store",
@@ -1612,11 +1824,9 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           access?: StudioAccessStatus;
         };
         const privateProjectStorageAvailable = Boolean(
-          accessResponse.ok
-          && (
-            accessPayload.access?.projectSync
-            ?? accessPayload.access?.account?.projectSync
-          ),
+          accessResponse.ok &&
+            (accessPayload.access?.projectSync ??
+              accessPayload.access?.account?.projectSync),
         );
         if (privateProjectStorageAvailable) {
           await saveProjectV2ToCloud(projectV2, 0);
@@ -1638,16 +1848,13 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       setProjects(next);
       setToast(
         serverBuildWarning
-          ? `${serverBuildWarning} Opening your editable live project…`
+          ? `${serverBuildWarning} Opening Studio for the isolated build…`
           : cloudSaved
-            ? "Project built and saved to your account. Opening the live workspace…"
+            ? "Editable plan saved to your account. Opening the live build conversation…"
             : builderSnapshotSaved
-              ? "Project V2 saved for its isolated build. Opening the live workspace…"
-            : projectSyncAvailable
-              ? "Project built and saved in this browser. Cloud sync will retry in Studio…"
-              : "Opening your editable live project…",
+              ? "Editable Project V2 saved. Opening the live build conversation…"
+              : "Editable plan created. Opening Studio while the verified build continues…",
       );
-      await studioWarmup;
       setBuilding(false);
       router.push(studioHref);
     } catch (error) {
@@ -1736,6 +1943,56 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     setToast(`${label} added to the blueprint. Nothing was executed.`);
   }
 
+  const deleteProjectRecord = useCallback(async (project: GeneratedProject) => {
+    const result = await deleteProjectSafely(project.id, {
+      expectedUpdatedAt: project.updatedAt,
+    });
+    if (result.status === "conflict") {
+      throw new Error("This project changed in another tab. Reload before deleting it.");
+    }
+    try {
+      if (projectSyncAvailable) {
+        await deleteProjectV2FromCloud(project.id);
+      }
+      if (memberConnected) {
+        await deleteMemberProjectFromCloud(project.id);
+      }
+    } catch (error) {
+      const restored = await saveProjectSafely(project, {
+        expectedUpdatedAt: null,
+      }).catch(() => null);
+      if (restored?.status === "saved") setProjects(restored.projects);
+      throw error;
+    }
+    setProjects(result.projects);
+  }, [memberConnected, projectSyncAvailable]);
+
+  const deleteProjectFromLibrary = useCallback(async (project: GeneratedProject) => {
+    if (!window.confirm(`Delete “${project.spec.name}”? Its Sandbox and private snapshots will also be removed.`)) {
+      return;
+    }
+    try {
+      await deleteProjectRecord(project);
+      setToast(`${project.spec.name} deleted.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Project deletion failed.");
+    }
+  }, [deleteProjectRecord]);
+
+  const deleteAllProjectsFromLibrary = useCallback(async () => {
+    if (!projects.length) return;
+    if (!window.confirm(`Delete all ${projects.length} projects? This permanently removes their private snapshots and Sandboxes.`)) {
+      return;
+    }
+    try {
+      for (const project of [...projects]) await deleteProjectRecord(project);
+      setProjects([]);
+      setToast("All projects deleted.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Some projects could not be deleted.");
+    }
+  }, [deleteProjectRecord, projects]);
+
   return (
     <main className="studio-shell">
       <div className="aurora one" />
@@ -1774,6 +2031,21 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           </a>
         </nav>
         <div className="header-actions">
+          <button
+            className={`account-profile-button ${accountProfile ? "connected" : ""}`}
+            type="button"
+            aria-label={accountProfile
+              ? `Open projects for ${studioAccountDisplayName(accountProfile.name)}`
+              : "Sign in"}
+            onClick={accountProfile ? () => setProjectsOpen(true) : startGoogleSignIn}
+          >
+            <span className="account-avatar" aria-hidden="true">
+              {accountProfile ? studioAccountInitial(accountProfile.name) : <UserRound />}
+            </span>
+            <span>{accountProfile
+              ? studioAccountDisplayName(accountProfile.name)
+              : "Sign in"}</span>
+          </button>
           <button
             className="api-vault-button"
             type="button"
@@ -2088,7 +2360,10 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       {(connectionOpen || projectsOpen) && (
         <DropsStudioDialogs
           connectionOpen={connectionOpen}
-          onConnectionOpenChange={setConnectionOpen}
+          onConnectionOpenChange={(open) => {
+            if (open) setConnectionOpen(true);
+            else closeConnectionsHub();
+          }}
           projectsOpen={projectsOpen}
           onProjectsOpenChange={setProjectsOpen}
           providers={providerList}
@@ -2110,10 +2385,15 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           onCustomEndpointChange={setCustomEndpoint}
           onConnectOpenRouter={() => void connectOpenRouterAccount()}
           memberConnected={memberConnected}
+          accountProfile={accountProfile}
+          onSignInGoogle={startGoogleSignIn}
+          onSignOut={() => void signOutStudioAccount()}
           projectSyncAvailable={projectSyncAvailable}
           onDisconnectOpenRouter={() => void disconnectOpenRouterAccount()}
           onConnectProvider={() => void connectProvider()}
           onOpenProject={(id) => router.push(`/studio/${id}`)}
+          onDeleteProject={deleteProjectFromLibrary}
+          onDeleteAllProjects={deleteAllProjectsFromLibrary}
         />
       )}
 

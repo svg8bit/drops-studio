@@ -56,8 +56,11 @@ async function expectInlineScriptsToParse(page: Page) {
 export async function prepareHomePage(page: Page) {
   await page.addInitScript(() => {
     if (window.top !== window) return
+    const seedKey = "drops-studio:e2e-home-seeded"
+    if (window.sessionStorage.getItem(seedKey) === "1") return
     window.localStorage.clear()
     window.sessionStorage.clear()
+    window.sessionStorage.setItem(seedKey, "1")
   })
 
   await page.goto("/", { waitUntil: "domcontentloaded" })

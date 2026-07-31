@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server.js";
 
 import { inspectTelegramAccountToken } from "@/lib/telegram-account";
+import { readStudioConnectionSecret } from "@/db/studio-account-state";
+import {
+  resolveStudioAccount,
+  STUDIO_ACCOUNT_COOKIE,
+} from "@/lib/access-tier";
 import {
   readTelegramAccountJson,
   telegramAccountJson,
@@ -17,7 +22,15 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     return telegramAccountRequestErrorResponse(error);
   }
-  const token = typeof body?.accountToken === "string" ? body.accountToken : "";
+  const account = resolveStudioAccount(
+    request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+  );
+  const remembered = account
+    ? await readStudioConnectionSecret(account.identity, "telegram").catch(() => null)
+    : null;
+  const token = (typeof body?.accountToken === "string" ? body.accountToken : "")
+    || remembered?.credential
+    || "";
   if (!token) return telegramAccountJson({ connected: false });
   try {
     return telegramAccountJson({ connected: true, account: inspectTelegramAccountToken(token) });

@@ -335,11 +335,11 @@ test("a new build keeps its runnable browser copy when cloud sync fails", async 
   await page.getByLabel("Describe your crypto project").fill(BUILD_PROMPT)
   await page.getByRole("button", { name: "Build now", exact: true }).click()
 
-  await page.waitForURL(/\/studio\/[a-f0-9-]+$/i)
+  await page.waitForURL(/\/studio\/[a-f0-9-]+(?:\?.*)?$/i)
   expect(cloudPutCount).toBe(1)
   expect(cloudWrite).not.toBeNull()
 
-  const projectId = page.url().split("/").at(-1)
+  const projectId = new URL(page.url()).pathname.split("/").at(-1)
   const storedProject = await page.evaluate(
     ({ key, id }) => {
       const stored = window.localStorage.getItem(key)

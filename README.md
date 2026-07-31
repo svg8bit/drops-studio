@@ -19,6 +19,8 @@ must not be used to restore an older editor layout.
 - 12 distinct standalone crypto product runtimes
 - platform-funded guest and signed-in member AI planning with explicit daily quotas and a deterministic no-key fallback compiler
 - OpenRouter PKCE sign-in with an HttpOnly Studio identity while the provider key remains session-only
+- Google OIDC profile sign-in with private project sync and opt-in encrypted,
+  account-scoped connection restoration; guests remain session-only
 - bounded design enhancement through OpenAI, Anthropic, OpenRouter Free, Kimi or a custom OpenAI-compatible model
 - universal Experience Director for every recipe: archetype, layout, data view,
   engagement loop, audience, primary loop and editable product modules

@@ -15,6 +15,7 @@
   .studio-header nav button:hover, .studio-header nav a:hover { background: #f3f6fb; }
   .studio-header nav .mobile-nav-connections { display: flex; }
   .header-actions { min-width: 0; }
+  .account-profile-button > span:last-child { display: none; }
   .mobile-menu { display: flex; }
   .api-vault-button { display: none; }
   .studio-grid { display: flex; flex-direction: column; padding: 52px 22px 72px; }
@@ -74,6 +75,8 @@
   .preview-action { min-width: 28%; }
   .studio-footer { gap: 26px; }
   .connection-layout { display: block; }
+  .studio-account-card { align-items: flex-start; grid-template-columns: auto minmax(0, 1fr); padding: 13px 16px; }
+  .studio-account-card > button { grid-column: 1 / -1; justify-content: center; width: 100%; }
   .provider-list { border-bottom: 1px solid var(--line); border-right: 0; flex-direction: row; overflow-x: auto; }
   .provider-list button { flex: 0 0 145px; }
   .provider-detail { padding: 25px 19px; }

@@ -24,6 +24,14 @@
     padding-inline: 10px;
   }
 
+  .workspace-actions .workspace-account-action > span:last-child {
+    display: none;
+  }
+
+  .workspace-actions .workspace-account-action {
+    padding: 0 5px;
+  }
+
   .stage-toolbar button {
     min-width: 44px;
   }

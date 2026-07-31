@@ -66,7 +66,7 @@ export interface OidcProviderConfig {
 export interface OidcMemberIdentity {
   identity: string;
   issuedAt: number;
-  provider: "openrouter";
+  provider: "openrouter" | "google";
 }
 
 export interface OidcAuthorizationRequest {

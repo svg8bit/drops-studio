@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server.js";
 import {
   GUEST_IDENTITY_COOKIE,
+  resolveStudioAccount,
   resolveStudioProjectActor,
   STUDIO_ACCOUNT_COOKIE,
 } from "../../../lib/access-tier.ts";
+import { readStudioConnectionSecret } from "../../../db/studio-account-state.ts";
 import {
   ProjectRuntimeProviderError,
   ProjectRuntimeUnavailableError,
@@ -25,6 +27,7 @@ import type {
   BuilderAgentAuditSink,
   BuilderProjectRepository,
   BuilderProviderCredentials,
+  BuilderProviderSelection,
 } from "../../../lib/builder-agent/types.ts";
 import { BuilderModelUnavailableError } from "../../../lib/builder-agent/providers.ts";
 
@@ -233,6 +236,54 @@ export function builderCredentials(request: NextRequest): BuilderProviderCredent
     // request, not in process.env. Keep it request-scoped and pass it only to
     // the Gateway model resolver; it is never persisted, audited, or returned.
     gatewayToken: headerCredential(request, "x-vercel-oidc-token"),
+  };
+}
+
+export async function rememberedBuilderConnection(
+  request: NextRequest,
+  selection: BuilderProviderSelection,
+): Promise<{
+  credentials: BuilderProviderCredentials;
+  selection: BuilderProviderSelection;
+}> {
+  const credentials = builderCredentials(request);
+  if (
+    selection.provider === "free"
+    || selection.provider === "gateway"
+    || (selection.provider === "openrouter" && credentials.openRouterKey)
+    || (["openai", "anthropic", "kimi"].includes(selection.provider)
+      && credentials.apiKey)
+    || (selection.provider === "custom" && credentials.apiKey && selection.baseUrl)
+  ) {
+    return { credentials, selection };
+  }
+  const account = resolveStudioAccount(
+    request.cookies.get(STUDIO_ACCOUNT_COOKIE)?.value,
+  );
+  if (!account) return { credentials, selection };
+  const provider = selection.provider;
+  if (!["openai", "anthropic", "openrouter", "kimi", "custom"].includes(provider)) {
+    return { credentials, selection };
+  }
+  const remembered = await readStudioConnectionSecret(
+    account.identity,
+    provider as "openai" | "anthropic" | "openrouter" | "kimi" | "custom",
+  ).catch(() => null);
+  if (!remembered) return { credentials, selection };
+  return {
+    credentials: {
+      ...credentials,
+      ...(provider === "openrouter"
+        ? { openRouterKey: credentials.openRouterKey ?? remembered.credential }
+        : { apiKey: credentials.apiKey ?? remembered.credential }),
+    },
+    selection: {
+      ...selection,
+      ...(selection.model ? {} : remembered.model ? { model: remembered.model } : {}),
+      ...(provider === "custom" && !selection.baseUrl && remembered.endpoint
+        ? { baseUrl: remembered.endpoint }
+        : {}),
+    },
   };
 }
 

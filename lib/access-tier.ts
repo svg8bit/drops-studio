@@ -23,7 +23,7 @@ export const MEMBER_USAGE_COOKIE = "drops_member_builds";
 export type WorkingAccessTier = "guest" | "member" | "pro" | "fallback" | "byok";
 
 export interface StudioAccount {
-  provider: "openrouter";
+  provider: "openrouter" | "google";
   subject: string;
   identity: string;
   issuedAt: number;
@@ -210,7 +210,7 @@ export function createStudioAccountCookie(
   input: Pick<StudioAccount, "provider" | "subject"> & { issuedAt?: number },
   secret: string,
 ): string {
-  if (input.provider !== "openrouter" || !validAccountSubject(input.subject)) {
+  if (!(["openrouter", "google"] as const).includes(input.provider) || !validAccountSubject(input.subject)) {
     throw new Error("Invalid Studio account identity.");
   }
   const issuedAt = Math.floor(input.issuedAt ?? Date.now() / 1_000);
@@ -234,7 +234,12 @@ export function readStudioAccountCookie(value: string, secret: string, now = Dat
       s?: unknown;
       iat?: unknown;
     };
-    if (parsed.v !== 1 || parsed.p !== "openrouter" || typeof parsed.s !== "string" || !validAccountSubject(parsed.s)) return null;
+    if (
+      parsed.v !== 1
+      || (parsed.p !== "openrouter" && parsed.p !== "google")
+      || typeof parsed.s !== "string"
+      || !validAccountSubject(parsed.s)
+    ) return null;
     const issuedAt = Number(parsed.iat);
     const nowSeconds = Math.floor(now / 1_000);
     if (!Number.isSafeInteger(issuedAt) || issuedAt > nowSeconds + 300 || issuedAt < nowSeconds - 60 * 60 * 24 * 90) return null;

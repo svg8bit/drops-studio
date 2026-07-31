@@ -209,3 +209,26 @@ export async function saveMemberProjectToCloud(
   }
   return value.project as MemberProjectRecord;
 }
+
+export async function deleteMemberProjectFromCloud(
+  projectId: string,
+): Promise<void> {
+  const listing = await listMemberProjectsFromCloud();
+  const current = listing.projects.find((project) => project.id === projectId);
+  if (!current) return;
+  const response = await fetch("/api/projects", {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      id: projectId,
+      expectedRevision: current.revision,
+    }),
+  });
+  if (response.status === 404) return;
+  const value = await payload(response);
+  if (!response.ok) throw syncError(response, value);
+}

@@ -41,6 +41,19 @@ DROPS_GUEST_COOKIE_SECRET
 DROPS_ACCOUNT_COOKIE_SECRET
 ```
 
+Google OIDC account login additionally requires `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET`. The authorization flow uses PKCE, signed state, a
+bounded local return path, nonce verification, remote JWKS validation and an
+HttpOnly signed Studio session. It does not grant access to a user's Google
+data beyond the verified profile claims requested by the login flow.
+
+Account-scoped remembered connections use a separate 32+ byte
+`DROPS_CONNECTION_VAULT_KEY`. Each credential is encrypted with AES-256-GCM and
+account/provider authenticated data. The persisted record exposes only safe
+connection metadata; it cannot be decrypted by public project constructors and
+is never copied into Project V2, Sandbox environment, logs, checkpoints,
+published source or ZIP exports. Guests retain the existing session-only path.
+
 Production secrets must meet the implementation's minimum strength. A
 client-supplied guest ID, member ID, actor ID or project owner is not an
 authorization source.
