@@ -192,6 +192,14 @@ test("Project V2 accepts the browser-visible host behind a trusted same-origin p
   assert.equal((await response.json()).storageRevision, 1);
 });
 
+test("missing Project V2 reads return a successful empty receipt without a browser 404", async () => {
+  globalThis.__DROPS_STUDIO_LOCAL_PROJECT_V2__?.clear();
+  const { cookie } = guestSession();
+  const response = await getProjectV2(getRequest("browser-local-only-project", cookie));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { found: false });
+});
+
 test("Project V2 deletion fails closed and retains storage when Sandbox destroy fails", async () => {
   globalThis.__DROPS_STUDIO_LOCAL_PROJECT_V2__?.clear();
   globalThis.__DROPS_STUDIO_LOCAL_PROJECT_V2_RELEASE_RECEIPTS__?.clear();
