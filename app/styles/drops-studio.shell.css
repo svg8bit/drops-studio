@@ -9,7 +9,7 @@
   background: rgba(251, 253, 255, .88);
   border-bottom: 1px solid rgba(218, 227, 240, .8);
   display: flex;
-  height: 88px;
+  height: 72px;
   justify-content: space-between;
   padding: 0 max(32px, calc((100vw - 1500px) / 2));
   position: relative;

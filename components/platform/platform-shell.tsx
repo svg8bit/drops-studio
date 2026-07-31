@@ -53,10 +53,10 @@ export function PlatformShell({
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <Button render={<Link href="/?connections=1" />} variant="outline" className="hidden no-underline sm:inline-flex">
+            <Button nativeButton={false} render={<Link href="/?connections=1" />} variant="outline" className="hidden no-underline sm:inline-flex">
               Connections
             </Button>
-            <Button render={<Link href="/" />} className="no-underline">
+            <Button nativeButton={false} render={<Link href="/" />} className="no-underline">
               <Plus aria-hidden="true" />
               New project
             </Button>

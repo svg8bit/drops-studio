@@ -378,14 +378,16 @@ export function ProjectV2StudioSurface({
       const access = await responseJson<{
         access?: {
           authenticated?: boolean;
+          projectSync?: boolean;
           account?: { connected?: boolean; projectSync?: boolean };
         };
       }>(accessResponse);
       const cloudAvailable = Boolean(
         accessResponse.ok &&
-          access.access?.authenticated &&
-          access.access.account?.connected &&
-          access.access.account.projectSync,
+          (
+            access.access?.projectSync
+            ?? access.access?.account?.projectSync
+          ),
       );
       if (!cloudAvailable) {
         if (mounted.current) {
@@ -443,7 +445,7 @@ export function ProjectV2StudioSurface({
         if (!mounted.current || snapshot.persisted) return;
         setAgentState("idle");
         setAgentSummary(
-          "Browser-local editing is active. Configure private project storage or sign in before running Sandbox builds.",
+          "Browser-local editing is active. Private project storage is unavailable, so Sandbox builds stay disabled.",
         );
       }).catch((error) => {
         if (!mounted.current) return;

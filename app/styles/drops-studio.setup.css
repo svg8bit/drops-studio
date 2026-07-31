@@ -27,9 +27,11 @@
 .blueprint-boundary strong { color: #2c3c56; }
 .config-field { min-width: 0; }
 .config-field > span { color: #738096; display: block; font-size: 14px; font-weight: 780; letter-spacing: .08em; margin: 0 0 6px 2px; }
-.field-select { align-items: center; background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 10px; cursor: pointer; display: flex; font-size: 14px; font-weight: 610; gap: 6px; height: 44px; justify-content: space-between; max-width: 100%; min-width: 44px; padding: 0 11px; width: 100%; }
+.field-select-wrap { position: relative; }
+.field-select-wrap > svg { color: #60708c; height: 16px; pointer-events: none; position: absolute; right: 11px; top: 14px; width: 16px; }
+.field-select { appearance: none; align-items: center; background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 10px; color: #14213a; cursor: pointer; display: flex; font-family: inherit; font-size: 14px; font-weight: 610; gap: 6px; height: 44px; justify-content: space-between; max-width: 100%; min-width: 44px; padding: 0 36px 0 11px; width: 100%; }
 .field-select:hover { border-color: #b8caff; }
-.field-select > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-select:focus-visible { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(49, 108, 255, .16); outline: 0; }
 .select-content { animation: select-in .14s ease-out; background: white; border: 1px solid #dfe5ef; border-radius: 12px; box-shadow: 0 18px 45px rgba(28, 49, 87, .17); min-width: var(--radix-select-trigger-width); overflow: hidden; padding: 5px; z-index: 100; }
 @keyframes select-in { from { opacity: 0; transform: translateY(-4px); } }
 .select-item { align-items: center; border-radius: 8px; cursor: pointer; display: flex; font-size: 14px; justify-content: space-between; min-height: 44px; min-width: 44px; outline: 0; padding: 8px 10px; }

@@ -70,7 +70,7 @@ export function IntegrationCatalog() {
               <p className="mt-6 text-xs font-bold uppercase tracking-[0.12em] text-[#245fe5]">{integration.eyebrow}</p>
               <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]">{integration.name}</h2>
               <p className="mt-2 flex-1 text-sm leading-6 text-[#52617a]">{integration.description}</p>
-              <Button render={<Link href={integration.href} />} variant={status === "configured" || status === "working" ? "outline" : "default"} className="mt-5 w-full">
+              <Button nativeButton={false} render={<Link href={integration.href} />} variant={status === "configured" || status === "working" ? "outline" : "default"} className="mt-5 w-full">
                 {status === "configured" ? "Manage in Connections" : status === "working" ? "Open builder" : integration.id === "github" || integration.id === "vercel" ? "Open a project" : "Set up connection"}
               </Button>
             </article>

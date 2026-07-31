@@ -6,7 +6,9 @@ import {
   ProjectDataError,
   ProjectDataStore,
   authorizeProjectDataCapability,
+  createDurableProjectDataBackend,
   verifyProjectDataCapability,
+  type ProjectDataBackend,
   type ProjectDataCapabilityPayload,
   type ProjectDataPermission,
 } from "../../../lib/project-data/index.ts";
@@ -25,22 +27,30 @@ function json(payload: Record<string, unknown>, status = 200): NextResponse {
   return NextResponse.json(payload, { status, headers: NO_STORE_HEADERS });
 }
 
-function backend() {
+let backendPromise: Promise<ProjectDataBackend> | null = null;
+
+async function backend() {
   if (globalThis.__DROPS_STUDIO_PROJECT_DATA_BACKEND_V2__) {
     return globalThis.__DROPS_STUDIO_PROJECT_DATA_BACKEND_V2__;
   }
-  if (process.env.DROPS_STUDIO_LOCAL_PROJECT_DATA !== "1") {
+  backendPromise ??= (async () => {
+    const durable = await createDurableProjectDataBackend();
+    if (durable) return durable;
+    if (process.env.DROPS_STUDIO_LOCAL_PROJECT_DATA === "1") {
+      return new MemoryProjectDataBackend();
+    }
     throw new ProjectDataError(
       "storage_unavailable",
       "Project data storage is not configured. The generated app can continue with its labelled browser-local fallback.",
     );
-  }
-  globalThis.__DROPS_STUDIO_PROJECT_DATA_BACKEND_V2__ = new MemoryProjectDataBackend();
-  return globalThis.__DROPS_STUDIO_PROJECT_DATA_BACKEND_V2__;
+  })();
+  const resolved = await backendPromise;
+  globalThis.__DROPS_STUDIO_PROJECT_DATA_BACKEND_V2__ = resolved;
+  return resolved;
 }
 
-function store(): ProjectDataStore {
-  return new ProjectDataStore(backend());
+async function store(): Promise<ProjectDataStore> {
+  return new ProjectDataStore(await backend());
 }
 
 function bearer(request: NextRequest): string {
@@ -97,7 +107,20 @@ function requireSameOrigin(request: NextRequest): void {
   const origin = request.headers.get("origin");
   if (!origin) throw new ProjectDataError("forbidden", "A same-origin project data mutation is required.");
   try {
-    if (new URL(origin).origin !== request.nextUrl.origin) throw new Error("origin mismatch");
+    const host = request.headers.get("host")?.split(",")[0]?.trim();
+    const protocol =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().replace(/:$/, "")
+      || request.nextUrl.protocol.replace(/:$/, "");
+    const visibleOrigin = host
+      ? new URL(`${protocol}://${host}`).origin
+      : request.nextUrl.origin;
+    const parsedOrigin = new URL(origin).origin;
+    if (
+      parsedOrigin !== request.nextUrl.origin
+      && parsedOrigin !== visibleOrigin
+    ) {
+      throw new Error("origin mismatch");
+    }
   } catch {
     throw new ProjectDataError("forbidden", "Cross-origin project data mutation rejected.");
   }
@@ -170,12 +193,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     exactFields(query, ["projectId", "namespace", "id"]);
     const { projectId, namespace } = scope(authorization, query, "read");
     if (query.id) {
-      const document = await store().get(projectId, namespace, query.id);
+      const document = await (await store()).get(projectId, namespace, query.id);
       if (!document) throw new ProjectDataError("not_found", "Project data document was not found.");
-      return json({ document, persistence: backend().kind });
+      return json({ document, persistence: (await backend()).kind });
     }
-    const documents = await store().list(projectId, namespace);
-    return json({ documents, persistence: backend().kind });
+    const documents = await (await store()).list(projectId, namespace);
+    return json({ documents, persistence: (await backend()).kind });
   } catch (error) {
     return responseError(error);
   }
@@ -189,8 +212,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const input = await requestBody(request);
     exactFields(input, ["projectId", "namespace", "id", "data"]);
     const { projectId, namespace } = scope(authorization, input, "write");
-    const document = await store().create({ projectId, namespace, id: input.id, data: input.data });
-    return json({ document, persistence: backend().kind }, 201);
+    const document = await (await store()).create({ projectId, namespace, id: input.id, data: input.data });
+    return json({ document, persistence: (await backend()).kind }, 201);
   } catch (error) {
     return responseError(error);
   }
@@ -204,14 +227,14 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     const input = await requestBody(request);
     exactFields(input, ["projectId", "namespace", "id", "expectedRevision", "data"]);
     const { projectId, namespace } = scope(authorization, input, "write");
-    const document = await store().update({
+    const document = await (await store()).update({
       projectId,
       namespace,
       id: input.id,
       expectedRevision: input.expectedRevision,
       data: input.data,
     });
-    return json({ document, persistence: backend().kind });
+    return json({ document, persistence: (await backend()).kind });
   } catch (error) {
     return responseError(error);
   }
@@ -225,8 +248,8 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     const input = await requestBody(request);
     exactFields(input, ["projectId", "namespace", "id", "expectedRevision"]);
     const { projectId, namespace } = scope(authorization, input, "delete");
-    await store().delete(projectId, namespace, input.id, input.expectedRevision);
-    return json({ deleted: true, persistence: backend().kind });
+    await (await store()).delete(projectId, namespace, input.id, input.expectedRevision);
+    return json({ deleted: true, persistence: (await backend()).kind });
   } catch (error) {
     return responseError(error);
   }

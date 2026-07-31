@@ -446,3 +446,395 @@
 .preview-game-native > footer {
   justify-self: center;
 }
+
+.landing-studio-frame {
+  background: #fff;
+  border: 1px solid #dce5f1;
+  border-radius: 20px;
+  box-shadow: 0 28px 80px rgba(39, 75, 139, .16);
+  overflow: hidden;
+}
+
+.landing-studio-toolbar,
+.landing-studio-statusbar {
+  align-items: center;
+  background: rgba(255, 255, 255, .97);
+  display: flex;
+  justify-content: space-between;
+}
+
+.landing-studio-toolbar {
+  border-bottom: 1px solid #e4eaf3;
+  min-height: 58px;
+  padding: 8px 10px 8px 14px;
+}
+
+.landing-studio-toolbar > div,
+.landing-studio-actions,
+.landing-studio-toolbar button,
+.landing-copilot-title,
+.landing-copilot-card,
+.landing-studio-copilot > button,
+.landing-studio-statusbar span {
+  align-items: center;
+  display: flex;
+}
+
+.landing-studio-toolbar > div:first-child {
+  gap: 8px;
+  min-width: 0;
+}
+
+.landing-studio-toolbar strong {
+  color: #0b1b38;
+  font-size: 13px;
+  letter-spacing: -.02em;
+}
+
+.landing-studio-toolbar b {
+  color: #33435d;
+  font-size: 12px;
+  font-weight: 650;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-studio-toolbar > div:first-child > span {
+  color: #a6b2c4;
+}
+
+.landing-studio-actions {
+  gap: 7px;
+}
+
+.landing-studio-toolbar button {
+  background: #fff;
+  border: 1px solid #dce4ef;
+  border-radius: 9px;
+  color: #31415b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 720;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 11px;
+}
+
+.landing-studio-toolbar button:hover {
+  background: #f7faff;
+  border-color: #aec5fb;
+  color: #245fe5;
+}
+
+.landing-studio-toolbar button.primary {
+  background: #245fe5;
+  border-color: #245fe5;
+  box-shadow: 0 8px 20px rgba(36, 95, 229, .24);
+  color: #fff;
+}
+
+.landing-studio-toolbar button.primary:hover {
+  background: #194dca;
+  border-color: #194dca;
+}
+
+.landing-studio-toolbar button svg,
+.landing-studio-copilot > button svg,
+.landing-studio-statusbar svg {
+  height: 14px;
+  width: 14px;
+}
+
+.landing-studio-body {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) 190px;
+  min-height: 510px;
+}
+
+.landing-studio-rail {
+  background: #fbfdff;
+  border-right: 1px solid #e4eaf3;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 8px;
+}
+
+.landing-studio-rail span {
+  align-items: center;
+  border-radius: 8px;
+  color: #627089;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 670;
+  gap: 4px;
+  justify-content: center;
+  min-height: 52px;
+  text-align: center;
+}
+
+.landing-studio-rail span.active {
+  background: #eaf2ff;
+  color: #245fe5;
+}
+
+.landing-studio-rail svg {
+  height: 16px;
+  width: 16px;
+}
+
+.landing-studio-main {
+  background: #f4f8ff;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.landing-studio-address {
+  align-items: center;
+  background: #fff;
+  border-bottom: 1px solid #e4eaf3;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.landing-studio-address span {
+  align-items: center;
+  background: #edf8f3;
+  border-radius: 99px;
+  color: #087449;
+  display: flex;
+  font-size: 12px;
+  font-weight: 750;
+  gap: 5px;
+  padding: 4px 8px;
+}
+
+.landing-studio-address span i {
+  background: #20b879;
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+
+.landing-studio-address b {
+  background: #f7f9fc;
+  border: 1px solid #e3e9f1;
+  border-radius: 7px;
+  color: #637189;
+  font-size: 12px;
+  font-weight: 520;
+  overflow: hidden;
+  padding: 5px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-studio-address > svg {
+  color: #718099;
+  height: 16px;
+  width: 16px;
+}
+
+.landing-studio-main > .preview-device {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  height: 466px;
+  min-height: 0;
+}
+
+.landing-studio-main > .preview-device::before {
+  inset-block-start: 72px;
+}
+
+.landing-studio-main .preview-device-header {
+  height: 68px;
+  padding: 0 15px;
+}
+
+.landing-studio-main .preview-stage {
+  min-height: 348px;
+  padding: 18px 12px 14px;
+}
+
+.landing-studio-main .telegram-native .preview-stage {
+  min-height: 340px;
+  padding: 18px 16px 12px;
+}
+
+.landing-studio-main .telegram-native .telegram-card {
+  border-radius: 16px;
+  padding: 18px;
+}
+
+.landing-studio-main .game-native .preview-stage,
+.landing-studio-main .catcher-game {
+  height: 398px;
+  min-height: 398px;
+}
+
+.landing-studio-copilot {
+  background: #fbfdff;
+  border-left: 1px solid #e4eaf3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 15px 12px;
+}
+
+.landing-copilot-title {
+  color: #142545;
+  gap: 7px;
+}
+
+.landing-copilot-title > svg {
+  color: #245fe5;
+  height: 17px;
+  width: 17px;
+}
+
+.landing-copilot-title strong {
+  font-size: 13px;
+}
+
+.landing-copilot-title span {
+  background: #edf3ff;
+  border-radius: 99px;
+  color: #245fe5;
+  font-size: 12px;
+  margin-left: auto;
+  padding: 3px 6px;
+}
+
+.landing-studio-copilot > p {
+  color: #65738a;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 2px 0 4px;
+}
+
+.landing-copilot-card {
+  background: #fff;
+  border: 1px solid #e1e8f3;
+  border-radius: 11px;
+  gap: 8px;
+  padding: 10px;
+}
+
+.landing-copilot-card > svg {
+  color: #245fe5;
+  flex: 0 0 auto;
+  height: 16px;
+  width: 16px;
+}
+
+.landing-copilot-card strong,
+.landing-copilot-card span {
+  display: block;
+}
+
+.landing-copilot-card strong {
+  color: #273850;
+  font-size: 12px;
+}
+
+.landing-copilot-card span {
+  color: #637189;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+
+.landing-studio-copilot > button {
+  background: #edf3ff;
+  border: 1px solid #cadbff;
+  border-radius: 10px;
+  color: #245fe5;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 740;
+  gap: 6px;
+  justify-content: center;
+  margin-top: auto;
+  min-height: 44px;
+  padding: 0 9px;
+}
+
+.landing-studio-copilot > button svg:last-child {
+  margin-left: auto;
+}
+
+.landing-studio-statusbar {
+  border-top: 1px solid #e4eaf3;
+  color: #65738a;
+  font-size: 12px;
+  gap: 10px;
+  min-height: 40px;
+  padding: 7px 13px;
+}
+
+.landing-studio-statusbar span {
+  gap: 5px;
+}
+
+.landing-studio-statusbar span:first-child {
+  color: #087449;
+}
+
+@media (max-width: 1260px) {
+  .landing-studio-body {
+    grid-template-columns: 70px minmax(0, 1fr);
+  }
+
+  .landing-studio-copilot {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .landing-studio-body {
+    grid-template-columns: 82px minmax(0, 1fr) 190px;
+  }
+
+  .landing-studio-copilot {
+    display: flex;
+  }
+}
+
+@media (max-width: 700px) {
+  .landing-studio-toolbar {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .landing-studio-toolbar > div:first-child > span,
+  .landing-studio-toolbar > div:first-child > b,
+  .landing-studio-actions button:first-child,
+  .landing-studio-rail,
+  .landing-studio-copilot,
+  .landing-studio-statusbar span:not(:first-child) {
+    display: none;
+  }
+
+  .landing-studio-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .landing-studio-toolbar button {
+    padding-inline: 9px;
+  }
+
+  .landing-studio-toolbar button.primary {
+    font-size: 12px;
+  }
+
+  .landing-studio-statusbar {
+    justify-content: center;
+  }
+}

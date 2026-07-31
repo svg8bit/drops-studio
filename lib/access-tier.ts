@@ -357,6 +357,7 @@ export function accessMetadata(input: {
   return {
     tier: input.tier,
     authenticated,
+    projectSync: Boolean(input.projectSyncAvailable),
     platformAi: usesPlatformAi
       ? { available: true, limit, remaining, reset: "daily-utc" as const }
       : { available: false, limit: null, remaining: null, reset: null },
@@ -377,12 +378,14 @@ export function accessMetadata(input: {
             ? "Private cloud project sync is configured. Compiled HTML and model keys remain outside cloud storage."
             : "Member AI access is active. Projects remain browser-local while private cloud storage is unavailable.",
         }
-      : {
+        : {
           available: true,
           connected: false,
           provider: "openrouter" as const,
           projectSync: false,
-          note: "Continue with OpenRouter to unlock the signed-in daily AI allowance. API keys remain session-only.",
+          note: input.projectSyncAvailable
+            ? "Guest projects use actor-owned private storage for isolated builds. Continue with OpenRouter only when you want signed-in account sync."
+            : "Continue with OpenRouter to unlock the signed-in daily AI allowance. API keys remain session-only.",
         },
     pro: input.tier === "pro"
       ? {

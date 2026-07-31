@@ -6,15 +6,27 @@ import Image from "next/image";
 import {
   ArrowLeft,
   ArrowRight,
+  Blocks,
   Clock3,
+  Code2,
+  Database,
   Eye,
   ExternalLink,
+  FileCode2,
+  Folder,
   Flame,
+  Link2,
+  ListChecks,
+  Monitor,
   MoreVertical,
   Rocket,
+  Share2,
   ShieldCheck,
+  Sparkles,
+  TestTube2,
   ThumbsUp,
   TrendingUp,
+  Workflow,
 } from "lucide-react";
 import type { Preset } from "@/lib/presets";
 import type { GeneratedProjectSpec } from "@/lib/project-types";
@@ -281,54 +293,137 @@ export function PreviewCanvas({ preset, spec, values, market, dataMode, predicti
         <span className="preview-ready"><Eye size={17} /> {spec ? "Product plan" : preset.shortTitle} · Concept preview</span>
         <span className={`data-mode ${dataMode}`}><i /> {dataMode === "live" ? "Live DropsTab data" : "Sample data"}</span>
       </div>
-      <div className={`preview-device ${surface}`} style={{ "--preview-accent": preset.accent, "--preview-tint": preset.tint } as React.CSSProperties}>
-        <div className="preview-device-header">
-          {isTelegram && <span className="telegram-back" aria-hidden="true"><ArrowLeft /></span>}
-          <div className={`preview-brand-mark ${isTelegram ? "drops-bot" : "dropstab"}`}>
+      <div className="landing-studio-frame">
+        <div className="landing-studio-toolbar">
+          <div>
             <Image
-              src={isTelegram ? "/brand/drops-bot-avatar.png" : "/brand/dropstab-mark.svg"}
-              alt={isTelegram ? "Drops Bot" : "DropsTab"}
-              width={32}
-              height={32}
+              src="/brand/dropstab-mark.svg"
+              alt=""
+              width={22}
+              height={22}
               unoptimized
             />
+            <strong>Drops Studio</strong>
+            <span>/</span>
+            <b>{visibleName}</b>
           </div>
-          <div className="preview-profile">
-            <strong>{visibleName}</strong>
-            <span>{isTelegram ? telegramStatus : isGame ? "Playable local build · market-data adapter" : spec?.tagline ?? "Built with Drops Studio"}</span>
-          </div>
-          <MoreVertical className="preview-options" aria-hidden="true" />
-        </div>
-        {!isTelegram && !isGame && spec && (
-          <div
-            aria-label="Product preview screens"
-            className="native-screen-tabs"
-            role="region"
-            tabIndex={0}
-          >
-            {spec.blueprint.screens.slice(0, 4).map((screen, index) => (
-              <span className={index === 0 ? "active" : ""} key={`${screen}-${index}`}>
-                {screen}
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="preview-stage">{content}</div>
-        {isTelegram && (
-          <div className="preview-reactions" aria-label="Telegram post preview footer">
-            <span><Flame size={16} /> —</span>
-            <span><ThumbsUp size={16} /> —</span>
-            <span><Eye size={16} /> Preview</span>
-            <button
-              aria-label="Preview Telegram share action"
-              className="telegram-share-preview"
-              onClick={() => onAction("SHARE PREVIEW")}
-              type="button"
-            >
-              <ArrowRight size={18} />
+          <div className="landing-studio-actions">
+            <button type="button" onClick={() => onAction("SHARE")}>
+              <Share2 aria-hidden="true" /> Share
+            </button>
+            <button className="primary" type="button" onClick={() => onAction("BUILD PROJECT")}>
+              <Rocket aria-hidden="true" /> Build project
             </button>
           </div>
-        )}
+        </div>
+        <div className="landing-studio-body">
+          <nav className="landing-studio-rail" aria-label="Concept workspace sections">
+            <span className="active"><Monitor aria-hidden="true" /> Studio</span>
+            <span><Database aria-hidden="true" /> Data</span>
+            <span><Link2 aria-hidden="true" /> Connect</span>
+            <span><Workflow aria-hidden="true" /> Logic</span>
+            <span><TestTube2 aria-hidden="true" /> Test</span>
+          </nav>
+          <div className="landing-studio-main">
+            <div className="landing-studio-address">
+              <span><i /> Preview</span>
+              <b>{spec ? `${spec.slug}.preview` : "Build to create a live Sandbox URL"}</b>
+              <Monitor aria-hidden="true" />
+            </div>
+            <div className={`preview-device ${surface}`} style={{ "--preview-accent": preset.accent, "--preview-tint": preset.tint } as React.CSSProperties}>
+              <div className="preview-device-header">
+                {isTelegram && <span className="telegram-back" aria-hidden="true"><ArrowLeft /></span>}
+                <div className={`preview-brand-mark ${isTelegram ? "drops-bot" : "dropstab"}`}>
+                  <Image
+                    src={isTelegram ? "/brand/drops-bot-avatar.png" : "/brand/dropstab-mark.svg"}
+                    alt={isTelegram ? "Drops Bot" : "DropsTab"}
+                    width={32}
+                    height={32}
+                    unoptimized
+                  />
+                </div>
+                <div className="preview-profile">
+                  <strong>{visibleName}</strong>
+                  <span>{isTelegram ? telegramStatus : isGame ? "Playable local build · market-data adapter" : spec?.tagline ?? "Built with Drops Studio"}</span>
+                </div>
+                <MoreVertical className="preview-options" aria-hidden="true" />
+              </div>
+              {!isTelegram && !isGame && spec && (
+                <div
+                  aria-label="Product preview screens"
+                  className="native-screen-tabs"
+                  role="region"
+                  tabIndex={0}
+                >
+                  {spec.blueprint.screens.slice(0, 4).map((screen, index) => (
+                    <span className={index === 0 ? "active" : ""} key={`${screen}-${index}`}>
+                      {screen}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="preview-stage">{content}</div>
+              {isTelegram && (
+                <div className="preview-reactions" aria-label="Telegram post preview footer">
+                  <span><Flame size={16} /> —</span>
+                  <span><ThumbsUp size={16} /> —</span>
+                  <span><Eye size={16} /> Preview</span>
+                  <button
+                    aria-label="Preview Telegram share action"
+                    className="telegram-share-preview"
+                    onClick={() => onAction("SHARE PREVIEW")}
+                    type="button"
+                  >
+                    <ArrowRight size={18} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          <aside className="landing-studio-copilot" aria-label="Current build plan">
+            <div className="landing-copilot-title">
+              <Sparkles aria-hidden="true" />
+              <strong>AI Director</strong>
+              <span>{spec ? "Plan ready" : "Template mode"}</span>
+            </div>
+            <p>
+              {spec
+                ? `Your ${spec.blueprint.productType} plan is editable before the isolated build starts.`
+                : `Start with ${preset.shortTitle}, or describe a different crypto product.`}
+            </p>
+            <div className="landing-copilot-card">
+              <ListChecks aria-hidden="true" />
+              <div>
+                <strong>{spec ? `${spec.blueprint.screens.length} planned screens` : "Plan before build"}</strong>
+                <span>{spec ? `${spec.blueprint.interactions.length} interactions` : "Review screens, logic and connections."}</span>
+              </div>
+            </div>
+            <div className="landing-copilot-card">
+              <Folder aria-hidden="true" />
+              <div>
+                <strong>Editable source</strong>
+                <span>Next.js, React, TypeScript and tests.</span>
+              </div>
+            </div>
+            <div className="landing-copilot-card">
+              <Blocks aria-hidden="true" />
+              <div>
+                <strong>Drops-native</strong>
+                <span>DropsTab intelligence and approved delivery.</span>
+              </div>
+            </div>
+            <button type="button" onClick={() => onAction("EDIT PLAN")}>
+              <Code2 aria-hidden="true" />
+              {spec ? "Review this plan" : "Create an editable plan"}
+              <FileCode2 aria-hidden="true" />
+            </button>
+          </aside>
+        </div>
+        <div className="landing-studio-statusbar">
+          <span><ShieldCheck aria-hidden="true" /> No external action without approval</span>
+          <span>{dataMode === "live" ? "DropsTab receipt verified" : "Sample data is labelled"}</span>
+          <span>Sandbox starts after Build</span>
+        </div>
       </div>
       {preset.preview === "channel" ? (
         <aside

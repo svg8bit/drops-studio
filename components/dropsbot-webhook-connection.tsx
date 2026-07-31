@@ -263,7 +263,7 @@ export function DropsBotWebhookConnection({
                 <Copy data-icon="inline-start" aria-hidden="true" />
                 Copy callback
               </Button>
-              <Button type="button" variant="outline" size="sm" render={<a href="https://t.me/Drops" target="_blank" rel="noreferrer" />}>
+              <Button nativeButton={false} variant="outline" size="sm" render={<a href="https://t.me/Drops" target="_blank" rel="noreferrer" />}>
                 <ExternalLink data-icon="inline-start" aria-hidden="true" />
                 Open official @drops
               </Button>

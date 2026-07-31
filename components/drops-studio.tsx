@@ -124,6 +124,7 @@ interface BuildActivityItem {
 interface StudioAccessStatus {
   tier?: string;
   authenticated?: boolean;
+  projectSync?: boolean;
   platformAi?: { available?: boolean; remaining?: number | null };
   account?: { connected?: boolean; projectSync?: boolean };
 }
@@ -448,15 +449,16 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   );
   const applyAccessStatus = useCallback((access: StudioAccessStatus) => {
     const signedIn = Boolean(access.authenticated && access.account?.connected);
+    const projectSync = Boolean(
+      access.projectSync ?? access.account?.projectSync,
+    );
     const available = access.platformAi?.available === true;
     const reportedRemaining = access.platformAi?.remaining;
     const remaining = available && Number.isSafeInteger(reportedRemaining) && Number(reportedRemaining) >= 0
       ? Number(reportedRemaining)
       : null;
     setMemberConnected(signedIn);
-    setProjectSyncAvailable(
-      Boolean(signedIn && access.account?.projectSync),
-    );
+    setProjectSyncAvailable(projectSync);
     setPlatformAiAvailable(available);
     setGuestRemaining(remaining);
     setPlanLabel(
@@ -472,7 +474,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       authenticated: signedIn,
       available,
       remaining,
-      projectSync: Boolean(signedIn && access.account?.projectSync),
+      projectSync,
     };
   }, []);
 
@@ -593,7 +595,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         if (accessResponse.ok && accessPayload.access) {
           hydratedAccess = accessPayload.access;
           const accessState = applyAccessStatus(hydratedAccess);
-          if (accessState.projectSync) {
+          if (accessState.authenticated && accessState.projectSync) {
             try {
               const cloud = await listMemberProjectsFromCloud();
               for (const record of cloud.projects) {
@@ -1600,16 +1602,34 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         );
       }
       let builderSnapshotSaved = false;
-      if (projectSyncAvailable) {
-        try {
+      try {
+        // /api/access creates and signs the anonymous actor cookie when this
+        // is a first-visit build. Project V2 storage remains private and
+        // actor-scoped for guests as well as signed-in members.
+        const accessResponse = await fetch("/api/access", {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        const accessPayload = (await accessResponse.json()) as {
+          access?: StudioAccessStatus;
+        };
+        const privateProjectStorageAvailable = Boolean(
+          accessResponse.ok
+          && (
+            accessPayload.access?.projectSync
+            ?? accessPayload.access?.account?.projectSync
+          ),
+        );
+        if (privateProjectStorageAvailable) {
           await saveProjectV2ToCloud(projectV2, 0);
           builderSnapshotSaved = true;
-        } catch {
-          builderSnapshotSaved = false;
         }
+      } catch {
+        builderSnapshotSaved = false;
       }
       let cloudSaved = false;
-      if (projectSyncAvailable) {
+      if (memberConnected && projectSyncAvailable) {
         try {
           await saveMemberProjectToCloud(project, 0);
           cloudSaved = builderSnapshotSaved;
@@ -1681,6 +1701,23 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   }
 
   async function handlePreviewAction(label: string) {
+    if (label === "BUILD PROJECT") {
+      await runPrompt("build");
+      return;
+    }
+    if (label === "EDIT PLAN") {
+      if (!prompt.trim()) {
+        document
+          .querySelector<HTMLTextAreaElement>(
+            'textarea[aria-label="Describe your crypto project"]',
+          )
+          ?.focus();
+        setToast("Describe your product, then create an editable plan.");
+        return;
+      }
+      await runPrompt("plan");
+      return;
+    }
     if (/OPEN IN DROPSTAB|SHOW THE DATA|VIEW [A-Z]+/.test(label)) {
       window.open("https://dropstab.com/", "_blank", "noopener,noreferrer");
       return;
@@ -1760,95 +1797,97 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
 
       <div className="studio-grid">
         <section className="builder-column">
-          {hero}
+          <div className="builder-primary">
+            {hero}
 
-          <div className="prompt-frame">
-            <div className="prompt-box">
-              <WandSparkles size={22} />
-              <textarea
-                value={prompt}
-                onChange={(event) => {
-                  setPrompt(event.target.value);
-                  if (
-                    draftSpec &&
-                    event.target.value.trim() !== draftSpec.prompt.trim()
-                  )
-                    setDraftSpec(null);
-                }}
-                onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter")
-                    void runPrompt("build");
-                }}
-                placeholder="Describe the full product: output, users, behavior, design and data…"
-                rows={2}
-                aria-label="Describe your crypto project"
-              />
-              <button
-                className="prompt-build-button"
-                type="button"
-                onClick={() => void runPrompt("build")}
-                disabled={planning || building}
-                aria-label="Build now"
-              >
-                {planning || building ? (
-                  <LoaderCircle className="spin" />
-                ) : (
-                  <Rocket />
-                )}
-                <span>
-                  {building ? "Building…" : planning ? "Planning…" : "Build now"}
-                </span>
-              </button>
-            </div>
-            <div className="prompt-runbar">
-              <button
-                className="prompt-plan-button"
-                type="button"
-                onClick={() => void runPrompt("plan")}
-                disabled={planning || building}
-              >
-                <WandSparkles /> Plan
-              </button>
-              <span>
-                Your requested product comes first. Build it now, or review its
-                screens and actions.
-              </span>
-            </div>
-            <div className="prompt-meta">
-              <span>{planLabel}</span>
-              <span>
-                {activeBrain === "free"
-                  ? platformAiAvailable && guestRemaining !== null
-                    ? `${guestRemaining} ${memberConnected ? "signed-in" : "guest"} AI builds left today`
-                    : "Local build available"
-                  : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}
-              </span>
-            </div>
-          </div>
-
-          {buildActivity.length > 0 && (
-            <div className="build-activity" aria-live="polite">
-              {buildActivity.map((item) => (
-                <div className={item.status} key={item.id}>
+            <div className="prompt-frame">
+              <div className="prompt-box">
+                <WandSparkles size={22} />
+                <textarea
+                  value={prompt}
+                  onChange={(event) => {
+                    setPrompt(event.target.value);
+                    if (
+                      draftSpec &&
+                      event.target.value.trim() !== draftSpec.prompt.trim()
+                    )
+                      setDraftSpec(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter")
+                      void runPrompt("build");
+                  }}
+                  placeholder="Describe the full product: output, users, behavior, design and data…"
+                  rows={2}
+                  aria-label="Describe your crypto project"
+                />
+                <button
+                  className="prompt-build-button"
+                  type="button"
+                  onClick={() => void runPrompt("build")}
+                  disabled={planning || building}
+                  aria-label="Build now"
+                >
+                  {planning || building ? (
+                    <LoaderCircle className="spin" />
+                  ) : (
+                    <Rocket />
+                  )}
                   <span>
-                    {item.status === "done" ? (
-                      <Check />
-                    ) : item.status === "active" ? (
-                      <LoaderCircle className="spin" />
-                    ) : item.status === "failed" ? (
-                      <X />
-                    ) : (
-                      <i />
-                    )}
+                    {building ? "Building…" : planning ? "Planning…" : "Build now"}
                   </span>
-                  <div>
-                    <strong>{item.label}</strong>
-                    <small>{item.detail}</small>
-                  </div>
-                </div>
-              ))}
+                </button>
+              </div>
+              <div className="prompt-runbar">
+                <button
+                  className="prompt-plan-button"
+                  type="button"
+                  onClick={() => void runPrompt("plan")}
+                  disabled={planning || building}
+                >
+                  <WandSparkles /> Plan
+                </button>
+                <span>
+                  Your requested product comes first. Build it now, or review its
+                  screens and actions.
+                </span>
+              </div>
+              <div className="prompt-meta">
+                <span>{planLabel}</span>
+                <span>
+                  {activeBrain === "free"
+                    ? platformAiAvailable && guestRemaining !== null
+                      ? `${guestRemaining} ${memberConnected ? "signed-in" : "guest"} AI builds left today`
+                      : "Local build available"
+                    : `${providerList.find((item) => item.id === activeBrain)?.name ?? "BYOK"} · your budget`}
+                </span>
+              </div>
             </div>
-          )}
+
+            {buildActivity.length > 0 && (
+              <div className="build-activity" aria-live="polite">
+                {buildActivity.map((item) => (
+                  <div className={item.status} key={item.id}>
+                    <span>
+                      {item.status === "done" ? (
+                        <Check />
+                      ) : item.status === "active" ? (
+                        <LoaderCircle className="spin" />
+                      ) : item.status === "failed" ? (
+                        <X />
+                      ) : (
+                        <i />
+                      )}
+                    </span>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <section className="preset-section" aria-labelledby="preset-title">
             <div className="section-heading">

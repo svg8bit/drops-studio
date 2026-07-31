@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test"
 
 import {
   expect,
+  expectNoHorizontalOverflow,
   installRuntimeGuards,
   prepareHomePage,
   test,
@@ -171,4 +172,55 @@ test("home exposes Build now as the visible primary action and Plan as secondary
   ).toBe("Build now")
   expect(semantics.width).toBeGreaterThan(44)
   expect(semantics.height).toBeGreaterThanOrEqual(44)
+})
+
+test("desktop builder columns stay continuous across the 1160px breakpoint", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-1440")
+
+  await prepareHomePage(page)
+  const samples: Array<{
+    width: number
+    builderWidth: number
+    previewWidth: number
+    gap: number
+  }> = []
+
+  for (const width of [1160, 1161, 1168]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        }),
+    )
+    await expectNoHorizontalOverflow(page)
+    samples.push(
+      await page.locator(".studio-grid").evaluate((grid, viewportWidth) => {
+        const builder = grid.querySelector<HTMLElement>(".builder-primary")
+        const preview = grid.querySelector<HTMLElement>(".preview-column")
+        if (!builder || !preview) throw new Error("Desktop builder columns are missing")
+        const builderRect = builder.getBoundingClientRect()
+        const previewRect = preview.getBoundingClientRect()
+        if (previewRect.right > viewportWidth + 1) {
+          throw new Error("Preview column escaped the viewport")
+        }
+        return {
+          width: viewportWidth,
+          builderWidth: builderRect.width,
+          previewWidth: previewRect.width,
+          gap: previewRect.left - builderRect.right,
+        }
+      }, width),
+    )
+  }
+
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1]
+    const current = samples[index]
+    expect(Math.abs(current.builderWidth - previous.builderWidth)).toBeLessThan(8)
+    expect(Math.abs(current.previewWidth - previous.previewWidth)).toBeLessThan(8)
+    expect(Math.abs(current.gap - previous.gap)).toBeLessThan(8)
+  }
 })

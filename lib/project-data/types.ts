@@ -83,7 +83,11 @@ export interface ProjectDataProjectSnapshot {
 }
 
 export interface ProjectDataBackend {
-  readonly kind: "memory-local-fallback" | "browser-local-fallback" | "durable-adapter";
+  readonly kind:
+    | "memory-local-fallback"
+    | "browser-local-fallback"
+    | "vercel-blob-private"
+    | "neon-postgres";
   read(projectId: string): Promise<ProjectDataProjectSnapshot | null>;
   compareAndSwap(
     projectId: string,

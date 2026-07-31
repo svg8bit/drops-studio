@@ -58,7 +58,7 @@ function PresetCard({ preset }: { preset: Preset }) {
         <div className="mt-5 flex flex-wrap gap-2">
           {preset.tools.slice(0, 3).map((tool) => <span key={tool} className="rounded-full border border-[#e1e8f3] bg-[#f8fbff] px-2.5 py-1 text-xs text-[#596980]">{tool}</span>)}
         </div>
-        <Button render={<Link href={`/?preset=${encodeURIComponent(preset.id)}`} />} className="mt-5 w-full">
+        <Button nativeButton={false} render={<Link href={`/?preset=${encodeURIComponent(preset.id)}`} />} className="mt-5 w-full">
           Open in builder <ArrowRight aria-hidden="true" />
         </Button>
       </div>
@@ -84,12 +84,12 @@ export function TemplateCatalog() {
       <div className="rounded-2xl border border-[#dbe4f1] bg-white p-3 shadow-[0_10px_32px_rgba(49,84,144,0.055)]">
         <div className="relative"><Search className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-[#52617a]" aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-12 pl-12" placeholder="Search all 12 crypto recipes" aria-label="Search templates" /></div>
         <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1" role="group" aria-label="Template categories">
-          {categories.map((item) => <button key={item} type="button" onClick={() => setCategory(item)} aria-pressed={category === item} className={`min-h-11 shrink-0 rounded-xl border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#316cff]/30 ${category === item ? "border-[#316cff] bg-[#316cff] text-white" : "border-[#dbe4f1] bg-white text-[#52617a] hover:bg-[#f1f6ff]"}`}>{item}</button>)}
+          {categories.map((item) => <button key={item} type="button" onClick={() => setCategory(item)} aria-pressed={category === item} className={`min-h-11 shrink-0 rounded-xl border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#316cff]/30 ${category === item ? "border-[#245fe5] bg-[#245fe5] text-white" : "border-[#dbe4f1] bg-white text-[#52617a] hover:bg-[#f1f6ff]"}`}>{item}</button>)}
         </div>
       </div>
 
       <div className="mt-7 flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-[#245fe5]">Category-native starters</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.035em]">{visible.length} proven foundations</h2></div><p className="hidden max-w-md text-right text-sm leading-6 text-[#52617a] md:block">Every card comes from the current production recipe catalog. No generic placeholder templates are added.</p></div>
-      {visible.length ? <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visible.map((preset) => <PresetCard key={preset.id} preset={preset} />)}</div> : <div className="mt-5 rounded-2xl border border-dashed border-[#b9ccff] bg-white px-6 py-16 text-center"><h2 className="text-xl font-semibold">No matching recipe</h2><p className="mt-2 text-sm text-[#52617a]">Try another search or open the blank-canvas builder.</p><Button render={<Link href="/" />} variant="outline" className="mt-5">Open custom builder</Button></div>}
+      {visible.length ? <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visible.map((preset) => <PresetCard key={preset.id} preset={preset} />)}</div> : <div className="mt-5 rounded-2xl border border-dashed border-[#b9ccff] bg-white px-6 py-16 text-center"><h2 className="text-xl font-semibold">No matching recipe</h2><p className="mt-2 text-sm text-[#52617a]">Try another search or open the blank-canvas builder.</p><Button nativeButton={false} render={<Link href="/" />} variant="outline" className="mt-5">Open custom builder</Button></div>}
     </section>
   );
 }

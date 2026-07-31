@@ -62,7 +62,7 @@ export function ProjectV2AgentIntelligence({ trace }: ProjectV2AgentIntelligence
         <section className={`${styles.card} ${styles.traceEmpty}`}>
           <BrainCircuit aria-hidden="true" />
           <div><h2>No real run evidence attached</h2><p>Start a Project V2 agent build to attach routing, retrieval, role, AutoFix, Sandbox, browser, and Verifier receipts. Static registry evidence above is never substituted for execution.</p></div>
-          <Button render={<Link href="/internal/agent-evals" />} variant="outline">
+          <Button nativeButton={false} render={<Link href="/internal/agent-evals" />} variant="outline">
             <ExternalLink aria-hidden="true" />Open eval control room
           </Button>
         </section>
@@ -130,7 +130,7 @@ export function ProjectV2AgentIntelligence({ trace }: ProjectV2AgentIntelligence
             {trace.findings.length ? <ul className={styles.findings}>{trace.findings.map((finding) => (
               <li key={finding.findingId}><Badge variant={finding.blocksVerification ? "destructive" : "outline"}>{finding.severity}</Badge><span><strong>{finding.title}</strong><small>{finding.category}</small></span></li>
             ))}</ul> : <p className={styles.missing}>No structured QA, Security, Verifier, or release-gate findings.</p>}
-            <Button render={<Link href="/internal/agent-evals" />} variant="outline">
+            <Button nativeButton={false} render={<Link href="/internal/agent-evals" />} variant="outline">
               <ExternalLink aria-hidden="true" />Open full eval dashboard
             </Button>
           </section>
