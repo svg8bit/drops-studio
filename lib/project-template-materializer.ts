@@ -23,6 +23,7 @@ import {
   PROJECT_TEMPLATE_GLOBAL_CSS,
   projectTemplateComponentSource,
 } from "./project-template-ui.ts";
+import { projectManagedTemplate } from "./project-template-managed.ts";
 
 interface CategoryTemplate {
   eyebrow: string;
@@ -192,15 +193,18 @@ function sourceFiles(spec: GeneratedProjectSpec): Array<{
   role?: ProjectFileRoleV2;
 }> {
   const category = categories[spec.presetId];
+  const managed = projectManagedTemplate(spec);
   const integrationManifest: ProjectIntegrationManifestV2[] = [
     { id: "dropstab", kind: "dropstab", status: "demo", capabilities: ["coins"], proxyPath: "/api/capabilities/dropstab", providerEvidenceRequired: true },
     { id: "drops-bot", kind: "drops-bot", status: "setup-required", capabilities: ["wallet-events", "alerts", "webhooks"], proxyPath: "/api/capabilities/drops-bot", providerEvidenceRequired: true },
     { id: "telegram", kind: "telegram", status: "setup-required", capabilities: ["approved-delivery"], proxyPath: "/api/capabilities/telegram", providerEvidenceRequired: true },
     { id: "project-data", kind: "project-data", status: "setup-required", capabilities: ["demo-documents", "event-inbox"], proxyPath: "/api/project-data", providerEvidenceRequired: true },
+    ...(managed.integration ? [managed.integration] : []),
   ];
   const environment = [
     { name: "DROPSTAB_API_KEY", description: "Optional server-side DropsTab credential.", required: false, secret: true, scope: "runtime" },
     { name: "DROPS_BOT_WEBHOOK_SECRET", description: "Optional server-side webhook verification secret.", required: false, secret: true, scope: "runtime" },
+    ...managed.environment,
   ];
   return [
     { path: "package.json", content: json({ ...packageManifest, name: spec.slug }), language: "json", role: "manifest" },
@@ -225,7 +229,8 @@ function sourceFiles(spec: GeneratedProjectSpec): Array<{
     { path: "tsconfig.json", content: json({ compilerOptions: { target: "ES2017", lib: ["dom", "dom.iterable", "esnext"], allowJs: true, skipLibCheck: true, strict: true, noEmit: true, esModuleInterop: true, module: "esnext", moduleResolution: "bundler", resolveJsonModule: true, isolatedModules: true, jsx: "react-jsx", incremental: true, plugins: [{ name: "next" }] }, include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"], exclude: ["node_modules"] }), language: "json", role: "config" },
     { path: "tests/smoke.mjs", content: `import assert from "node:assert/strict";\nimport { readFile } from "node:fs/promises";\n\nconst [page, component, config] = await Promise.all([readFile(new URL("../app/page.tsx", import.meta.url), "utf8"), readFile(new URL("../components/crypto-product.tsx", import.meta.url), "utf8"), readFile(new URL("../drops.config.json", import.meta.url), "utf8").then(JSON.parse)]);\nassert.match(page, /CryptoProduct/);\nassert.match(component, /${spec.presetId}/);\nassert.equal(config.truthfulFallback, "Demo data is never labelled live.");\nconsole.log("Project V2 smoke passed");\n`, language: "javascript", role: "test" },
     { path: "tests/dropstab-capability.test.mjs", content: PROJECT_TEMPLATE_DROPSTAB_TEST, language: "javascript", role: "test" },
-    { path: "README.md", content: `# ${spec.name}\n\nA category-native Drops Studio Project V2 built with Next.js, React, TypeScript and Tailwind CSS.\n\n## Run\n\n- \`npm install --ignore-scripts\`\n- \`npm run typecheck\`\n- \`npm run lint\`\n- \`npm test\`\n- \`npm run build\`\n- \`npm run dev\`\n\nThe same-origin \`/api/capabilities/dropstab\` route reads only the documented DropsTab \`/coins\` endpoint. \`DROPSTAB_API_KEY\` is read only by its server-only module; the browser receives normalized rows and explicit provider evidence. Without a configured key or a valid upstream response the route returns an embedded snapshot labelled \`demo\`, never live DropsTab data. Drops Bot and Telegram remain setup-required until confirmed by their providers.\n`, language: "markdown", role: "documentation" },
+    ...managed.files,
+    { path: "README.md", content: `# ${spec.name}\n\nA category-native Drops Studio Project V2 built with Next.js, React, TypeScript and Tailwind CSS.\n\n## Run\n\n- \`npm install --ignore-scripts\`\n- \`npm run typecheck\`\n- \`npm run lint\`\n- \`npm test\`\n- \`npm run build\`\n- \`npm run dev\`\n\nThe same-origin \`/api/capabilities/dropstab\` route reads only the documented DropsTab \`/coins\` endpoint. \`DROPSTAB_API_KEY\` is read only by its server-only module; the browser receives normalized rows and explicit provider evidence. Without a configured key or a valid upstream response the route returns an embedded snapshot labelled \`demo\`, never live DropsTab data. Drops Bot and Telegram remain setup-required until confirmed by their providers.${managed.readme}\n`, language: "markdown", role: "documentation" },
   ];
 }
 

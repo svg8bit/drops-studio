@@ -105,6 +105,45 @@ test("skill selection is relevant, deterministic, budgeted, and excludes unrelat
   assert.deepEqual(irrelevant.skills, []);
 });
 
+test("managed collaborative SaaS requests load only the relevant V4 runtime skills", () => {
+  const selected = skills.selectRuntimeSkills({
+    role: "planner",
+    task: "Build a collaborative crypto research SaaS with organization roles, managed auth, schema migrations, file attachments, a signed webhook inbox, scheduled cron summaries, realtime updates, audit history, backups, and approval-based delivery.",
+    integrations: [
+      "managed-backend",
+      "managed-auth",
+      "object-storage",
+      "managed-jobs",
+      "managed-webhooks",
+      "managed-realtime",
+      "collaboration",
+      "organizations",
+      "audit",
+    ],
+    availableCapabilities: ["project-v2", "vercel-sandbox", "project-data"],
+    maximumSkills: 12,
+    maximumEstimatedTokens: 4_800,
+  });
+  const ids = selected.skills.map((skill) => skill.id);
+  for (const expected of [
+    "managed-backend",
+    "managed-auth",
+    "data-modeling",
+    "object-storage",
+    "jobs-and-cron",
+    "webhooks",
+    "realtime-data",
+    "collaboration",
+    "enterprise-rbac",
+    "audit-and-compliance",
+  ]) assert.ok(ids.includes(expected), `${expected} should be selected`);
+  for (const irrelevant of ["crypto-game", "github-delivery", "vercel-deployment"]) {
+    assert.equal(ids.includes(irrelevant), false, `${irrelevant} should be absent`);
+  }
+  assert.ok(selected.skills.length <= 12);
+  assert.ok(selected.estimatedTokens <= 4_800);
+});
+
 test("prompt assembly is deterministic and records a complete content-addressed manifest", async () => {
   const core = await prompts.loadCompactCorePrompt();
   const rolePrompt = await prompts.loadRolePrompt("planner");

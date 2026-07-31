@@ -27,8 +27,8 @@
 .studio-header nav button, .studio-header nav a { align-items: center; background: none; border: 0; color: #36435d; cursor: pointer; display: flex; font-size: 14px; font-weight: 560; gap: 6px; padding: 10px 0; text-decoration: none; }
 .studio-header nav button:hover, .studio-header nav a:hover { color: var(--blue); }
 .studio-header nav button span { align-items: center; background: #eaf0fb; border-radius: 99px; display: inline-flex; font-size: 12px; height: 18px; justify-content: center; min-width: 18px; }
+.studio-header nav .mobile-nav-connections { display: none; }
 .header-actions { align-items: center; display: flex; justify-content: flex-end; min-width: 218px; }
 .api-vault-button { align-items: center; background: #fff; border: 1px solid #dbe3ef; border-radius: 11px; cursor: pointer; display: flex; font-size: 13px; font-weight: 650; gap: 7px; padding: 10px 14px; box-shadow: 0 5px 16px rgba(40, 60, 100, .05); }
 .api-vault-button:hover { border-color: #adc4ff; color: var(--blue); }
 .mobile-menu { background: transparent; border: 0; cursor: pointer; display: none; padding: 7px; }
-

@@ -5,7 +5,7 @@ export const AGENT_V3_DASHBOARD_CONTRACT = Object.freeze({
   benchmarkSlices: 8,
   syntheticRepairRecords: 36,
   promptRoles: 12,
-  runtimeSkills: 17,
+  runtimeSkills: 29,
   stabilizerFixers: 4,
   requiredDesignViewports: 3,
   productionDefaultChanged: false,

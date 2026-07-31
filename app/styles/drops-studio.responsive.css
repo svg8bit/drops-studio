@@ -13,6 +13,7 @@
   .studio-header nav.open { display: flex; align-items: stretch; }
   .studio-header nav button, .studio-header nav a { border-radius: 8px; justify-content: space-between; padding: 11px; width: 100%; }
   .studio-header nav button:hover, .studio-header nav a:hover { background: #f3f6fb; }
+  .studio-header nav .mobile-nav-connections { display: flex; }
   .header-actions { min-width: 0; }
   .mobile-menu { display: flex; }
   .api-vault-button { display: none; }

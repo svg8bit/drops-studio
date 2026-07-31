@@ -347,10 +347,12 @@ function Brand() {
 
 function useNearViewport() {
   const [ready, setReady] = useState(false);
-  const elementRef = useRef<HTMLElement>(null);
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const elementRef = useCallback((next: HTMLElement | null) => {
+    setElement(next);
+  }, []);
 
   useEffect(() => {
-    const element = elementRef.current;
     if (!element) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -362,7 +364,7 @@ function useNearViewport() {
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [element]);
 
   return { ready, elementRef };
 }
@@ -476,6 +478,13 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams(window.location.search);
+      const presetParam = params.get("preset");
+      const requestedCatalogPreset = presets.find(
+        (preset) => preset.id === presetParam,
+      );
+      if (requestedCatalogPreset) setSelectedId(requestedCatalogPreset.id);
+
       let savedProjects = readProjectsFromStore();
 
       try {
@@ -612,7 +621,6 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       } catch {
         /* The local compiler remains available when access status is offline. */
       }
-      const params = new URLSearchParams(window.location.search);
       const handoff = parseStudioConnectionHandoff(window.location.search);
       if (handoff.connections) {
         const requestedProvider = providerList.find(
@@ -1701,17 +1709,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       <header className="studio-header">
         <Brand />
         <nav className={menuOpen ? "open" : ""} aria-label="Primary navigation">
-          <button
-            type="button"
-            onClick={() => {
-              document
-                .querySelector(".preset-section")
-                ?.scrollIntoView({ behavior: "smooth" });
-              setMenuOpen(false);
-            }}
-          >
-            Templates
-          </button>
+          <a href="/templates">Templates</a>
           <button
             type="button"
             onClick={() => {
@@ -1721,7 +1719,10 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           >
             My Projects <span>{projects.length}</span>
           </button>
+          <a href="/integrations">Integrations</a>
+          <a href="/platform">Platform</a>
           <button
+            className="mobile-nav-connections"
             type="button"
             onClick={() => {
               setConnectionOpen(true);
@@ -1965,7 +1966,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
             />
         </section>
 
-        {previewSection.ready ? (
+        {previewSection.ready || selectedId !== defaultPresetId ? (
           <PreviewCanvas
             preset={selectedPreset}
             spec={draftSpec ?? undefined}
