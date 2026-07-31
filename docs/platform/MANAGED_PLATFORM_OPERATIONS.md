@@ -16,4 +16,4 @@ Production defaults:
 - `DROPS_ENTERPRISE_OIDC_REDIRECT_URIS` is a comma-separated exact HTTPS allowlist; no wildcards.
 - `DROPS_ENTERPRISE_OIDC_CLIENT_SECRET`, `DROPS_ENTERPRISE_OIDC_SIGNING_SECRET` and `DROPS_ENTERPRISE_OIDC_SUBJECT_SALT` are independent 32+ byte secrets.
 - Rotate signing material independently. Rotating the subject salt changes pairwise user identifiers and therefore requires an explicit identity migration.
-- External OIDC issuers receive a bounded public discovery/JWKS health probe only; Drops Studio does not send their client secret during health verification.
+- External OIDC issuers receive a DNS-pinned bounded public discovery/JWKS probe only; Drops Studio does not send their client secret and does not mark them working until a real authorization callback receipt succeeds.

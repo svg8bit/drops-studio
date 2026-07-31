@@ -242,8 +242,10 @@ cleanup sweep. Client secret, signing secret and pairwise subject salt must be
 independent. The subject salt keeps user identifiers stable across signing-key
 rotation and is changed only with an explicit identity migration. Token,
 provider secret and member-cookie material are excluded from project files,
-ZIPs, checkpoints, logs and public health responses. External OIDC health
-validates public HTTPS discovery and JWKS without transmitting client secrets.
+ZIPs, checkpoints, logs and public health responses. External OIDC health uses
+DNS-resolved, address-pinned public HTTPS discovery and JWKS without transmitting
+client secrets; discovery alone remains unavailable until a real callback
+receipt proves client authentication.
 
 ## Built-in project data
 

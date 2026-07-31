@@ -141,6 +141,7 @@ test("OIDC health verifies same-origin discovery, public JWKS and durable self-c
           "public-jwks-no-secret",
           "private-blob-cas",
           "authorization-code-pkce-s256",
+          "authorization-code-replay-rejected",
         ],
       });
     }
@@ -185,7 +186,7 @@ test("OIDC health rejects a JWKS containing private key material", async (contex
   assert.equal(receipt.mode, "oidc-discovery-health-failed");
 });
 
-test("external OIDC health validates discovery and JWKS without transmitting credentials", async (context) => {
+test("external OIDC health uses pinned discovery and JWKS without claiming client authentication", async (context) => {
   preserveEnvironment(context);
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
@@ -195,6 +196,7 @@ test("external OIDC health validates discovery and JWKS without transmitting cre
   process.env.DROPS_ENTERPRISE_OIDC_CLIENT_ID = "external-enterprise-client";
   process.env.DROPS_ENTERPRISE_OIDC_CLIENT_SECRET = "external-secret-that-must-not-be-transmitted";
   const requests = [];
+  const pinned = [];
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     requests.push({ url, authorization: new Headers(init.headers).get("authorization") });
@@ -214,10 +216,19 @@ test("external OIDC health validates discovery and JWKS without transmitting cre
     return Response.json({ error: "unexpected request" }, { status: 404 });
   };
 
-  const receipt = await externalOidcHealth();
-  assert.equal(receipt.status, "working");
-  assert.equal(receipt.mode, "external-oidc-discovery-jwks-live");
+  const receipt = await externalOidcHealth({
+    resolvePinnedFetch: async (url) => {
+      pinned.push(url.toString());
+      return globalThis.fetch;
+    },
+  });
+  assert.equal(receipt.status, "unavailable");
+  assert.equal(receipt.mode, "external-oidc-auth-receipt-required");
   assert.equal(requests.length, 2);
+  assert.deepEqual(pinned, [
+    `${issuer}/.well-known/openid-configuration`,
+    "https://keys.identity.example/tenant/jwks",
+  ]);
   assert.ok(requests.every((request) => request.authorization === null));
   assert.doesNotMatch(JSON.stringify(requests), /external-secret/);
   assert.doesNotMatch(JSON.stringify(receipt), /external-secret/);
@@ -260,6 +271,7 @@ test("first-party OIDC health form-encodes Basic client credentials", async (con
         "public-jwks-no-secret",
         "private-blob-cas",
         "authorization-code-pkce-s256",
+        "authorization-code-replay-rejected",
       ],
     });
   };

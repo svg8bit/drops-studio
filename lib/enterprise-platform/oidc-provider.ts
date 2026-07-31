@@ -430,13 +430,21 @@ export function verifyOidcJwt(
   if (header.alg !== "EdDSA" || header.typ !== options.type || header.kid !== kid) {
     throw new OidcProviderError("invalid_token", "Bearer token is invalid.", 401);
   }
+  const encodedSignature = parts[2];
+  if (!/^[A-Za-z0-9_-]{86}$/.test(encodedSignature)) {
+    throw new OidcProviderError("invalid_token", "Bearer token is invalid.", 401);
+  }
   let signature: Buffer;
   try {
-    signature = Buffer.from(parts[2], "base64url");
+    signature = Buffer.from(encodedSignature, "base64url");
   } catch {
     throw new OidcProviderError("invalid_token", "Bearer token is invalid.", 401);
   }
-  if (signature.length !== 64 || !verify(null, Buffer.from(`${parts[0]}.${parts[1]}`, "ascii"), publicKey, signature)) {
+  if (
+    signature.length !== 64
+    || signature.toString("base64url") !== encodedSignature
+    || !verify(null, Buffer.from(`${parts[0]}.${parts[1]}`, "ascii"), publicKey, signature)
+  ) {
     throw new OidcProviderError("invalid_token", "Bearer token is invalid.", 401);
   }
   const now = Math.floor((options.now ?? new Date()).getTime() / 1_000);
@@ -532,7 +540,7 @@ export function oidcUserInfo(
 
 export async function oidcProviderSelfCheck(
   config: OidcProviderConfig,
-  store: Pick<OidcAuthorizationCodeStore, "health">,
+  store: OidcAuthorizationCodeStore,
   now = new Date(),
 ): Promise<{
   status: "working";
@@ -541,17 +549,68 @@ export async function oidcProviderSelfCheck(
   storage: "private-blob-cas";
   evidence: string[];
 }> {
-  const probeClaims = {
-    iss: config.issuer,
-    sub: createHmac("sha256", config.subjectSalt).update("oidc-health-subject").digest("base64url"),
-    aud: config.clientId,
-    iat: Math.floor(now.getTime() / 1_000),
-    exp: Math.floor(now.getTime() / 1_000) + 30,
-  };
-  const token = signJwt(config, probeClaims, "JWT");
-  verifyOidcJwt(token, config, { type: "JWT", audience: config.clientId, now });
   if (!await store.health()) {
     throw new OidcProviderError("temporarily_unavailable", "OIDC authorization-code storage is unavailable.", 503);
+  }
+  try {
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const codeVerifier = randomBytes(48).toString("base64url");
+    const nonce = randomBytes(32).toString("base64url");
+    const request: OidcAuthorizationRequest = {
+      clientId: config.clientId,
+      redirectUri: `${config.issuer}/demo/callback`,
+      responseType: "code",
+      responseMode: "query",
+      scope: "openid",
+      state: randomBytes(32).toString("base64url"),
+      nonce,
+      codeChallenge: pkceChallenge(codeVerifier),
+      codeChallengeMethod: "S256",
+    };
+    const code = await issueOidcAuthorizationCode({
+      request,
+      member: {
+        identity: randomBytes(32).toString("hex"),
+        issuedAt: nowSeconds,
+        provider: "openrouter",
+      },
+      store,
+      config,
+      now,
+    });
+    const exchange = {
+      code,
+      codeVerifier,
+      redirectUri: request.redirectUri,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      config,
+      store,
+      now,
+    };
+    const tokens = await exchangeOidcAuthorizationCode(exchange);
+    const idToken = verifyOidcJwt(tokens.id_token, config, {
+      type: "JWT",
+      audience: config.clientId,
+      now,
+    });
+    const userInfo = oidcUserInfo(tokens.access_token, config, now);
+    if (idToken.claims.nonce !== nonce || idToken.claims.sub !== userInfo.sub) {
+      throw new Error("OIDC self-check token claims do not match.");
+    }
+    try {
+      await exchangeOidcAuthorizationCode(exchange);
+      throw new Error("OIDC self-check replay was accepted.");
+    } catch (error) {
+      if (!(error instanceof OidcProviderError) || error.code !== "invalid_grant") throw error;
+    }
+  } catch (error) {
+    if (error instanceof OidcProviderError && error.code === "temporarily_unavailable") throw error;
+    throw new OidcProviderError(
+      "temporarily_unavailable",
+      "OIDC authorization-code PKCE self-check failed.",
+      503,
+    );
   }
   return {
     status: "working",
@@ -564,6 +623,7 @@ export async function oidcProviderSelfCheck(
       "public-jwks-no-secret",
       "private-blob-cas",
       "authorization-code-pkce-s256",
+      "authorization-code-replay-rejected",
     ],
   };
 }

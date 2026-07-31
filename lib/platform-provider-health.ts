@@ -2,6 +2,11 @@ import { createHash, createSign, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 
 import {
+  createPinnedCustomProviderFetch,
+  resolveCustomProviderEndpoint,
+} from "./builder-agent/providers.ts";
+
+import {
   createDurableProjectDataBackend,
   ProjectDataStore,
 } from "./project-data/index.ts";
@@ -90,6 +95,16 @@ function publicHttpsProviderUrl(value: string): URL {
 
 function formEncodedClientCredential(value: string): string {
   return new URLSearchParams({ value }).toString().slice("value=".length);
+}
+
+export interface ExternalOidcHealthDependencies {
+  resolvePinnedFetch?: (url: URL) => Promise<typeof fetch>;
+  sameOriginFetch?: typeof fetch;
+}
+
+async function resolvePinnedPublicProviderFetch(url: URL): Promise<typeof fetch> {
+  const endpoint = await resolveCustomProviderEndpoint(url.toString());
+  return createPinnedCustomProviderFetch(endpoint);
 }
 
 async function timed<T>(
@@ -297,7 +312,9 @@ async function organizationsHealth(): Promise<PlatformProviderHealthCheck> {
   }
 }
 
-export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck> {
+export async function externalOidcHealth(
+  dependencies: ExternalOidcHealthDependencies = {},
+): Promise<PlatformProviderHealthCheck> {
   const issuer = process.env.DROPS_ENTERPRISE_OIDC_ISSUER?.trim();
   const clientId = process.env.DROPS_ENTERPRISE_OIDC_CLIENT_ID?.trim();
   const clientSecret = process.env.DROPS_ENTERPRISE_OIDC_CLIENT_SECRET?.trim();
@@ -312,6 +329,7 @@ export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck>
     );
   }
   try {
+    let firstParty = false;
     const receipt = await timed(async () => {
       const issuerUrl = publicHttpsProviderUrl(issuer);
       const normalizedIssuer = issuerUrl.href.replace(/\/$/, "");
@@ -321,9 +339,13 @@ export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck>
       } catch {
         // External providers do not depend on a configured Studio canonical origin.
       }
-      const firstParty = normalizedIssuer === firstPartyIssuer;
-      const response = await fetch(
-        new URL(".well-known/openid-configuration", `${normalizedIssuer}/`),
+      firstParty = normalizedIssuer === firstPartyIssuer;
+      const discoveryUrl = new URL(".well-known/openid-configuration", `${normalizedIssuer}/`);
+      const discoveryFetch = firstParty
+        ? dependencies.sameOriginFetch ?? fetch
+        : await (dependencies.resolvePinnedFetch ?? resolvePinnedPublicProviderFetch)(discoveryUrl);
+      const response = await discoveryFetch(
+        discoveryUrl,
         { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) },
       );
       const discovery = await response.json() as Record<string, unknown>;
@@ -347,7 +369,10 @@ export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck>
         endpoints.userinfo_endpoint = publicHttpsProviderUrl(discovery.userinfo_endpoint);
       }
 
-      const jwksResponse = await fetch(endpoints.jwks_uri, {
+      const jwksFetch = firstParty
+        ? dependencies.sameOriginFetch ?? fetch
+        : await (dependencies.resolvePinnedFetch ?? resolvePinnedPublicProviderFetch)(endpoints.jwks_uri);
+      const jwksResponse = await jwksFetch(endpoints.jwks_uri, {
         cache: "no-store",
         redirect: "error",
         signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
@@ -369,7 +394,7 @@ export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck>
         throw new Error("first-party health endpoint missing");
       }
       const healthEndpoint = sameOriginHttpsUrl(discovery.drops_studio_health_endpoint, issuerUrl.origin);
-      const healthResponse = await fetch(healthEndpoint, {
+      const healthResponse = await (dependencies.sameOriginFetch ?? fetch)(healthEndpoint, {
         headers: {
           accept: "application/json",
           authorization: `Basic ${Buffer.from(`${formEncodedClientCredential(clientId)}:${formEncodedClientCredential(clientSecret)}`, "utf8").toString("base64")}`,
@@ -391,28 +416,22 @@ export async function externalOidcHealth(): Promise<PlatformProviderHealthCheck>
         || !evidence.includes("public-jwks-no-secret")
         || !evidence.includes("private-blob-cas")
         || !evidence.includes("authorization-code-pkce-s256")
+        || !evidence.includes("authorization-code-replay-rejected")
       ) {
         throw new Error("OIDC live self-check failed");
       }
     });
-    let firstParty = false;
-    try {
-      firstParty = issuer.replace(/\/$/, "") === `${canonicalApplicationOrigin()}/api/enterprise/oidc`;
-    } catch {
-      // A canonical Studio origin is not required for an external provider.
-    }
     if (!firstParty) {
-      return working(
-        "external-oidc-discovery-jwks-live",
-        "The external OIDC provider passed bounded discovery and public JWKS validation; its client secret was not sent during health verification.",
+      return unavailable(
+        "external-oidc-auth-receipt-required",
+        "The external OIDC provider passed pinned public discovery and JWKS validation, but client authentication remains unavailable until a real authorization callback receipt succeeds.",
         ["oidc-discovery-live", "public-jwks-no-secret", "external-provider-secret-not-transmitted"],
-        receipt.latencyMs,
       );
     }
     return working(
       "drops-studio-oidc-provider-live",
       "The first-party OIDC issuer passed discovery, public JWKS, asymmetric signing and durable one-time state checks.",
-      ["oidc-discovery-live", "public-jwks-no-secret", "ed25519-sign-verify", "private-blob-cas", "authorization-code-pkce-s256"],
+      ["oidc-discovery-live", "public-jwks-no-secret", "ed25519-sign-verify", "private-blob-cas", "authorization-code-pkce-s256", "authorization-code-replay-rejected"],
       receipt.latencyMs,
     );
   } catch {

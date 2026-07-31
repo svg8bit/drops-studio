@@ -312,6 +312,10 @@ test("public JWKS verifies the ID token and tampering is rejected", async () => 
   const tampered = `${parts[0]}.${parts[1].slice(0, -1)}A.${parts[2]}`;
   assert.throws(() => verifyOidcJwt(tampered, providerConfig, { type: "JWT", audience: CLIENT_ID, now: NOW }), hasCode("invalid_token"));
   assert.throws(
+    () => verifyOidcJwt(`${tokens.id_token}~`, providerConfig, { type: "JWT", audience: CLIENT_ID, now: NOW }),
+    hasCode("invalid_token"),
+  );
+  assert.throws(
     () => oidcUserInfo(tokens.access_token, providerConfig, new Date(NOW.getTime() + 6 * 60_000)),
     hasCode("invalid_token"),
   );
@@ -382,6 +386,10 @@ test("bounded self-check proves signing and durable-store readiness without synt
   assert.equal(receipt.status, "working");
   assert.equal(receipt.signingAlgorithm, "EdDSA");
   assert.equal(receipt.storage, "private-blob-cas");
+  assert.ok(receipt.evidence.includes("authorization-code-pkce-s256"));
+  assert.ok(receipt.evidence.includes("authorization-code-replay-rejected"));
+  assert.equal(store.records.size, 1);
+  assert.equal([...store.records.values()][0].consumedAt, Math.floor(NOW.getTime() / 1_000));
   store.healthy = false;
   await assert.rejects(oidcProviderSelfCheck(config(), store, NOW), hasCode("temporarily_unavailable"));
 });
