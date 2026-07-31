@@ -53,6 +53,7 @@ import type { AgentRunTrace } from "@/lib/agent/evals/types";
 import styles from "./project-v2-studio-surface.module.css";
 
 const AUTO_BUILD_KEY = "drops-studio:v2-auto-build";
+const AUTO_BUILD_LEASE_MS = 6 * 60 * 1000;
 
 interface BuilderApiPayload {
   result?: BuilderAgentResult;
@@ -436,6 +437,34 @@ export function ProjectV2StudioSurface({
       }
       return { ...created, persisted: true };
     } catch (error) {
+      if (
+        error instanceof ProjectV2SyncError &&
+        error.status === 409 &&
+        error.current &&
+        error.storageRevision !== undefined
+      ) {
+        if (project.revision > error.current.revision) {
+          const saved = await saveProjectV2ToCloud(
+            project,
+            error.storageRevision,
+          );
+          if (mounted.current) {
+            setStorageRevision(saved.storageRevision);
+            setStorageMode("cloud");
+          }
+          return { ...saved, persisted: true };
+        }
+        if (mounted.current) {
+          setStorageRevision(error.storageRevision);
+          setStorageMode("cloud");
+          onProjectChange(error.current, error.storageRevision);
+        }
+        return {
+          project: error.current,
+          storageRevision: error.storageRevision,
+          persisted: true,
+        };
+      }
       if (!supportsLocalProjectFallback(error)) throw error;
       if (mounted.current) {
         setStorageRevision(null);
@@ -654,6 +683,9 @@ export function ProjectV2StudioSurface({
       });
       onNotify?.(failure);
     } finally {
+      window.sessionStorage.removeItem(
+        `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
+      );
       if (mounted.current) setBusy(null);
     }
   }, [
@@ -677,9 +709,10 @@ export function ProjectV2StudioSurface({
       return;
     }
     const key = `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`;
-    if (window.sessionStorage.getItem(key) === "1") return;
+    const lease = Number(window.sessionStorage.getItem(key));
+    if (Number.isFinite(lease) && Date.now() - lease < AUTO_BUILD_LEASE_MS) return;
     autoStarted.current = true;
-    window.sessionStorage.setItem(key, "1");
+    window.sessionStorage.setItem(key, String(Date.now()));
     const timer = window.setTimeout(() => {
       void runBuilder(
         "build",
@@ -716,6 +749,23 @@ export function ProjectV2StudioSurface({
       }
       return saved.project;
     } catch (error) {
+      if (
+        error instanceof ProjectV2SyncError &&
+        error.status === 409 &&
+        error.current &&
+        error.storageRevision !== undefined
+      ) {
+        const saved =
+          next.revision > error.current.revision
+            ? await saveProjectV2ToCloud(next, error.storageRevision)
+            : { project: error.current, storageRevision: error.storageRevision };
+        if (mounted.current) {
+          setStorageRevision(saved.storageRevision);
+          setStorageMode("cloud");
+          onProjectChange(saved.project, saved.storageRevision);
+        }
+        return saved.project;
+      }
       if (!supportsLocalProjectFallback(error)) throw error;
       if (mounted.current) {
         setStorageRevision(null);
