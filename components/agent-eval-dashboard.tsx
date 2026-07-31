@@ -47,7 +47,8 @@ interface SummaryPayload {
 
 interface RunPayload {
   report?: BenchmarkReport;
-  executionMode?: "offline-contract-fixture";
+  executionMode?: "offline-contract-fixture" | "offline-contract-fixture+live-model-matrix";
+  evidenceActivated?: boolean;
   error?: string;
 }
 
@@ -126,16 +127,16 @@ export function AgentEvalDashboard({
     void loadSummary();
   }, [loadSummary]);
 
-  const runContractBenchmark = useCallback(async () => {
+  const activateEvidence = useCallback(async () => {
     setBusy("run");
     setError(null);
     try {
       const result = await request<RunPayload>("/api/internal/agent-evals/run", {
         method: "POST",
-        body: JSON.stringify({ suite: "local-fast" }),
+        body: JSON.stringify({ suite: "release", activateEvidence: true }),
       });
-      if (result.executionMode !== "offline-contract-fixture") {
-        throw new Error("The benchmark did not return its execution mode.");
+      if (result.executionMode !== "offline-contract-fixture+live-model-matrix" || !result.evidenceActivated) {
+        throw new Error("The full evidence activation did not complete.");
       }
       await loadSummary();
     } catch (requestError) {
@@ -212,7 +213,7 @@ export function AgentEvalDashboard({
           </div>
           <aside className={styles.heroReceipt} aria-label="Promotion state">
             <span><ShieldCheck aria-hidden="true" />Candidate gate</span>
-            <strong>{platform?.dataGate.passed ? "Eligible for candidate review" : "Evidence required"}</strong>
+            <strong>{platform?.dataGate.passed ? "Evidence active" : "Evidence required"}</strong>
             <small>Studio builds and production remain available</small>
           </aside>
         </div>
@@ -267,7 +268,14 @@ export function AgentEvalDashboard({
             <Badge variant={platform?.dataGate.passed ? "default" : "secondary"}>{platform?.dataGate.passed ? "Passed" : "Required"}</Badge>
           </div>
           <ul className={styles.gateList}>
-            {gateBlockers.length ? gateBlockers.map((blocker) => <li key={blocker}><AlertTriangle aria-hidden="true" /><span>{blocker}</span></li>) : <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>All required evidence is recorded for candidate review.</span></li>}
+            {gateBlockers.length ? gateBlockers.map((blocker) => <li key={blocker}><AlertTriangle aria-hidden="true" /><span>{blocker}</span></li>) : (
+              <>
+                <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>Immutable baseline: {platform?.receipts.baseline.cases} cases · {platform?.receipts.baseline.results} results.</span></li>
+                <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>Failure clustering: {platform?.receipts.failureClustering.clusters} verified clusters.</span></li>
+                <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>Design Agent: {platform?.receipts.designAgent.cases} cases · {platform?.receipts.designAgent.passedResults} passing results.</span></li>
+                <li className={styles.gateClear}><CheckCircle2 aria-hidden="true" /><span>Live model matrix: {platform?.receipts.modelMatrix.measuredModels} measured models.</span></li>
+              </>
+            )}
           </ul>
         </section>
       </div>
@@ -318,13 +326,13 @@ export function AgentEvalDashboard({
 
             <section className={styles.panel} aria-labelledby="benchmark-title">
               <div className={styles.panelHeading}>
-                <div><FlaskConical aria-hidden="true" /><h2 id="benchmark-title">Offline routing comparison</h2></div>
-                <Button variant="outline" onClick={() => void runContractBenchmark()} disabled={busy !== null}>
-                  {busy === "run" ? <LoaderCircle className={styles.spin} aria-hidden="true" /> : <Play aria-hidden="true" />}
-                  Run contract fixtures
+                <div><FlaskConical aria-hidden="true" /><h2 id="benchmark-title">Evidence activation</h2></div>
+                <Button variant="outline" onClick={() => void activateEvidence()} disabled={busy !== null}>
+                  {busy !== null ? <LoaderCircle className={styles.spin} aria-hidden="true" /> : <Play aria-hidden="true" />}
+                  Refresh full evidence
                 </Button>
               </div>
-              <p className={styles.disclosure}>This runs the labeled local-fast contract slice. It does not call live models or prove a Sandbox preview.</p>
+              <p className={styles.disclosure}>Runs all 120 deterministic cases, the 10-case Design Agent slice, failure clustering, and a bounded two-model Vercel AI Gateway matrix. Model prompts and outputs are not stored.</p>
               {latestReport ? (
                 <div className={styles.tableWrap}>
                   <table>

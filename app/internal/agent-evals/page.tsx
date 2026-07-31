@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { AgentEvalDashboard } from "@/components/agent-eval-dashboard";
 import { createAgentV3PlatformEvidence } from "@/lib/agent/evals/dashboard-evidence";
+import { DefaultAgentEvalStore } from "@/lib/agent/evals/store";
 
 export const metadata: Metadata = {
   title: "Agent evals · Drops Studio",
@@ -10,6 +11,13 @@ export const metadata: Metadata = {
 };
 
 export default async function AgentEvalsPage() {
-  const platform = await createAgentV3PlatformEvidence({ env: process.env });
+  let snapshot = null;
+  let storageAvailable = true;
+  try {
+    snapshot = (await new DefaultAgentEvalStore().listEvidenceSnapshots(1))[0] ?? null;
+  } catch {
+    storageAvailable = false;
+  }
+  const platform = await createAgentV3PlatformEvidence({ env: process.env, snapshot, storageAvailable });
   return <AgentEvalDashboard initialPlatform={platform} />;
 }

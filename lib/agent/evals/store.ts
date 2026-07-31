@@ -1,16 +1,19 @@
 import { assertPrivacySafeTrace } from "./privacy.ts";
-import type { AgentRunTrace, BenchmarkReport } from "./types.ts";
+import type { AgentRunTrace, AgentV3EvidenceSnapshot, BenchmarkReport } from "./types.ts";
 
 type EvalBlobStorage = Pick<typeof import("@vercel/blob"), "get" | "put" | "list" | "del">;
 
 const TRACE_PREFIX = "drops-studio/agent-intelligence/v2/traces/";
 const REPORT_PREFIX = "drops-studio/agent-intelligence/v2/reports/";
+const EVIDENCE_PREFIX = "drops-studio/agent-intelligence/v3/evidence/";
 const MAX_TRACE_BYTES = 2_000_000;
 const MAX_REPORT_BYTES = 4_000_000;
+const MAX_EVIDENCE_BYTES = 1_000_000;
 
 declare global {
   var __DROPS_AGENT_EVAL_TRACES__: Map<string, AgentRunTrace> | undefined;
   var __DROPS_AGENT_EVAL_REPORTS__: Map<string, BenchmarkReport> | undefined;
+  var __DROPS_AGENT_EVIDENCE_SNAPSHOTS__: Map<string, AgentV3EvidenceSnapshot> | undefined;
 }
 
 export interface AgentEvalStore {
@@ -18,6 +21,8 @@ export interface AgentEvalStore {
   writeReport(report: BenchmarkReport): Promise<void>;
   listTraces(limit?: number): Promise<AgentRunTrace[]>;
   listReports(limit?: number): Promise<BenchmarkReport[]>;
+  writeEvidenceSnapshot(snapshot: AgentV3EvidenceSnapshot): Promise<void>;
+  listEvidenceSnapshots(limit?: number): Promise<AgentV3EvidenceSnapshot[]>;
   deleteProject(actorHash: string, projectId: string): Promise<void>;
   enforceRetention(now?: Date): Promise<{ deleted: number }>;
 }
@@ -48,6 +53,10 @@ function reportMap(): Map<string, BenchmarkReport> {
   return globalThis.__DROPS_AGENT_EVAL_REPORTS__ ??= new Map();
 }
 
+function evidenceMap(): Map<string, AgentV3EvidenceSnapshot> {
+  return globalThis.__DROPS_AGENT_EVIDENCE_SNAPSHOTS__ ??= new Map();
+}
+
 function safeSegment(value: string, label: string): string {
   if (!/^[a-z0-9][a-z0-9:._-]{0,127}$/i.test(value)) throw new Error(`${label} is invalid.`);
   return encodeURIComponent(value);
@@ -60,6 +69,10 @@ function tracePath(trace: Pick<AgentRunTrace, "actorHash" | "projectId" | "trace
 
 function reportPath(reportId: string): string {
   return `${REPORT_PREFIX}${safeSegment(reportId, "Benchmark report id")}.json`;
+}
+
+function evidencePath(snapshotId: string): string {
+  return `${EVIDENCE_PREFIX}${safeSegment(snapshotId, "Evidence snapshot id")}.json`;
 }
 
 function serialized(value: unknown, maxBytes: number, label: string): string {
@@ -174,6 +187,53 @@ export class DefaultAgentEvalStore implements AgentEvalStore {
       const values = await Promise.all(page.blobs.map((blob) => readPrivateJson<BenchmarkReport>(storage, blob.pathname, MAX_REPORT_BYTES)));
       return values.filter((value): value is BenchmarkReport => Boolean(value?.schemaVersion === 1))
         .sort((left, right) => right.finishedAt.localeCompare(left.finishedAt));
+    } catch (error) {
+      if (error instanceof AgentEvalStoreUnavailableError) throw error;
+      throw new AgentEvalStoreUnavailableError();
+    }
+  }
+
+  async writeEvidenceSnapshot(snapshot: AgentV3EvidenceSnapshot): Promise<void> {
+    assertPrivacySafeTrace(snapshot);
+    if (!/^[a-f0-9]{64}$/.test(snapshot.snapshotId)) {
+      throw new Error("Evidence snapshot id must be a 64-character lowercase hexadecimal digest.");
+    }
+    const path = evidencePath(snapshot.snapshotId);
+    if (!this.#storage && localEnabled()) {
+      if (evidenceMap().has(path)) throw new Error("Evidence snapshot already exists.");
+      evidenceMap().set(path, structuredClone(snapshot));
+      return;
+    }
+    try {
+      await (await this.#durable()).put(path, serialized(snapshot, MAX_EVIDENCE_BYTES, "Agent evidence snapshot"), {
+        access: "private",
+        addRandomSuffix: false,
+        allowOverwrite: false,
+        cacheControlMaxAge: 60,
+        contentType: "application/json; charset=utf-8",
+      });
+    } catch (error) {
+      if (error instanceof AgentEvalStoreUnavailableError) throw error;
+      throw new AgentEvalStoreUnavailableError();
+    }
+  }
+
+  async listEvidenceSnapshots(limit = 10): Promise<AgentV3EvidenceSnapshot[]> {
+    const bounded = Math.min(Math.max(1, limit), 50);
+    if (!this.#storage && localEnabled()) {
+      return [...evidenceMap().values()]
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, bounded)
+        .map((entry) => structuredClone(entry));
+    }
+    try {
+      const storage = await this.#durable();
+      const page = await storage.list({ prefix: EVIDENCE_PREFIX, limit: bounded });
+      const values = await Promise.all(page.blobs.map((blob) =>
+        readPrivateJson<AgentV3EvidenceSnapshot>(storage, blob.pathname, MAX_EVIDENCE_BYTES)));
+      return values.filter((value): value is AgentV3EvidenceSnapshot => Boolean(
+        value?.schemaVersion === 1 && /^[a-f0-9]{64}$/.test(value.snapshotId),
+      )).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     } catch (error) {
       if (error instanceof AgentEvalStoreUnavailableError) throw error;
       throw new AgentEvalStoreUnavailableError();

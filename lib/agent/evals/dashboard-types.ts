@@ -46,6 +46,14 @@ export interface AgentV3PlatformEvidence {
     stabilizer: "shadow proposals do not mutate canonical files";
     design: "contract registered; capture evidence is run-specific";
   };
+  receipts: {
+    snapshotId: string | null;
+    recordedAt: string | null;
+    baseline: { recorded: boolean; id: string | null; cases: number; results: number };
+    failureClustering: { recorded: boolean; clusters: number; traces: number };
+    designAgent: { recorded: boolean; cases: number; passedResults: number };
+    modelMatrix: { recorded: boolean; authorizedModels: number; measuredModels: number; models: string[] };
+  };
   dataGate: {
     passed: boolean;
     blockers: string[];

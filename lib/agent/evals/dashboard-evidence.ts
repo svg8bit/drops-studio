@@ -19,7 +19,9 @@ import {
   evaluateAgentDataGate,
   type AgentDataGateEvidence,
 } from "./data-gate.ts";
+import { observedEvidenceFromSnapshot } from "./evidence-activation.ts";
 import type { AgentV3PlatformEvidence } from "./dashboard-types.ts";
+import type { AgentV3EvidenceSnapshot } from "./types.ts";
 
 export interface AgentV3ObservedEvidence {
   baselineId?: string;
@@ -45,6 +47,8 @@ export async function createAgentV3PlatformEvidence(options: {
   now?: Date;
   env?: Record<string, string | undefined>;
   observed?: AgentV3ObservedEvidence;
+  snapshot?: AgentV3EvidenceSnapshot | null;
+  storageAvailable?: boolean;
 } = {}): Promise<AgentV3PlatformEvidence> {
   const repairs = validateRepairDatasetV3(SYNTHETIC_REPAIR_DATASET_V3);
   let compactCore: AgentV3PlatformEvidence["registry"]["compactCore"];
@@ -67,7 +71,7 @@ export async function createAgentV3PlatformEvidence(options: {
     };
   }
 
-  const observed = options.observed ?? {};
+  const observed = options.observed ?? observedEvidenceFromSnapshot(options.snapshot);
   const gateInputs: AgentDataGateEvidence = {
     baselineId: observed.baselineId ?? "",
     benchmarkCases: AGENT_BENCHMARK_CASES.length,
@@ -84,6 +88,9 @@ export async function createAgentV3PlatformEvidence(options: {
   const blockers = [...gate.blockers];
   if (gateInputs.authorizedModelCount === 0) {
     blockers.push("Authorized live model inventory and measured matrix evidence are not loaded.");
+  }
+  if (options.storageAvailable === false) {
+    blockers.push("Private evaluation evidence storage is unavailable.");
   }
 
   return {
@@ -114,6 +121,32 @@ export async function createAgentV3PlatformEvidence(options: {
       repairs: "accepted synthetic source-level fixtures",
       stabilizer: "shadow proposals do not mutate canonical files",
       design: "contract registered; capture evidence is run-specific",
+    },
+    receipts: {
+      snapshotId: options.snapshot?.snapshotId ?? null,
+      recordedAt: options.snapshot?.createdAt ?? null,
+      baseline: {
+        recorded: observed.baselineResultsRecorded === true,
+        id: observed.baselineId ?? null,
+        cases: options.snapshot?.baseline.registeredCaseCount ?? 0,
+        results: options.snapshot?.baseline.resultCount ?? 0,
+      },
+      failureClustering: {
+        recorded: boundedCount(observed.failureClusterCount) > 0,
+        clusters: boundedCount(observed.failureClusterCount),
+        traces: options.snapshot?.failureClustering.inputTraceCount ?? 0,
+      },
+      designAgent: {
+        recorded: observed.designReportRecorded === true,
+        cases: options.snapshot?.designAgent.caseCount ?? 0,
+        passedResults: options.snapshot?.designAgent.passedResultCount ?? 0,
+      },
+      modelMatrix: {
+        recorded: boundedCount(observed.measuredModelCount) > 0,
+        authorizedModels: boundedCount(observed.authorizedModelCount),
+        measuredModels: boundedCount(observed.measuredModelCount),
+        models: options.snapshot?.modelMatrix.authorizedModelIds ?? [],
+      },
     },
     dataGate: {
       passed: gate.passed && blockers.length === 0,

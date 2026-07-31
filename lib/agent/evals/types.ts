@@ -213,6 +213,65 @@ export interface BenchmarkReport {
   };
 }
 
+export interface AgentLiveModelMeasurement {
+  modelId: string;
+  provider: string;
+  status: "passed" | "failed";
+  failureCode: "provider-call-failed" | "invalid-response" | null;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  responseDigest: string | null;
+  providerRequestDigest: string | null;
+  measuredAt: string;
+}
+
+export interface AgentV3EvidenceSnapshot {
+  schemaVersion: 1;
+  snapshotId: string;
+  createdAt: string;
+  benchmarkVersion: string;
+  baseline: {
+    baselineId: string;
+    reportId: string;
+    reportHash: string;
+    suite: "ci" | "release";
+    executionMode: "offline-contract-fixture";
+    registeredCaseCount: number;
+    resultCount: number;
+    configurationCount: number;
+    releaseGatePassed: true;
+  };
+  failureClustering: {
+    reportHash: string;
+    clusterCount: number;
+    inputTraceCount: number;
+    evidenceScope: "synthetic-source-level-fixture-validation";
+  };
+  designAgent: {
+    reportHash: string;
+    caseCount: number;
+    resultCount: number;
+    passedResultCount: number;
+    executionMode: "offline-contract-fixture";
+    reportRecorded: true;
+  };
+  modelMatrix: {
+    catalogObservedAt: string;
+    authorizedModelIds: string[];
+    measurements: AgentLiveModelMeasurement[];
+    passedModelCount: number;
+    executionMode: "live-vercel-ai-gateway";
+  };
+  privacy: {
+    promptsStored: false;
+    outputsStored: false;
+    credentialsStored: false;
+    digestsOnly: true;
+  };
+}
+
 export interface AgentEvalSummary {
   generatedAt: string;
   traces: number;

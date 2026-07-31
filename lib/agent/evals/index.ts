@@ -5,6 +5,7 @@ export * from "./experiments.ts";
 export * from "./failure-taxonomy.ts";
 export * from "./failure-clustering.ts";
 export * from "./data-gate.ts";
+export * from "./evidence-activation.ts";
 export * from "./offline-executor.ts";
 export * from "./privacy.ts";
 export * from "./release-gate.ts";
