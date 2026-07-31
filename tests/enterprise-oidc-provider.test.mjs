@@ -12,6 +12,7 @@ import {
   oidcProviderConfig,
   oidcProviderSelfCheck,
   oidcUserInfo,
+  pairwiseSubject,
   parseOidcAuthorizationRequest,
   pkceChallenge,
   verifyOidcJwt,
@@ -29,6 +30,7 @@ const ISSUER = "https://drops.example/api/enterprise/oidc";
 const CLIENT_ID = "drops-studio-enterprise-client";
 const CLIENT_SECRET = "c".repeat(48);
 const SIGNING_SECRET = "s".repeat(48);
+const SUBJECT_SALT = "u".repeat(48);
 const REDIRECT_URI = `${ISSUER}/demo/callback`;
 
 function config(overrides = {}) {
@@ -37,6 +39,7 @@ function config(overrides = {}) {
     DROPS_ENTERPRISE_OIDC_CLIENT_ID: CLIENT_ID,
     DROPS_ENTERPRISE_OIDC_CLIENT_SECRET: CLIENT_SECRET,
     DROPS_ENTERPRISE_OIDC_SIGNING_SECRET: SIGNING_SECRET,
+    DROPS_ENTERPRISE_OIDC_SUBJECT_SALT: SUBJECT_SALT,
     DROPS_ENTERPRISE_OIDC_REDIRECT_URIS: "https://client.example/callback",
     ...overrides,
   });
@@ -53,7 +56,7 @@ class MemoryGrantStore {
 
   async consume(code, nowSeconds) {
     const record = this.records.get(code);
-    if (!record || record.consumedAt !== null || record.expiresAt < nowSeconds) return null;
+    if (!record || record.consumedAt !== null || record.expiresAt <= nowSeconds) return null;
     record.consumedAt = nowSeconds;
     return structuredClone({ ...record, consumedAt: null });
   }
@@ -72,7 +75,7 @@ function authorizationParams(providerConfig = config(), overrides = {}) {
       response_mode: "query",
       client_id: providerConfig.clientId,
       redirect_uri: REDIRECT_URI,
-      scope: "openid profile",
+      scope: "openid",
       state: "state_" + "a".repeat(43),
       nonce: "nonce_" + "b".repeat(43),
       code_challenge: pkceChallenge(verifier),
@@ -95,7 +98,21 @@ test("provider configuration requires independent strong secrets, canonical HTTP
   assert.throws(() => config({ DROPS_ENTERPRISE_OIDC_ISSUER: "https://drops.example//" }), hasCode("temporarily_unavailable"));
   assert.throws(() => config({ DROPS_ENTERPRISE_OIDC_CLIENT_SECRET: "short" }), hasCode("temporarily_unavailable"));
   assert.throws(() => config({ DROPS_ENTERPRISE_OIDC_SIGNING_SECRET: CLIENT_SECRET }), hasCode("temporarily_unavailable"));
+  assert.throws(() => config({ DROPS_ENTERPRISE_OIDC_SUBJECT_SALT: CLIENT_SECRET }), hasCode("temporarily_unavailable"));
   assert.throws(() => config({ DROPS_ENTERPRISE_OIDC_REDIRECT_URIS: "https://client.example/*" }), hasCode("temporarily_unavailable"));
+});
+
+test("pairwise subject remains stable across signing-key rotation", () => {
+  const identity = "a".repeat(64);
+  const subject = pairwiseSubject(config(), identity);
+  assert.equal(
+    pairwiseSubject(config({ DROPS_ENTERPRISE_OIDC_SIGNING_SECRET: "r".repeat(48) }), identity),
+    subject,
+  );
+  assert.notEqual(
+    pairwiseSubject(config({ DROPS_ENTERPRISE_OIDC_SUBJECT_SALT: "x".repeat(48) }), identity),
+    subject,
+  );
 });
 
 test("discovery and JWKS expose only the asymmetric public verification contract", () => {
@@ -107,6 +124,7 @@ test("discovery and JWKS expose only the asymmetric public verification contract
   assert.deepEqual(discovery.id_token_signing_alg_values_supported, ["EdDSA"]);
   assert.deepEqual(discovery.token_endpoint_auth_methods_supported, ["client_secret_basic"]);
   assert.deepEqual(discovery.code_challenge_methods_supported, ["S256"]);
+  assert.deepEqual(discovery.scopes_supported, ["openid"]);
   const jwks = oidcJwks(providerConfig);
   assert.equal(jwks.keys.length, 1);
   assert.deepEqual(Object.keys(jwks.keys[0]).sort(), ["alg", "crv", "kid", "kty", "use", "x"]);
@@ -121,7 +139,7 @@ test("authorization requests require exact client, redirect, state, nonce and PK
   const { params } = authorizationParams(providerConfig);
   const parsed = parseOidcAuthorizationRequest(params, providerConfig);
   assert.equal(parsed.redirectUri, REDIRECT_URI);
-  assert.equal(parsed.scope, "openid profile");
+  assert.equal(parsed.scope, "openid");
 
   assert.throws(
     () => parseOidcAuthorizationRequest(authorizationParams(providerConfig, { redirect_uri: `${REDIRECT_URI}.evil` }).params, providerConfig),
@@ -132,12 +150,89 @@ test("authorization requests require exact client, redirect, state, nonce and PK
     hasCode("invalid_request"),
   );
   assert.throws(
-    () => parseOidcAuthorizationRequest(authorizationParams(providerConfig, { scope: "openid email" }).params, providerConfig),
+    () => parseOidcAuthorizationRequest(authorizationParams(providerConfig, { scope: "openid profile" }).params, providerConfig),
     hasCode("invalid_scope"),
+  );
+  assert.throws(
+    () => parseOidcAuthorizationRequest(authorizationParams(providerConfig, { prompt: "login" }).params, providerConfig),
+    hasCode("invalid_request"),
+  );
+  assert.throws(
+    () => parseOidcAuthorizationRequest(authorizationParams(providerConfig, { prompt: "none" }).params, providerConfig),
+    hasCode("invalid_request"),
   );
   const duplicated = authorizationParams(providerConfig).params;
   duplicated.append("state", "state_" + "z".repeat(43));
   assert.throws(() => parseOidcAuthorizationRequest(duplicated, providerConfig), hasCode("invalid_request"));
+});
+
+test("token exchange rejects wrong client, redirect, verifier, and expired grants", async () => {
+  const providerConfig = config();
+  const nowSeconds = Math.floor(NOW.getTime() / 1_000);
+
+  async function issue(store, requestBundle = authorizationParams(providerConfig)) {
+    const request = parseOidcAuthorizationRequest(requestBundle.params, providerConfig);
+    const code = await issueOidcAuthorizationCode({
+      request,
+      member: { identity: "d".repeat(64), issuedAt: nowSeconds, provider: "openrouter" },
+      store,
+      config: providerConfig,
+      now: NOW,
+    });
+    return { code, requestBundle };
+  }
+
+  const wrongClientStore = new MemoryGrantStore();
+  const wrongClient = await issue(wrongClientStore);
+  await assert.rejects(exchangeOidcAuthorizationCode({
+    code: wrongClient.code,
+    codeVerifier: wrongClient.requestBundle.verifier,
+    redirectUri: REDIRECT_URI,
+    clientId: CLIENT_ID,
+    clientSecret: "x".repeat(48),
+    config: providerConfig,
+    store: wrongClientStore,
+    now: NOW,
+  }), hasCode("invalid_client"));
+
+  const wrongRedirectStore = new MemoryGrantStore();
+  const wrongRedirect = await issue(wrongRedirectStore);
+  await assert.rejects(exchangeOidcAuthorizationCode({
+    code: wrongRedirect.code,
+    codeVerifier: wrongRedirect.requestBundle.verifier,
+    redirectUri: "https://client.example/other",
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    config: providerConfig,
+    store: wrongRedirectStore,
+    now: NOW,
+  }), hasCode("invalid_grant"));
+
+  const wrongVerifierStore = new MemoryGrantStore();
+  const wrongVerifier = await issue(wrongVerifierStore);
+  await assert.rejects(exchangeOidcAuthorizationCode({
+    code: wrongVerifier.code,
+    codeVerifier: "w".repeat(64),
+    redirectUri: REDIRECT_URI,
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    config: providerConfig,
+    store: wrongVerifierStore,
+    now: NOW,
+  }), hasCode("invalid_grant"));
+
+  const expiredStore = new MemoryGrantStore();
+  const expired = await issue(expiredStore);
+  await assert.rejects(exchangeOidcAuthorizationCode({
+    code: expired.code,
+    codeVerifier: expired.requestBundle.verifier,
+    redirectUri: REDIRECT_URI,
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    config: providerConfig,
+    store: expiredStore,
+    now: new Date(NOW.getTime() + 120_000),
+  }), hasCode("invalid_grant"));
 });
 
 test("signed Studio member issues a one-time code and receives verifiable short-lived tokens", async () => {
@@ -328,6 +423,22 @@ class MockBlobStorage {
     return { pathname, etag, url: `https://private.example/${pathname}` };
   }
 
+  async list(options = {}) {
+    const prefix = options.prefix ?? "";
+    const matching = [...this.records.entries()]
+      .filter(([pathname]) => pathname.startsWith(prefix))
+      .map(([pathname, record]) => ({
+        pathname,
+        etag: record.etag,
+        size: Buffer.byteLength(record.body),
+        uploadedAt: new Date(),
+        url: `https://private.example/${pathname}`,
+        downloadUrl: `https://private.example/${pathname}?download=1`,
+      }));
+    const limit = options.limit ?? 1_000;
+    return { blobs: matching.slice(0, limit), hasMore: matching.length > limit };
+  }
+
   async del(pathname, options = {}) {
     const current = this.records.get(pathname);
     if (options.ifMatch && current?.etag !== options.ifMatch) throw new Error("precondition");
@@ -344,7 +455,7 @@ test("Blob grant store uses opaque private paths and atomic one-time consumption
     clientId: CLIENT_ID,
     redirectUri: REDIRECT_URI,
     subject: "q".repeat(43),
-    scope: "openid profile",
+    scope: "openid",
     nonce: "n".repeat(43),
     codeChallenge: "p".repeat(43),
     authTime: Math.floor(NOW.getTime() / 1_000),
@@ -362,4 +473,49 @@ test("Blob grant store uses opaque private paths and atomic one-time consumption
   assert.equal(await store.consume(code, nowSeconds), null);
   assert.equal(await store.health(), true);
   assert.equal(storage.accesses.every((access) => access === "private"), true);
+});
+
+test("Blob grant cleanup is bounded and deletes only valid expired records", async () => {
+  const storage = new MockBlobStorage();
+  const store = new BlobOidcAuthorizationCodeStore(storage);
+  const nowSeconds = Math.floor(NOW.getTime() / 1_000);
+  const makeRecord = (issuedAt) => ({
+    version: 1,
+    clientId: CLIENT_ID,
+    redirectUri: REDIRECT_URI,
+    subject: "q".repeat(43),
+    scope: "openid",
+    nonce: "n".repeat(43),
+    codeChallenge: "p".repeat(43),
+    authTime: nowSeconds - 300,
+    issuedAt,
+    expiresAt: issuedAt + 120,
+    consumedAt: null,
+  });
+  await store.issue("a".repeat(43), makeRecord(nowSeconds - 121));
+  await store.issue("b".repeat(43), makeRecord(nowSeconds));
+  await store.issue("c".repeat(43), makeRecord(nowSeconds - 121));
+  storage.records.set("drops-studio/enterprise/oidc/codes/malformed.json", {
+    body: JSON.stringify({ expiresAt: 1 }),
+    etag: `etag-${++storage.version}`,
+  });
+
+  const receipt = await store.cleanupExpired(nowSeconds, { maxScanned: 4, maxDeleted: 1 });
+  assert.equal(receipt.deleted, 1);
+  assert.equal(receipt.scanned <= 4, true);
+  assert.equal(receipt.hasMore, true);
+  assert.equal(storage.records.size, 3);
+  assert.equal(
+    [...storage.records.values()].some((record) => record.body.includes(`"issuedAt":${nowSeconds}`)),
+    true,
+  );
+  assert.equal(storage.records.has("drops-studio/enterprise/oidc/codes/malformed.json"), true);
+  await assert.rejects(
+    store.issue("d".repeat(43), { ...makeRecord(nowSeconds), expiresAt: nowSeconds + 121 }),
+    hasCode("temporarily_unavailable"),
+  );
+  await assert.rejects(
+    store.cleanupExpired(nowSeconds, { maxScanned: 2, maxDeleted: 3 }),
+    hasCode("invalid_request"),
+  );
 });

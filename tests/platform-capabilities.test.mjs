@@ -6,6 +6,7 @@ import { platformCapabilitySnapshot } from "../lib/platform-capabilities.ts";
 test("capability snapshot never upgrades reference adapters to production", () => {
   const snapshot = platformCapabilitySnapshot({ VERCEL_ENV: "production" }, new Date("2026-07-30T12:00:00.000Z"));
   assert.equal(snapshot.environment, "production");
+  assert.equal(snapshot.healthCheckedAt, null);
   assert.equal(snapshot.capabilities.find((item) => item.id === "managed-backend")?.state, "working-local-test");
   assert.equal(snapshot.capabilities.find((item) => item.id === "collaboration")?.state, "working-local-test");
   assert.equal(snapshot.capabilities.find((item) => item.id === "enterprise-identity")?.state, "working-local-test");
@@ -81,6 +82,7 @@ test("fresh production provider receipts upgrade only the matching capabilities"
     snapshot.capabilities.find((item) => item.id === "project-data")?.state,
     "working",
   );
+  assert.equal(snapshot.healthCheckedAt, "2026-07-31T11:59:00.000Z");
   assert.equal(
     snapshot.capabilities.find((item) => item.id === "sandbox")?.state,
     "setup-required",

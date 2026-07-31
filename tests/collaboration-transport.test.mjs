@@ -15,6 +15,7 @@ import {
   STUDIO_ACCOUNT_COOKIE,
 } from "../lib/access-tier.ts";
 import { createCollaborationRouteHandlers } from "../lib/collaboration-transport-route.ts";
+import { TeamApiError } from "../lib/team-api.ts";
 
 const COOKIE_SECRET = "collaboration-test-cookie-secret-000000000000000000";
 const HEALTH_SECRET = "collaboration-test-health-secret-000000000000000000";
@@ -118,6 +119,40 @@ test("collaboration transport enforces optimistic revisions and idempotency owne
     (error) => error instanceof CollaborationTransportError
       && error.code === "conflict",
   );
+});
+
+test("caller revision and idempotency conflicts are terminal after one durable read", async () => {
+  class CountingBackend extends MemoryProjectDataBackend {
+    reads = 0;
+
+    async read(projectId) {
+      this.reads += 1;
+      return await super.read(projectId);
+    }
+  }
+  const backend = new CountingBackend();
+  const transport = new CollaborationTransport(backend);
+  await transport.append(appendInput());
+
+  backend.reads = 0;
+  await assert.rejects(
+    transport.append(appendInput({
+      expectedRevision: 0,
+      idempotencyKey: "terminal-stale-key",
+    })),
+    (error) => error instanceof CollaborationTransportError
+      && error.code === "conflict"
+      && error.currentRevision === 1,
+  );
+  assert.equal(backend.reads, 1);
+
+  backend.reads = 0;
+  await assert.rejects(
+    transport.append(appendInput({ payload: { changed: true } })),
+    (error) => error instanceof CollaborationTransportError
+      && error.code === "conflict",
+  );
+  assert.equal(backend.reads, 1);
 });
 
 test("collaboration transport rejects credential material and oversized payloads", async () => {
@@ -251,6 +286,20 @@ test("canonical route enforces signed member cookie, same-origin writes, team RB
   assert.equal(createdPayload.event.actorId, editor.identity);
   assert.equal(createdPayload.revision, 1);
 
+  const replayed = await handlers.POST(request(
+    "https://drops.example/api/collaboration/transport",
+    {
+      method: "POST",
+      cookie: editor.cookie,
+      headers: { "content-type": "application/json", origin: "https://drops.example" },
+      body: JSON.stringify(body),
+    },
+  ));
+  assert.equal(replayed.status, 200);
+  const replayedPayload = await replayed.json();
+  assert.equal(replayedPayload.idempotent, true);
+  assert.equal(replayedPayload.event.id, createdPayload.event.id);
+
   const read = await handlers.GET(request(
     "https://drops.example/api/collaboration/transport?workspaceId=workspace_test&projectId=project_test&afterRevision=0&limit=10",
     { cookie: viewer.cookie },
@@ -287,6 +336,88 @@ test("canonical health route is operator-only and returns bounded provider evide
   assert.equal(payload.status, "working");
   assert.ok(payload.evidence.includes("collaboration-two-actor-order-live"));
   assert.ok(payload.evidence.includes("collaboration-cleanup-live"));
+});
+
+test("canonical health route applies its dedicated rate limit before live health", async () => {
+  class CountingHealthTransport extends CollaborationTransport {
+    checks = 0;
+
+    async liveHealth() {
+      this.checks += 1;
+      return await super.liveHealth();
+    }
+  }
+  const transport = new CountingHealthTransport(new MemoryProjectDataBackend());
+  let rateChecks = 0;
+  const handlers = createCollaborationRouteHandlers({
+    environment: { DROPS_PLATFORM_HEALTH_OPERATOR_SECRET: HEALTH_SECRET },
+    transport,
+    enforceHealthRateLimit: async () => {
+      rateChecks += 1;
+      if (rateChecks > 1) throw new TeamApiError(429, "Health rate limit reached.");
+    },
+  });
+  const healthRequest = () => request(
+    "https://drops.example/api/collaboration/transport?health=1",
+    { headers: { authorization: `Bearer ${HEALTH_SECRET}` } },
+  );
+
+  assert.equal((await handlers.GET(healthRequest())).status, 200);
+  assert.equal(transport.checks, 1);
+  const limited = await handlers.GET(healthRequest());
+  assert.equal(limited.status, 429);
+  assert.equal(transport.checks, 1);
+});
+
+test("canonical route reports an injected unavailable transport without claiming working", async () => {
+  const viewer = account("unavailable-route-test");
+  const team = workspace([{ identity: viewer.identity, role: "owner" }]);
+  const handlers = createCollaborationRouteHandlers({
+    transport: null,
+    resolveWorkspace: async () => team,
+    enforceRateLimit: async () => {},
+  });
+  const response = await handlers.GET(request(
+    "https://drops.example/api/collaboration/transport?workspaceId=workspace_test&projectId=project_test",
+    { cookie: viewer.cookie },
+  ));
+  assert.equal(response.status, 503);
+  const payload = await response.json();
+  assert.equal(payload.status, "unavailable");
+  assert.equal(payload.code, "COLLABORATION_STORAGE_UNAVAILABLE");
+});
+
+test("canonical route validates revision, idempotency key, and event type before side effects", async () => {
+  const editor = account("validation-route-test");
+  let rateLimitCalls = 0;
+  const handlers = createCollaborationRouteHandlers({
+    transport: new CollaborationTransport(new MemoryProjectDataBackend()),
+    enforceRateLimit: async () => { rateLimitCalls += 1; },
+  });
+  const baseBody = {
+    ...SCOPE,
+    expectedRevision: 0,
+    idempotencyKey: "validation-key-0001",
+    type: "document.patch",
+    payload: { path: "app/page.tsx" },
+  };
+  for (const body of [
+    { ...baseBody, expectedRevision: "0" },
+    { ...baseBody, idempotencyKey: "short" },
+    { ...baseBody, type: "document.execute" },
+  ]) {
+    const response = await handlers.POST(request(
+      "https://drops.example/api/collaboration/transport",
+      {
+        method: "POST",
+        cookie: editor.cookie,
+        headers: { "content-type": "application/json", origin: "https://drops.example" },
+        body: JSON.stringify(body),
+      },
+    ));
+    assert.equal(response.status, 400);
+  }
+  assert.equal(rateLimitCalls, 0);
 });
 
 test("canonical route rejects oversized write bodies before parsing", async () => {

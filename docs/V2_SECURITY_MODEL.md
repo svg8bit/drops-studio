@@ -237,9 +237,13 @@ retention limits, rate limits and credential scanning fail closed.
 The first-party OIDC issuer derives an Ed25519 key from dedicated server-only
 signing material. Its JWKS contains only the public key. Authorization codes are
 random, short-lived, PKCE-bound, exact-redirect-bound and consumed once through
-private Blob ETag CAS. Client and signing secrets must differ. Token, provider
-secret and member-cookie material are excluded from project files, ZIPs,
-checkpoints, logs and public health responses.
+private Blob ETag CAS; authenticated health performs a bounded expired-code
+cleanup sweep. Client secret, signing secret and pairwise subject salt must be
+independent. The subject salt keeps user identifiers stable across signing-key
+rotation and is changed only with an explicit identity migration. Token,
+provider secret and member-cookie material are excluded from project files,
+ZIPs, checkpoints, logs and public health responses. External OIDC health
+validates public HTTPS discovery and JWKS without transmitting client secrets.
 
 ## Built-in project data
 

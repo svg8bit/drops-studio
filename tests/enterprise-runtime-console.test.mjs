@@ -19,6 +19,8 @@ test("runtime console reads collaboration and identity from one public capabilit
   assert.match(source, /cache: "no-store"/);
   assert.match(source, /useRef\(0\)/);
   assert.match(source, /refreshGeneration\.current !== generation/);
+  assert.match(source, /payload\.healthCheckedAt/);
+  assert.doesNotMatch(source, /payload\.generatedAt/);
   assert.match(source, /credentials: "same-origin"/);
   assert.match(source, /AbortController/);
   assert.match(source, /state === "working"/);

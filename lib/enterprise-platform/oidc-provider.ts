@@ -16,7 +16,6 @@ export const OIDC_TOKEN_TTL_SECONDS = 300;
 export const OIDC_MAX_CLOCK_SKEW_SECONDS = 30;
 
 const ED25519_PKCS8_SEED_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
-const OIDC_SCOPES = new Set(["openid", "profile"]);
 const SAFE_VALUE = /^[A-Za-z0-9._~-]+$/;
 const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
 const PKCE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
@@ -50,6 +49,7 @@ export interface OidcProviderEnvironment {
   DROPS_ENTERPRISE_OIDC_CLIENT_ID?: string;
   DROPS_ENTERPRISE_OIDC_CLIENT_SECRET?: string;
   DROPS_ENTERPRISE_OIDC_SIGNING_SECRET?: string;
+  DROPS_ENTERPRISE_OIDC_SUBJECT_SALT?: string;
   DROPS_ENTERPRISE_OIDC_REDIRECT_URIS?: string;
   VERCEL_PROJECT_PRODUCTION_URL?: string;
 }
@@ -59,6 +59,7 @@ export interface OidcProviderConfig {
   clientId: string;
   clientSecret: string;
   signingSecret: string;
+  subjectSalt: string;
   redirectUris: ReadonlySet<string>;
 }
 
@@ -191,8 +192,20 @@ export function oidcProviderConfig(
     environment.DROPS_ENTERPRISE_OIDC_SIGNING_SECRET,
     "OIDC signing secret",
   );
-  if (safeEqual(clientSecret, signingSecret)) {
-    throw new OidcProviderError("temporarily_unavailable", "OIDC signing and client secrets must be independent.", 503);
+  const subjectSalt = requiredSecret(
+    environment.DROPS_ENTERPRISE_OIDC_SUBJECT_SALT,
+    "OIDC subject salt",
+  );
+  if (
+    safeEqual(clientSecret, signingSecret)
+    || safeEqual(clientSecret, subjectSalt)
+    || safeEqual(signingSecret, subjectSalt)
+  ) {
+    throw new OidcProviderError(
+      "temporarily_unavailable",
+      "OIDC client, signing, and subject secrets must be independent.",
+      503,
+    );
   }
   const configuredRedirects = (environment.DROPS_ENTERPRISE_OIDC_REDIRECT_URIS ?? "")
     .split(",")
@@ -203,7 +216,7 @@ export function oidcProviderConfig(
   }
   const redirects = new Set(configuredRedirects.map(canonicalRedirectUri));
   redirects.add(canonicalRedirectUri(`${issuer}/demo/callback`));
-  return { issuer, clientId, clientSecret, signingSecret, redirectUris: redirects };
+  return { issuer, clientId, clientSecret, signingSecret, subjectSalt, redirectUris: redirects };
 }
 
 export function oidcDiscovery(config: OidcProviderConfig) {
@@ -221,7 +234,7 @@ export function oidcDiscovery(config: OidcProviderConfig) {
     id_token_signing_alg_values_supported: ["EdDSA"],
     token_endpoint_auth_methods_supported: ["client_secret_basic"],
     code_challenge_methods_supported: ["S256"],
-    scopes_supported: ["openid", "profile"],
+    scopes_supported: ["openid"],
     claims_supported: ["iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp"],
   } as const;
 }
@@ -306,9 +319,8 @@ export function parseOidcAuthorizationRequest(
   if (singleParameter(params, "code_challenge_method") !== "S256") {
     throw new OidcProviderError("invalid_request", "OIDC PKCE S256 is required.");
   }
-  const prompt = params.get("prompt");
-  if (params.getAll("prompt").length > 1 || (prompt && !["login", "none"].includes(prompt))) {
-    throw new OidcProviderError("invalid_request", "OIDC prompt value is not supported.");
+  if (params.has("prompt")) {
+    throw new OidcProviderError("invalid_request", "OIDC prompt is not supported.");
   }
   return {
     clientId,
@@ -326,10 +338,10 @@ export function parseOidcAuthorizationRequest(
 export function normalizeScope(value: string): string {
   if (!value || value.length > 160) throw new OidcProviderError("invalid_scope", "OIDC scope is invalid.");
   const scopes = [...new Set(value.split(/\s+/).filter(Boolean))];
-  if (!scopes.includes("openid") || scopes.some((scope) => !OIDC_SCOPES.has(scope))) {
-    throw new OidcProviderError("invalid_scope", "Only openid and profile scopes are supported.");
+  if (scopes.length !== 1 || scopes[0] !== "openid") {
+    throw new OidcProviderError("invalid_scope", "Only the openid scope is supported.");
   }
-  return scopes.sort((left, right) => (left === "openid" ? -1 : right === "openid" ? 1 : left.localeCompare(right))).join(" ");
+  return "openid";
 }
 
 export function pkceChallenge(codeVerifier: string): string {
@@ -343,7 +355,7 @@ export function pairwiseSubject(config: OidcProviderConfig, memberIdentity: stri
   if (!/^[a-f0-9]{64}$/i.test(memberIdentity)) {
     throw new OidcProviderError("login_required", "A signed Studio member account is required.", 401);
   }
-  return createHmac("sha256", config.signingSecret)
+  return createHmac("sha256", config.subjectSalt)
     .update(`drops-studio-oidc-sub:v1:${config.clientId}:${memberIdentity}`, "utf8")
     .digest("base64url");
 }
@@ -467,7 +479,7 @@ export async function exchangeOidcAuthorizationCode(input: {
     || record.clientId !== input.clientId
     || record.redirectUri !== input.redirectUri
     || !safeEqual(record.codeChallenge, pkceChallenge(input.codeVerifier))
-    || record.expiresAt < now
+    || record.expiresAt <= now
   ) {
     throw new OidcProviderError("invalid_grant", "Authorization code or verifier is invalid.");
   }
@@ -531,7 +543,7 @@ export async function oidcProviderSelfCheck(
 }> {
   const probeClaims = {
     iss: config.issuer,
-    sub: createHmac("sha256", config.signingSecret).update("oidc-health-subject").digest("base64url"),
+    sub: createHmac("sha256", config.subjectSalt).update("oidc-health-subject").digest("base64url"),
     aud: config.clientId,
     iat: Math.floor(now.getTime() / 1_000),
     exp: Math.floor(now.getTime() / 1_000) + 30,

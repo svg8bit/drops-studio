@@ -14,6 +14,12 @@ import { durableOidcAuthorizationCodeStore } from "../../../../../lib/enterprise
 
 export async function POST(request: NextRequest) {
   try {
+    await enforceOidcRateLimit({
+      request,
+      namespace: "enterprise-oidc-token-ingress",
+      max: 60,
+      windowMs: 60_000,
+    });
     const config = oidcProviderConfig();
     const tokenRequest = await parseTokenRequest(request, config);
     await enforceOidcRateLimit({

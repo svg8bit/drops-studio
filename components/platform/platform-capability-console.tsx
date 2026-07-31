@@ -173,7 +173,7 @@ export function PlatformCapabilityConsole({ mode }: { mode: "backend" | "enterpr
 
           {loading ? <div className="grid min-h-72 place-items-center" aria-live="polite"><div className="text-center"><LoaderCircle className="mx-auto size-7 animate-spin text-[#245fe5]" aria-hidden="true" /><p className="mt-3 text-sm text-[#52617a]">Reading server capability receipts…</p></div></div> : null}
           {!loading && error ? <div className="mt-6 rounded-2xl border border-[#ecd9bb] bg-[#fff9ef] p-6"><StatusBadge status="setup">Evidence unavailable</StatusBadge><p className="mt-4 text-sm leading-6 text-[#6f5a35]">{error}</p></div> : null}
-          {!loading && snapshot ? <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-[#52617a]"><span>Environment: <strong className="text-[#07142f]">{snapshot.environment}</strong></span><span>Receipt time: {new Date(snapshot.generatedAt).toLocaleString()}</span></div><div className="grid gap-4 xl:grid-cols-2">{receipts.map((receipt) => <CapabilityCard key={receipt.id} capability={receipt} />)}</div></div> : null}
+          {!loading && snapshot ? <div className="mt-6"><div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-[#52617a]"><span>Environment: <strong className="text-[#07142f]">{snapshot.environment}</strong></span><span>Provider health checked: {snapshot.healthCheckedAt ? new Date(snapshot.healthCheckedAt).toLocaleString() : "No current live receipt"}</span></div><div className="grid gap-4 xl:grid-cols-2">{receipts.map((receipt) => <CapabilityCard key={receipt.id} capability={receipt} />)}</div></div> : null}
         </div>
       </div>
     </section>

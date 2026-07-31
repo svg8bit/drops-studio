@@ -1,12 +1,30 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import {
+  OIDC_CODE_TTL_SECONDS,
   OidcProviderError,
   type OidcAuthorizationCodeRecord,
   type OidcAuthorizationCodeStore,
 } from "./oidc-provider.ts";
 
-type BlobStorage = Pick<typeof import("@vercel/blob"), "del" | "get" | "put">;
+type BlobStorage = Pick<typeof import("@vercel/blob"), "del" | "get" | "list" | "put">;
+
+const AUTHORIZATION_CODE_PREFIX = "drops-studio/enterprise/oidc/codes/";
+const DEFAULT_CLEANUP_MAX_SCANNED = 64;
+const DEFAULT_CLEANUP_MAX_DELETED = 16;
+const MAX_CLEANUP_SCANNED = 256;
+const MAX_CLEANUP_DELETED = 64;
+
+export interface OidcAuthorizationCodeCleanupOptions {
+  maxScanned?: number;
+  maxDeleted?: number;
+}
+
+export interface OidcAuthorizationCodeCleanupReceipt {
+  scanned: number;
+  deleted: number;
+  hasMore: boolean;
+}
 
 interface StoredAuthorizationCode {
   record: OidcAuthorizationCodeRecord;
@@ -22,7 +40,7 @@ function storageConfigured(environment: NodeJS.ProcessEnv = process.env): boolea
 
 function codePathname(code: string): string {
   const digest = createHash("sha256").update(code, "ascii").digest("hex");
-  return `drops-studio/enterprise/oidc/codes/${digest}.json`;
+  return `${AUTHORIZATION_CODE_PREFIX}${digest}.json`;
 }
 
 function validRecord(value: unknown): OidcAuthorizationCodeRecord | null {
@@ -49,7 +67,7 @@ function validRecord(value: unknown): OidcAuthorizationCodeRecord | null {
     || !Number.isSafeInteger(record.issuedAt)
     || Number(record.issuedAt) <= 0
     || !Number.isSafeInteger(record.expiresAt)
-    || Number(record.expiresAt) <= Number(record.issuedAt)
+    || Number(record.expiresAt) - Number(record.issuedAt) !== OIDC_CODE_TTL_SECONDS
     || (record.consumedAt !== null && (!Number.isSafeInteger(record.consumedAt) || Number(record.consumedAt) <= 0))
   ) return null;
   return record as OidcAuthorizationCodeRecord;
@@ -101,7 +119,7 @@ export class BlobOidcAuthorizationCodeStore implements OidcAuthorizationCodeStor
       const pathname = codePathname(code);
       const current = await readCode(this.#storage, pathname);
       if (!current || current.record.consumedAt !== null) return null;
-      if (current.record.expiresAt < nowSeconds) {
+      if (current.record.expiresAt <= nowSeconds) {
         await this.#storage.del(pathname, { ifMatch: current.etag }).catch(() => undefined);
         return null;
       }
@@ -129,6 +147,58 @@ export class BlobOidcAuthorizationCodeStore implements OidcAuthorizationCodeStor
     } catch (error) {
       if (error instanceof OidcProviderError) throw error;
       throw new OidcProviderError("temporarily_unavailable", "OIDC authorization-code storage is unavailable.", 503);
+    }
+  }
+
+  async cleanupExpired(
+    nowSeconds: number,
+    options: OidcAuthorizationCodeCleanupOptions = {},
+  ): Promise<OidcAuthorizationCodeCleanupReceipt> {
+    if (!Number.isSafeInteger(nowSeconds) || nowSeconds <= 0) {
+      throw new OidcProviderError("invalid_request", "OIDC cleanup timestamp is invalid.");
+    }
+    const maxScanned = options.maxScanned ?? DEFAULT_CLEANUP_MAX_SCANNED;
+    const maxDeleted = options.maxDeleted ?? DEFAULT_CLEANUP_MAX_DELETED;
+    if (
+      !Number.isSafeInteger(maxScanned)
+      || maxScanned < 1
+      || maxScanned > MAX_CLEANUP_SCANNED
+      || !Number.isSafeInteger(maxDeleted)
+      || maxDeleted < 1
+      || maxDeleted > MAX_CLEANUP_DELETED
+      || maxDeleted > maxScanned
+    ) {
+      throw new OidcProviderError("invalid_request", "OIDC cleanup limits are invalid.");
+    }
+
+    try {
+      const listed = await this.#storage.list({
+        prefix: AUTHORIZATION_CODE_PREFIX,
+        limit: maxScanned,
+      });
+      let scanned = 0;
+      let deleted = 0;
+      for (const blob of listed.blobs.slice(0, maxScanned)) {
+        if (deleted >= maxDeleted) break;
+        scanned += 1;
+        try {
+          const current = await readCode(this.#storage, blob.pathname);
+          if (!current || current.record.expiresAt > nowSeconds) continue;
+          await this.#storage.del(blob.pathname, { ifMatch: current.etag });
+          deleted += 1;
+        } catch {
+          // A malformed record or ETag race is skipped. Cleanup never deletes
+          // a record unless a bounded, valid read proves that it is expired.
+        }
+      }
+      return {
+        scanned,
+        deleted,
+        hasMore: listed.hasMore || listed.blobs.length > scanned,
+      };
+    } catch (error) {
+      if (error instanceof OidcProviderError) throw error;
+      throw new OidcProviderError("temporarily_unavailable", "OIDC authorization-code cleanup is unavailable.", 503);
     }
   }
 
@@ -161,7 +231,16 @@ export class BlobOidcAuthorizationCodeStore implements OidcAuthorizationCodeStor
         const verified = await this.#storage.get(pathname, { access: "private", useCache: false });
         if (!verified || verified.statusCode !== 200 || verified.blob.size > 2_048) return false;
         const parsed = JSON.parse(await new Response(verified.stream).text()) as { nonceHash?: unknown };
-        if (parsed.nonceHash === nonceHash) return true;
+        if (parsed.nonceHash === nonceHash) {
+          // Health writes reuse one fixed CAS-protected blob. A small,
+          // best-effort sweep also prevents abandoned authorization codes from
+          // accumulating without turning health into an unbounded data job.
+          await this.cleanupExpired(Math.floor(Date.now() / 1_000), {
+            maxScanned: 16,
+            maxDeleted: 4,
+          }).catch(() => undefined);
+          return true;
+        }
       } catch {
         // A concurrent health probe can win the ETag race; retry with a fresh read.
       }

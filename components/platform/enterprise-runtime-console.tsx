@@ -58,6 +58,9 @@ const checks: RuntimeCheck[] = [
       "DROPS_ENTERPRISE_OIDC_ISSUER",
       "DROPS_ENTERPRISE_OIDC_CLIENT_ID",
       "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET",
+      "DROPS_ENTERPRISE_OIDC_REDIRECT_URIS",
+      "DROPS_ENTERPRISE_OIDC_SIGNING_SECRET",
+      "DROPS_ENTERPRISE_OIDC_SUBJECT_SALT",
     ],
   },
 ];
@@ -133,9 +136,10 @@ async function readCapabilityReceipts(): Promise<Record<RuntimeCheck["id"], Runt
     }
 
     const capabilities = payload.capabilities.filter(isCapabilityReceipt);
-    const snapshotTime = typeof payload.generatedAt === "string" && Number.isFinite(Date.parse(payload.generatedAt))
-      ? payload.generatedAt
-      : checkedAt;
+    const snapshotTime = typeof payload.healthCheckedAt === "string"
+      && Number.isFinite(Date.parse(payload.healthCheckedAt))
+      ? payload.healthCheckedAt
+      : null;
 
     return Object.fromEntries(checks.map((check) => {
       const capability = capabilities.find((candidate) => candidate.id === check.capabilityId);
@@ -219,8 +223,8 @@ function RuntimeReceiptCard({ check, receipt }: { check: RuntimeCheck; receipt: 
             <p className="mt-1 text-sm leading-6 text-[#52617a]">{receipt.detail}</p>
             <p className="mt-2 font-mono text-xs text-[#71809a]">
               {receipt.checkedAt
-                ? `Snapshot ${new Date(receipt.checkedAt).toLocaleString()}${receipt.httpStatus ? ` · HTTP ${receipt.httpStatus}` : ""}`
-                : "No capability snapshot loaded yet"}
+                ? `Provider health ${new Date(receipt.checkedAt).toLocaleString()}${receipt.httpStatus ? ` · HTTP ${receipt.httpStatus}` : ""}`
+                : "No current provider health receipt"}
             </p>
           </div>
         </div>
@@ -274,10 +278,13 @@ export function EnterpriseRuntimeConsole() {
     refreshGeneration.current = generation;
     setRefreshing(true);
     setReceipts({ collaboration: initialReceipt, identity: initialReceipt });
-    const nextReceipts = await readCapabilityReceipts();
-    if (refreshGeneration.current !== generation) return;
-    setReceipts(nextReceipts);
-    setRefreshing(false);
+    try {
+      const nextReceipts = await readCapabilityReceipts();
+      if (refreshGeneration.current !== generation) return;
+      setReceipts(nextReceipts);
+    } finally {
+      if (refreshGeneration.current === generation) setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {

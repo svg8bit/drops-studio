@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server.js";
 
 import {
+  COLLABORATION_EVENT_TYPES,
   COLLABORATION_MAX_READ_EVENTS,
   COLLABORATION_MAX_REQUEST_BYTES,
   CollaborationTransport,
@@ -30,16 +31,19 @@ const HEALTH_SECRET_MIN_BYTES = 32;
 
 interface CollaborationRouteDependencies {
   environment?: NodeJS.ProcessEnv;
-  transport?: CollaborationTransport;
+  transport?: CollaborationTransport | null;
   resolveWorkspace?: (actorIdentity: string, workspaceId: string) => Promise<TeamWorkspace | null>;
   enforceRateLimit?: (identity: string, mode: "read" | "write") => Promise<void>;
+  enforceHealthRateLimit?: () => Promise<void>;
   requireWriteEntitlement?: (ownerIdentity: string) => Promise<unknown>;
 }
 
 let productionTransport: Promise<CollaborationTransport | null> | null = null;
 
 function transportFor(dependencies: CollaborationRouteDependencies): Promise<CollaborationTransport | null> {
-  if (dependencies.transport) return Promise.resolve(dependencies.transport);
+  if (Object.prototype.hasOwnProperty.call(dependencies, "transport")) {
+    return Promise.resolve(dependencies.transport ?? null);
+  }
   productionTransport ??= createProductionCollaborationTransport(
     dependencies.environment ?? process.env,
   ).catch((error: unknown) => {
@@ -54,6 +58,36 @@ function stringField(value: unknown, name: string): string {
     throw new TeamApiError(400, `Collaboration ${name} is required.`);
   }
   return value.trim();
+}
+
+function revisionField(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new TeamApiError(400, "Collaboration expectedRevision must be a non-negative integer.");
+  }
+  return value;
+}
+
+function idempotencyKeyField(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(value)
+  ) {
+    throw new TeamApiError(
+      400,
+      "Collaboration idempotencyKey must be 8-128 safe characters.",
+    );
+  }
+  return value;
+}
+
+function eventTypeField(value: unknown): CollaborationAppendInput["type"] {
+  if (
+    typeof value !== "string"
+    || !(COLLABORATION_EVENT_TYPES as readonly string[]).includes(value)
+  ) {
+    throw new TeamApiError(400, "Collaboration type is unsupported.");
+  }
+  return value as CollaborationAppendInput["type"];
 }
 
 function exactFields(body: Record<string, unknown>, allowed: readonly string[]): void {
@@ -94,6 +128,21 @@ async function defaultRateLimit(identity: string, mode: "read" | "write"): Promi
   if (status === "limited") throw new TeamApiError(429, "Collaboration request limit reached.");
   if (status === "unavailable") {
     throw new TeamApiError(503, "Collaboration request protection is unavailable.");
+  }
+}
+
+async function defaultHealthRateLimit(): Promise<void> {
+  const status = await consumeRequestLimit({
+    identity: "operator-health",
+    namespace: "collaboration:health",
+    max: 12,
+    windowMs: 60 * 60 * 1_000,
+  });
+  if (status === "limited") {
+    throw new TeamApiError(429, "Collaboration health request limit reached.");
+  }
+  if (status === "unavailable") {
+    throw new TeamApiError(503, "Collaboration health request protection is unavailable.");
   }
 }
 
@@ -172,6 +221,7 @@ export function createCollaborationRouteHandlers(
           if (!validHealthAuthorization(request, environment)) {
             return teamJson({ status: "unauthorized" }, 401);
           }
+          await (dependencies.enforceHealthRateLimit ?? defaultHealthRateLimit)();
           const transport = await transportFor(dependencies);
           if (!transport) return unavailable();
           return teamJson({ ...await transport.liveHealth() });
@@ -222,9 +272,9 @@ export function createCollaborationRouteHandlers(
           workspaceId: stringField(body.workspaceId, "workspaceId"),
           projectId: stringField(body.projectId, "projectId"),
           actorId: member.identity,
-          expectedRevision: body.expectedRevision as number,
-          idempotencyKey: body.idempotencyKey as string,
-          type: body.type as CollaborationAppendInput["type"],
+          expectedRevision: revisionField(body.expectedRevision),
+          idempotencyKey: idempotencyKeyField(body.idempotencyKey),
+          type: eventTypeField(body.type),
           payload: body.payload,
         };
         await (dependencies.enforceRateLimit ?? defaultRateLimit)(member.identity, "write");

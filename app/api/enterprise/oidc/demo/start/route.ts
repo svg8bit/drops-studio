@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
       response_mode: "query",
       client_id: config.clientId,
       redirect_uri: flow.redirectUri,
-      scope: "openid profile",
+      scope: "openid",
       state: flow.state,
       nonce: flow.nonce,
       code_challenge: flow.codeChallenge,

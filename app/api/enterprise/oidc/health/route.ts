@@ -14,6 +14,12 @@ import { durableOidcAuthorizationCodeStore } from "../../../../../lib/enterprise
 
 export async function GET(request: NextRequest) {
   try {
+    await enforceOidcRateLimit({
+      request,
+      namespace: "enterprise-oidc-health-ingress",
+      max: 30,
+      windowMs: 5 * 60_000,
+    });
     const config = oidcProviderConfig();
     authenticateConfidentialClient(request, config);
     await enforceOidcRateLimit({

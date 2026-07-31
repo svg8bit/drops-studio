@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type { NextRequest } from "next/server.js";
+import type { NextRequest, NextResponse } from "next/server.js";
 
 import {
   exchangeOidcAuthorizationCode,
+  OidcProviderError,
   oidcProviderConfig,
   oidcUserInfo,
   safeEqual,
@@ -20,7 +21,7 @@ import {
 import { durableOidcAuthorizationCodeStore } from "../../../../../../lib/enterprise-platform/oidc-provider-storage.ts";
 
 export async function GET(request: NextRequest) {
-  let response;
+  let response: NextResponse;
   try {
     const config = oidcProviderConfig();
     const account = studioMember(request);
@@ -33,11 +34,13 @@ export async function GET(request: NextRequest) {
     });
     const flow = readDemoFlow(request.cookies.get(OIDC_DEMO_COOKIE)?.value, config);
     const errors = request.nextUrl.searchParams.getAll("error");
-    if (errors.length) throw new Error("OIDC demo authorization failed.");
+    if (errors.length) {
+      throw new OidcProviderError("invalid_request", "OIDC demo authorization failed.");
+    }
     const codes = request.nextUrl.searchParams.getAll("code");
     const states = request.nextUrl.searchParams.getAll("state");
     if (codes.length !== 1 || states.length !== 1 || !safeEqual(states[0], flow.state)) {
-      throw new Error("OIDC demo callback is invalid.");
+      throw new OidcProviderError("invalid_request", "OIDC demo callback is invalid.");
     }
     const tokenSet = await exchangeOidcAuthorizationCode({
       code: codes[0],
@@ -52,9 +55,13 @@ export async function GET(request: NextRequest) {
       type: "JWT",
       audience: config.clientId,
     });
-    if (idToken.claims.nonce !== flow.nonce) throw new Error("OIDC demo nonce is invalid.");
+    if (idToken.claims.nonce !== flow.nonce) {
+      throw new OidcProviderError("invalid_request", "OIDC demo nonce is invalid.");
+    }
     const userInfo = oidcUserInfo(tokenSet.access_token, config);
-    if (idToken.claims.sub !== userInfo.sub) throw new Error("OIDC demo subject mismatch.");
+    if (idToken.claims.sub !== userInfo.sub) {
+      throw new OidcProviderError("invalid_request", "OIDC demo subject mismatch.");
+    }
     response = oidcJson({
       status: "working",
       issuer: config.issuer,

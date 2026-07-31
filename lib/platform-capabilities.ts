@@ -21,6 +21,7 @@ export interface PlatformCapabilityReceipt {
 
 export interface PlatformCapabilitySnapshot {
   generatedAt: string;
+  healthCheckedAt: string | null;
   environment: "development" | "preview" | "production";
   capabilities: PlatformCapabilityReceipt[];
 }
@@ -79,6 +80,7 @@ export function platformCapabilitySnapshot(
     "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET",
     "DROPS_ENTERPRISE_OIDC_SIGNING_SECRET",
     "DROPS_ENTERPRISE_OIDC_REDIRECT_URIS",
+    "DROPS_ENTERPRISE_OIDC_SUBJECT_SALT",
   ]);
   const audit = managedRelational && Boolean(environment.DROPS_ENTERPRISE_AUDIT_SIGNING_KEY?.trim());
   const receiptCurrent = Boolean(
@@ -182,6 +184,7 @@ export function platformCapabilitySnapshot(
         "DROPS_ENTERPRISE_OIDC_CLIENT_SECRET",
         "DROPS_ENTERPRISE_OIDC_SIGNING_SECRET",
         "DROPS_ENTERPRISE_OIDC_REDIRECT_URIS",
+        "DROPS_ENTERPRISE_OIDC_SUBJECT_SALT",
       ],
     },
     {
@@ -221,6 +224,7 @@ export function platformCapabilitySnapshot(
 
   return {
     generatedAt: now.toISOString(),
+    healthCheckedAt: receiptCurrent ? healthReceipt?.checkedAt ?? null : null,
     environment: runtimeEnvironment(environment),
     capabilities,
   };

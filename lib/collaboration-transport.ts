@@ -529,7 +529,11 @@ export class CollaborationTransport {
         };
       } catch (error) {
         const mapped = mapProjectDataError(error);
-        if (mapped.code !== "conflict" || attempt > 0) throw mapped;
+        // Retry only storage-layer compare-and-swap races. Caller-visible stale
+        // revisions and idempotency conflicts are terminal and must not cause a
+        // second durable read.
+        const storageConflict = error instanceof ProjectDataError && error.code === "conflict";
+        if (!storageConflict || attempt > 0) throw mapped;
       }
     }
     throw new CollaborationTransportError(
