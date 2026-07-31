@@ -178,7 +178,10 @@ export async function GET(request: NextRequest) {
       account.identity,
       projectId(request.nextUrl.searchParams.get("id")),
     );
-    if (!stored) return json({ error: "Project V2 snapshot was not found." }, 404);
+    // A missing cloud snapshot is an expected state for browser-local projects.
+    // Return a successful empty receipt so Chromium does not surface a noisy
+    // failed-resource console error while Studio falls back to its local copy.
+    if (!stored) return json({ found: false });
     return json(stored);
   } catch (error) {
     return responseError(error);

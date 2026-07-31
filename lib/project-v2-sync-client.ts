@@ -56,6 +56,7 @@ export async function loadProjectV2FromCloud(projectId: string): Promise<{
   if (response.status === 404) return null;
   const value = await responseValue(response);
   if (!response.ok) throw syncError(response, value);
+  if (value.found === false) return null;
   if (!value.project || typeof value.project !== "object" || !Number.isSafeInteger(value.storageRevision)) {
     throw new ProjectV2SyncError({ message: "Project V2 cloud sync returned an invalid snapshot.", status: 502 });
   }
