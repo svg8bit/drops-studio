@@ -262,7 +262,10 @@ test("signed-in home restores and opens a remote-only runnable project", async (
   await page.getByRole("button", { name: /My Projects/ }).click()
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByText("Private cloud + browser", { exact: true })).toBeVisible()
-  await dialog.getByRole("button", { name: new RegExp(REMOTE_PROJECT_NAME) }).click()
+  await dialog
+    .locator(".project-open-button")
+    .filter({ hasText: REMOTE_PROJECT_NAME })
+    .click()
 
   await expect(page).toHaveURL(new RegExp(`/studio/${REMOTE_PROJECT_ID}$`))
   await expect(page.getByRole("main")).toHaveClass(/project-studio-shell/)
