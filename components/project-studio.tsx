@@ -3803,6 +3803,33 @@ export function ProjectStudio() {
                 </span>
                 <b className="free-badge">FREE</b>
               </div>
+              <div className="design-identity">
+                <label>
+                  Product name
+                  <input
+                    value={project.spec.name}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) => ({
+                        ...spec,
+                        name: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Product promise
+                  <textarea
+                    rows={2}
+                    value={project.spec.tagline}
+                    onChange={(event) =>
+                      updateSpecQuiet((spec) => ({
+                        ...spec,
+                        tagline: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
               <button
                 type="button"
                 className={`design-mode-control ${designMode ? "active" : ""}`}
@@ -4330,7 +4357,7 @@ export function ProjectStudio() {
             </section>
           )}
 
-          {tab === "logic" && (
+          {tab === "design" && (
             <section className="inspector-section">
               <div className="inspector-heading">
                 <span>

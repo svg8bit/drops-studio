@@ -119,7 +119,7 @@ function expectAppliedDirectorSpec(spec: GeneratedProjectSpec) {
   })
 }
 
-test("Free Director proposes, applies and restores a compiled checkpoint", async ({
+test("Free Auto applies a chat edit and restores the compiled checkpoint", async ({
   page,
 }, testInfo) => {
   const assertCleanRuntime = installRuntimeGuards(page)
@@ -164,29 +164,19 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   await showPreviewOnMobile()
   await expect(runtime.getByText("Crypto Game", { exact: true }).first()).toBeVisible()
 
-  await page.getByRole("button", { name: "Director", exact: true }).click()
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
   const composer = page.locator(".chat-composer textarea")
   await expect(composer).toBeVisible()
   await composer.fill(DIRECTOR_REQUEST)
   await page.getByRole("button", { name: "Send change request" }).click()
 
-  const proposal = page.locator(".proposal-card")
-  await expect(proposal).toBeVisible()
-  await expect(proposal).toContainText("Free Director deterministic change set")
-  await expect(proposal).toContainText("Shifted the accent to market green.")
-  await expect(proposal).toContainText("Converted the game world to a pixel cyber arcade.")
-  await expect(proposal).toContainText("Set the playable demo round to 47 seconds.")
-  await expect(proposal).toContainText("Raised difficulty to expert.")
-  await expect(proposal).toContainText("Renamed the product to PIXEL.")
-
   await mkdir(captureDirectory, { recursive: true })
-  await proposal.screenshot({
-    path: `${captureDirectory}/proposal-${testInfo.project.name}.png`,
+  const completion = page.locator(".conversation article.assistant p").last()
+  await expect(completion).toContainText("Done — I updated")
+  await expect(page.locator(".proposal-card")).toHaveCount(0)
+  await completion.screenshot({
+    path: `${captureDirectory}/applied-${testInfo.project.name}.png`,
   })
-
-  await proposal.getByRole("button", { name: "Apply changes" }).click()
-  await expect(proposal).toHaveCount(0)
-  await expect(page.getByText("Applied as a new checkpoint.")).toBeVisible()
 
   await expect
     .poll(async () => (await iframe.getAttribute("srcdoc"))?.includes(EXPECTED_NAME))
@@ -200,7 +190,7 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   expect(applied.checkpoints).toHaveLength(2)
   expect(applied.checkpoints?.at(-1)).toMatchObject({
     source: "director",
-    label: "Free Director deterministic change set",
+    label: expect.stringContaining("Free Auto"),
   })
 
   await page.reload({ waitUntil: "domcontentloaded" })
@@ -221,18 +211,18 @@ test("Free Director proposes, applies and restores a compiled checkpoint", async
   expectAppliedDirectorSpec(restored.spec)
   expect(restored.checkpoints).toHaveLength(2)
   expect(restored.conversation?.at(-1)?.content).toContain(
-    "Applied as a new checkpoint.",
+    "Done — I updated",
   )
 
   await page.getByRole("button", { name: "Versions", exact: true }).click()
   const checkpoints = page.locator(".checkpoint-list > button")
   await expect(checkpoints).toHaveCount(2)
   await expect(checkpoints.first()).toContainText(
-    "Free Director deterministic change set",
+    "Free Auto",
   )
 
-  await page.getByRole("button", { name: "Director", exact: true }).click()
-  await expect(page.getByText("Applied as a new checkpoint.")).toBeVisible()
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
+  await expect(page.getByText("Done — I updated", { exact: false })).toBeVisible()
   if (testInfo.project.name === "chromium-390") {
     await page.locator(".mobile-preview-tab").click()
     const runtimeReady = page.locator('[data-runtime-ready="true"]')

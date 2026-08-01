@@ -235,6 +235,21 @@
   padding: 20px 18px 32px;
 }
 
+.design-identity {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  background: #f7f9fd;
+  border: 1px solid #e2e8f3;
+  border-radius: 14px;
+}
+
+.design-identity textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
 .assistant-panel > header {
   background: #ffffff;
   border-bottom-color: #e8edf5;

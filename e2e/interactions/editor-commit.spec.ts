@@ -75,7 +75,7 @@ test("controlled text and number edits commit once and survive reload", async ({
           .__studioIframeRemounts ?? 0,
     )
 
-  await page.getByRole("button", { name: "Project", exact: true }).click()
+  await page.getByRole("button", { name: "Design", exact: true }).click()
   const nameInput = page.getByLabel("Product name")
   const originalName = await storedProjectValue<string>(page, "name")
   const originalSrcdoc = await iframe.getAttribute("srcdoc")
@@ -97,7 +97,7 @@ test("controlled text and number edits commit once and survive reload", async ({
   await page.waitForTimeout(500)
   expect(await remounts(), "blur must cancel the pending debounce").toBe(1)
 
-  await page.getByRole("button", { name: "Logic", exact: true }).click()
+  await page.getByRole("button", { name: "Design", exact: true }).click()
   const roundTimer = page.getByRole("spinbutton", {
     name: "Round timer",
     exact: true,
@@ -138,10 +138,10 @@ test("controlled text and number edits commit once and survive reload", async ({
   await restoredPage.goto(`/studio/${PROJECT_ID}`, {
     waitUntil: "domcontentloaded",
   })
-  await expect(restoredPage.getByLabel("Product name")).toHaveValue(finalName)
   await restoredPage
-    .getByRole("button", { name: "Logic", exact: true })
+    .getByRole("button", { name: "Design", exact: true })
     .click()
+  await expect(restoredPage.getByLabel("Product name")).toHaveValue(finalName)
   await expect(
     restoredPage.getByRole("spinbutton", {
       name: "Round timer",

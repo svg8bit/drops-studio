@@ -108,7 +108,7 @@
 .data-budget { align-items: center; background: #f3f7ff; border: 1px solid #cddbf4; border-radius: 10px; display: grid; gap: 8px; grid-template-columns: 25px 1fr auto; margin: -3px 0 12px; padding: 9px; }.data-budget > svg { color: #2c68dc; height: 15px; width: 15px; }.data-budget > div { display: grid; gap: 3px; }.data-budget strong { color: #395677; font-size: 12px; }.data-budget span { color: #7b899b; font-size: 12px; line-height: 1.4; }.data-budget > b { background: #e7efff; border-radius: 99px; color: #2d63c8; font-size: 12px; padding: 5px 6px; }
 .logic-grid { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
 .tool-stack { border-top: 1px solid #e4eaf2; display: grid; gap: 6px; margin-top: 13px; padding-top: 12px; }
-.tool-stack > span { color: #7e8c9f; font-size: 12px; font-weight: 780; text-transform: uppercase; }
+.tool-stack > span { color: #5f6f83; font-size: 12px; font-weight: 780; text-transform: uppercase; }
 .tool-stack > div { align-items: center; color: #52677f; display: flex; font-size: 12px; gap: 6px; }.tool-stack svg { color: #19a06d; height: 10px; width: 10px; }
 .module-editor { border: 1px solid #e0e7f1; border-radius: 10px; margin: 4px 0 11px; overflow: hidden; }
 .module-editor > div { align-items: center; border-bottom: 1px solid #edf1f6; display: grid; gap: 4px; grid-template-columns: 13px minmax(0,1fr) repeat(3,22px); padding: 5px 6px; }
