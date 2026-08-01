@@ -159,10 +159,19 @@
 
 .studio-splitter svg {
   height: 24px;
-  opacity: 0;
+  opacity: 0.72;
   position: relative;
   transition: opacity 160ms ease;
   width: 16px;
+}
+
+.studio-splitter svg {
+  background: #ffffff;
+  border: 1px solid #d8e2ef;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(30, 61, 110, 0.12);
+  box-sizing: content-box;
+  padding: 9px 2px;
 }
 
 .studio-splitter:is(:hover, :focus-visible)::before {
@@ -455,6 +464,40 @@
   padding: 7px 9px;
 }
 
+.chat-model-select {
+  align-items: center;
+  color: #52617a;
+  display: inline-flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.chat-model-select > svg {
+  color: #6d62e8;
+  flex: 0 0 auto;
+  height: 16px;
+  width: 16px;
+}
+
+.chat-model-select select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #31435f;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 44px;
+  max-width: 190px;
+  outline: none;
+  padding: 0 22px 0 0;
+}
+
+.chat-model-select:focus-within {
+  border-radius: 9px;
+  box-shadow: 0 0 0 3px rgba(49, 108, 255, 0.14);
+}
+
 .chat-composer footer button {
   border-radius: 10px;
   height: 44px;
@@ -464,6 +507,12 @@
 .chat-composer footer button svg {
   height: 16px;
   width: 16px;
+}
+
+.chat-composer-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
 }
 
 .inspector-heading {
@@ -563,13 +612,76 @@
   min-height: 0;
 }
 
-.project-studio-layout.v2-builder-active {
-  grid-template-areas: "rail builder";
-  grid-template-columns: 68px minmax(0, 1fr);
+.project-v2-studio-host {
+  grid-area: canvas;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.project-studio-layout.v2-builder-active .studio-splitter {
-  display: none;
+.project-studio-layout.tab-code .studio-inspector,
+.project-studio-layout.tab-code .runtime-stage {
+  display: none !important;
+}
+
+.project-studio-layout.tab-code .assistant-panel {
+  display: flex !important;
+}
+
+.project-studio-layout.tab-code .project-v2-studio-host {
+  display: block;
+}
+
+.runtime-preview-empty {
+  align-items: center;
+  background:
+    radial-gradient(circle at 50% 15%, rgba(49, 108, 255, 0.09), transparent 34%),
+    #ffffff;
+  color: #52617a;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100% - 44px);
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+}
+
+.runtime-preview-empty > span {
+  align-items: center;
+  background: #edf3ff;
+  border-radius: 14px;
+  color: var(--ps-blue);
+  display: flex;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.runtime-preview-empty strong {
+  color: #172b49;
+  font-size: 18px;
+}
+
+.runtime-preview-empty p {
+  font-size: 14px !important;
+  margin: 0;
+  max-width: 440px;
+}
+
+.runtime-preview-empty button {
+  background: #172b49;
+  border: 0;
+  border-radius: 10px;
+  color: #ffffff;
+  font-weight: 750;
+  margin-top: 4px;
+  padding: 0 16px;
+}
+
+.chat-stop-button {
+  background: #fff1f1 !important;
+  color: #a4333c !important;
 }
 
 @media (max-width: 1280px) and (min-width: 921px) {
@@ -578,10 +690,6 @@
     grid-template-areas: "rail side canvas";
     grid-template-columns: 62px var(--studio-side-width, 380px) minmax(0, 1fr);
     height: calc(100dvh - 64px);
-  }
-
-  .project-studio-layout.v2-builder-active {
-    grid-template-columns: 62px minmax(0, 1fr);
   }
 
   .studio-rail > button {
@@ -649,6 +757,17 @@
   .project-studio-layout.tab-preview .runtime-stage {
     height: calc(100dvh - 185px);
     min-height: 620px;
+  }
+
+  .project-studio-layout.tab-code .assistant-panel {
+    display: none !important;
+  }
+
+  .project-studio-layout.tab-code .project-v2-studio-host {
+    display: block;
+    min-height: calc(100dvh - 185px);
+    order: 1;
+    overflow: visible;
   }
 }
 

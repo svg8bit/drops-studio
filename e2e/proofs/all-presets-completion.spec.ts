@@ -16,6 +16,7 @@ import {
   type ProjectMarketCoin,
   type ProjectPrediction,
 } from "../../lib/project-types"
+import { storedProjectForCurrentActor } from "../fixtures/ui-test"
 
 const LOCAL_PROOF_ORIGIN = "http://127.0.0.1:4173"
 const PROOF_ORIGIN = configuredProofOrigin()
@@ -398,17 +399,7 @@ async function expectVisibleEdit(
 }
 
 async function storedProject(page: Page, projectId: string) {
-  return page.evaluate(
-    ({ key, id }) => {
-      const projects = JSON.parse(
-        window.localStorage.getItem(key) || "[]",
-      ) as GeneratedProject[]
-      const project = projects.find((candidate) => candidate.id === id)
-      if (!project) throw new Error(`Stored project ${id} was not found`)
-      return project
-    },
-    { key: PROJECTS_STORAGE_KEY, id: projectId },
-  )
+  return storedProjectForCurrentActor(page, projectId)
 }
 
 async function publishFromStudio(page: Page, projectId: string) {
@@ -544,14 +535,10 @@ async function createAnonymousPage(browser: Browser) {
   return { context, page, ...network, runtimeErrors }
 }
 
-test("all 12 presets complete edit, publish, replay, share and browser ZIP boundaries", async ({
+test("all 12 presets complete edit, publish, replay, share and browser ZIP boundaries", { tag: "@desktop-only" }, async ({
   browser,
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-1440",
-    "The all-preset completion proof runs once in canonical desktop Chromium.",
-  )
+}) => {
   test.setTimeout(300_000)
 
   expect(completionDefinitions).toHaveLength(12)

@@ -215,10 +215,9 @@ test("project studio preserves its current workspace architecture", async ({ pag
   await assertCleanRuntime()
 })
 
-test("1920px Project Studio keeps Chat in the left context surface", async ({
+test("1920px Project Studio keeps Chat in the left context surface", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
   await page.setViewportSize({ width: 1920, height: 1080 })
   const assertCleanRuntime = installRuntimeGuards(page)
 

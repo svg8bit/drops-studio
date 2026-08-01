@@ -122,9 +122,22 @@ async function withBuilderExecutionDeadline<T>(input: {
 }): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  let removeAbortListener: () => void = () => {};
   try {
+    const aborted = new Promise<never>((_, reject) => {
+      const onAbort = () => reject(new Error("builder-execution-aborted"));
+      if (input.controller.signal.aborted) {
+        onAbort();
+        return;
+      }
+      input.controller.signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => {
+        input.controller.signal.removeEventListener("abort", onAbort);
+      };
+    });
     return await Promise.race([
       input.operation(),
+      aborted,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
@@ -134,23 +147,35 @@ async function withBuilderExecutionDeadline<T>(input: {
       }),
     ]);
   } catch (error) {
-    if (!timedOut) throw error;
-    await boundedCleanup(input.cleanup);
-    throw new BuilderRouteError(
-      504,
-      "BUILDER_EXECUTION_TIMEOUT",
-      "Builder verification exceeded its bounded server window. The Sandbox was stopped; run Build & verify to restart it.",
-    );
+    if (timedOut) {
+      await boundedCleanup(input.cleanup);
+      throw new BuilderRouteError(
+        504,
+        "BUILDER_EXECUTION_TIMEOUT",
+        "Builder verification exceeded its bounded server window. The Sandbox was stopped; choose Retry to restart it.",
+      );
+    }
+    if (input.controller.signal.aborted) {
+      await boundedCleanup(input.cleanup);
+      throw new BuilderRouteError(
+        499,
+        "BUILDER_EXECUTION_CANCELLED",
+        "Builder stopped. Saved project files and the last working preview were preserved.",
+      );
+    }
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
+    removeAbortListener();
   }
 }
 
-async function stopTimedOutSession(input: {
+async function stopInterruptedSession(input: {
   actorId: string;
   repository: BuilderProjectRepository;
   runtime: ProjectRuntimeAdapter;
   session: BuilderAgentSession;
+  cancelled: boolean;
 }): Promise<void> {
   const handle = await input.runtime.resume(input.session.runtimeContext).catch(() => null);
   if (handle) await input.runtime.stop(handle).catch(() => undefined);
@@ -161,12 +186,14 @@ async function stopTimedOutSession(input: {
     ...(project.preview
       ? {
           preview: {
-            status: "failed" as const,
+            status: input.cancelled ? "stopped" as const : "failed" as const,
             projectRevision: project.revision,
             ...(project.preview.sandboxId ? { sandboxId: project.preview.sandboxId } : {}),
             ...(project.preview.startedAt ? { startedAt: project.preview.startedAt } : {}),
             stoppedAt: now,
-            error: "Builder execution exceeded its bounded server window.",
+            error: input.cancelled
+              ? "Builder stopped by the user."
+              : "Builder execution exceeded its bounded server window.",
           },
         }
       : {}),
@@ -225,6 +252,16 @@ export async function handleBuilderAgentRequest(
     const sandboxRuntime =
       dependencies.runtime ?? new VercelSandboxRuntimeAdapter({ audit });
     const executionController = new AbortController();
+    const abortForDisconnectedClient = () => executionController.abort();
+    request.signal.addEventListener("abort", abortForDisconnectedClient, {
+      once: true,
+    });
+    // A client can disconnect while the request body, rate limit, or project
+    // snapshot is being resolved. EventTarget does not replay an abort event to
+    // listeners registered afterward, so carry that already-aborted state into
+    // the bounded execution controller explicitly.
+    if (request.signal.aborted) executionController.abort();
+    try {
     const session = new BuilderAgentSession({
       actorId,
       requestId: randomUUID(),
@@ -247,22 +284,19 @@ export async function handleBuilderAgentRequest(
     );
     const agentRequest = {
       ...parsed.data,
-      provider:
-        parsed.data.mode === "build"
-          ? ({ provider: "free" } as const)
-          : remembered.selection,
+      provider: remembered.selection,
       approvedTools: [...approvedTools],
     };
     const agentDependencies = {
       services: session,
       audit,
-      credentials:
-        parsed.data.mode === "build" ? undefined : remembered.credentials,
+      credentials: remembered.credentials,
       deterministicFallback:
         dependencies.deterministicFallback ??
         materializedProjectDeterministicFallback,
       modelResolver: dependencies.modelResolver,
       runnerFactory: dependencies.runnerFactory,
+      signal: executionController.signal,
     };
     const execution = await withBuilderExecutionDeadline({
       timeoutMs: Math.min(
@@ -298,11 +332,12 @@ export async function handleBuilderAgentRequest(
         );
         return { intelligence, result };
       },
-      cleanup: () => stopTimedOutSession({
+      cleanup: () => stopInterruptedSession({
         actorId,
         repository,
         runtime: sandboxRuntime,
         session,
+        cancelled: request.signal.aborted,
       }),
     });
     const { intelligence, result } = execution;
@@ -353,6 +388,9 @@ export async function handleBuilderAgentRequest(
       },
       result.status === "blocked" ? 422 : 200,
     );
+    } finally {
+      request.signal.removeEventListener("abort", abortForDisconnectedClient);
+    }
   } catch (error) {
     return builderRouteError(error);
   }

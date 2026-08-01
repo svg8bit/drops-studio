@@ -54,7 +54,7 @@ import type {
 } from "@/lib/project-types";
 import {
   deleteProjectSafely,
-  readProjectsFromStore,
+  readProjectsAfterScopeBootstrap,
   saveProjectSafely,
 } from "@/lib/project-store";
 import {
@@ -84,6 +84,7 @@ import {
 } from "@/lib/studio-account-profile";
 import {
   migrateSessionConnectionsToAccount,
+  preferredRememberedModelProvider,
   readStudioAccountSnapshot,
   rememberStudioConnection,
   type RememberStudioConnectionResult,
@@ -512,12 +513,12 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       return;
     }
     if (!accountConnectionMigrationRef.current) {
-      accountConnectionMigrationRef.current = true;
       const migration = await migrateSessionConnectionsToAccount({
         snapshot,
         storage: window.sessionStorage,
       });
       snapshot = migration.snapshot;
+      accountConnectionMigrationRef.current = migration.complete;
       if (migration.error) {
         setToast(`Signed in, but connection sync needs attention: ${migration.error}`);
       } else if (migration.migrated.length) {
@@ -567,18 +568,17 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         );
       }
     }
-    if (!window.sessionStorage.getItem("drops-studio:active-brain")) {
-      const preferred = remembered.find(
-        (connection) =>
-          connection.connected && isModelProviderId(connection.provider),
-      );
-      if (preferred && isModelProviderId(preferred.provider)) {
-        window.sessionStorage.setItem(
-          "drops-studio:active-brain",
-          preferred.provider,
-        );
-        setActiveBrain(preferred.provider);
-      }
+    const currentBrain = window.sessionStorage.getItem("drops-studio:active-brain");
+    const currentSessionProvider = currentBrain
+      && isModelProviderId(currentBrain)
+      && window.sessionStorage.getItem(`drops-studio:${currentBrain}`)?.trim()
+      ? currentBrain
+      : null;
+    const preferred = currentSessionProvider
+      ?? preferredRememberedModelProvider(remembered, currentBrain);
+    if (preferred && isModelProviderId(preferred)) {
+      window.sessionStorage.setItem("drops-studio:active-brain", preferred);
+      setActiveBrain(preferred);
     }
   }, []);
 
@@ -631,7 +631,32 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
       );
       if (requestedCatalogPreset) setSelectedId(requestedCatalogPreset.id);
 
-      let savedProjects = readProjectsFromStore();
+      const accessBootstrap: { access: StudioAccessStatus | null } = {
+        access: null,
+      };
+      let savedProjects: GeneratedProject[] = [];
+      try {
+        savedProjects = await readProjectsAfterScopeBootstrap(async () => {
+          try {
+            const accessResponse = await fetch("/api/access", {
+              credentials: "same-origin",
+              cache: "no-store",
+              headers: { accept: "application/json" },
+            });
+            const accessPayload = (await accessResponse.json()) as {
+              access?: StudioAccessStatus;
+            };
+            if (accessResponse.ok && accessPayload.access) {
+              accessBootstrap.access = accessPayload.access;
+            }
+          } catch {
+            /* Existing signed scopes can still restore their browser projects. */
+          }
+        });
+      } catch {
+        /* The builder remains usable while actor-scope bootstrap is offline. */
+      }
+      const hydratedAccess = accessBootstrap.access;
 
       try {
         const legacy = JSON.parse(
@@ -730,22 +755,16 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         "drops-studio:guest-id",
         guestIdRef.current,
       );
-      let hydratedAccess: StudioAccessStatus | null = null;
-      try {
-        const accessResponse = await fetch("/api/access", { cache: "no-store" });
-        const accessPayload = (await accessResponse.json()) as {
-          access?: StudioAccessStatus;
-        };
-        if (accessResponse.ok && accessPayload.access) {
-          hydratedAccess = accessPayload.access;
-          const accessState = applyAccessStatus(hydratedAccess);
-          if (accessState.authenticated) {
-            await hydrateAccountState().catch(() => undefined);
-          }
-          if (accessState.authenticated && accessState.projectSync) {
-            try {
-              const cloud = await listMemberProjectsFromCloud();
-              for (const record of cloud.projects) {
+      if (hydratedAccess) {
+        const accessState = applyAccessStatus(hydratedAccess);
+        if (accessState.authenticated) {
+          await hydrateAccountState().catch(() => undefined);
+        }
+        if (accessState.authenticated && accessState.projectSync) {
+          try {
+            const cloud = await listMemberProjectsFromCloud();
+            for (const record of cloud.projects) {
+              try {
                 const local = savedProjects.find(
                   (project) => project.id === record.id,
                 );
@@ -760,15 +779,15 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
                   expectedUpdatedAt: local?.updatedAt ?? null,
                 });
                 if (stored.status === "saved") savedProjects = stored.projects;
+              } catch {
+                /* Keep syncing other actor-owned projects after one corrupt record. */
               }
-              setProjects(savedProjects);
-            } catch {
-              /* Browser projects remain authoritative while cloud sync is offline. */
             }
+            setProjects(savedProjects);
+          } catch {
+            /* Browser projects remain authoritative while cloud sync is offline. */
           }
         }
-      } catch {
-        /* The local compiler remains available when access status is offline. */
       }
       const handoff = parseStudioConnectionHandoff(window.location.search);
       if (handoff.connections) {

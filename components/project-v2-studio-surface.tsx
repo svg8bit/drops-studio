@@ -10,7 +10,15 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   ProjectV2Workspace,
@@ -107,6 +115,14 @@ export interface ProjectV2StudioSurfaceProps {
     message: string;
   }) => void;
   onNotify?: (message: string) => void;
+}
+
+export interface ProjectV2StudioSurfaceHandle {
+  run: (
+    mode: "build" | "edit" | "repair",
+    prompt: string,
+  ) => Promise<BuilderAgentResult | null>;
+  stop: () => Promise<void>;
 }
 
 function message(error: unknown, fallback: string): string {
@@ -310,13 +326,16 @@ async function responseJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({})) as Promise<T>;
 }
 
-export function ProjectV2StudioSurface({
+export const ProjectV2StudioSurface = forwardRef<
+  ProjectV2StudioSurfaceHandle,
+  ProjectV2StudioSurfaceProps
+>(function ProjectV2StudioSurface({
   project,
   provider,
   onProjectChange,
   onAgentEvent,
   onNotify,
-}: ProjectV2StudioSurfaceProps) {
+}, ref) {
   const [selectedPath, setSelectedPath] = useState<string | null>(() =>
     project.files["app/page.tsx"]
       ? "app/page.tsx"
@@ -353,7 +372,10 @@ export function ProjectV2StudioSurface({
   );
   const [agentTrace, setAgentTrace] = useState<AgentRunTrace | null>(null);
   const mounted = useRef(true);
-  const autoStarted = useRef(false);
+  const autoStarted = useRef<string | null>(null);
+  const builderAbort = useRef<AbortController | null>(null);
+  const activeRunRef = useRef(false);
+  const snapshotSyncQueue = useRef<Promise<void>>(Promise.resolve());
   const draft = resolveProjectV2DraftContent(drafts, selectedPath, project.files);
 
   useEffect(() => {
@@ -375,7 +397,7 @@ export function ProjectV2StudioSurface({
     return () => window.clearTimeout(timer);
   }, [project.files, project.manifest.entrypoints, selectedPath]);
 
-  const syncSnapshot = useCallback(async (): Promise<ProjectV2SnapshotReceipt> => {
+  const performSnapshotSync = useCallback(async (): Promise<ProjectV2SnapshotReceipt> => {
     try {
       const accessResponse = await fetch("/api/access", {
         credentials: "same-origin",
@@ -474,6 +496,16 @@ export function ProjectV2StudioSurface({
     }
   }, [onProjectChange, project]);
 
+  const syncSnapshot = useCallback((): Promise<ProjectV2SnapshotReceipt> => {
+    const run = () => performSnapshotSync();
+    const queued = snapshotSyncQueue.current.then(run, run);
+    snapshotSyncQueue.current = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }, [performSnapshotSync]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void syncSnapshot().then((snapshot) => {
@@ -562,7 +594,7 @@ export function ProjectV2StudioSurface({
             ? "verified"
             : "blocked",
       );
-      setActiveView(result.releaseGate.ok ? "preview" : "checks");
+      if (result.releaseGate.ok) setActiveView("preview");
       if (remote) setStorageRevision(remote.storageRevision);
       onProjectChange(next, remote?.storageRevision);
     }
@@ -572,9 +604,13 @@ export function ProjectV2StudioSurface({
   const runBuilder = useCallback(async (
     mode: "build" | "edit" | "repair",
     prompt: string,
-  ) => {
-    if (busy) return;
+  ): Promise<BuilderAgentResult | null> => {
+    if (activeRunRef.current) return null;
+    activeRunRef.current = true;
     let activePhase: "snapshot" | "sandbox" | "verification" = "snapshot";
+    const controller = new AbortController();
+    builderAbort.current = controller;
+    let statusTimer: ReturnType<typeof setInterval> | null = null;
     setBusy("task:build");
     setAgentState("running");
     setAgentSummary(
@@ -606,10 +642,14 @@ export function ProjectV2StudioSurface({
         status: "active",
         message: "Starting the isolated Node 24 Sandbox and syncing real project files…",
       });
+      statusTimer = setInterval(() => {
+        void refreshSandboxStatus(snapshot.project.id).catch(() => undefined);
+      }, 4_000);
       const response = await fetch("/api/builder/agent", {
         method: "POST",
         credentials: "same-origin",
         headers: requestHeaders(provider),
+        signal: controller.signal,
         body: JSON.stringify({
           projectId: snapshot.project.id,
           prompt,
@@ -617,6 +657,10 @@ export function ProjectV2StudioSurface({
           provider: providerSelection(provider),
         }),
       });
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
       const payload = await responseJson<BuilderApiPayload>(response);
       if (!payload.result) {
         throw new Error(payload.error ?? "Builder agent returned no verifiable result.");
@@ -664,17 +708,26 @@ export function ProjectV2StudioSurface({
           message: payload.result.summary,
         });
       }
+      return payload.result;
     } catch (error) {
       window.sessionStorage.removeItem(
         `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
       );
-      const failure = message(error, "Builder execution failed safely.");
+      const cancelled = controller.signal.aborted;
+      const failure = cancelled
+        ? "Build stopped. Your saved files and last working preview are unchanged."
+        : message(error, "Builder execution failed safely.");
       if (mounted.current) {
-        setAgentState("blocked");
+        setAgentState(cancelled ? "idle" : "blocked");
         setAgentSummary(failure);
-        setRelease({ status: "blocked", evidence: [], blockers: [failure] });
-        setSandbox((current) => ({ ...current, status: "failed", message: failure }));
-        setActiveView("checks");
+        setRelease(cancelled
+          ? { status: "unknown", evidence: [], blockers: [] }
+          : { status: "blocked", evidence: [], blockers: [failure] });
+        setSandbox((current) => ({
+          ...current,
+          status: cancelled ? "stopped" : "failed",
+          message: failure,
+        }));
       }
       onAgentEvent?.({
         phase: activePhase,
@@ -682,7 +735,11 @@ export function ProjectV2StudioSurface({
         message: failure,
       });
       onNotify?.(failure);
+      return null;
     } finally {
+      if (statusTimer) clearInterval(statusTimer);
+      if (builderAbort.current === controller) builderAbort.current = null;
+      activeRunRef.current = false;
       window.sessionStorage.removeItem(
         `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
       );
@@ -690,18 +747,18 @@ export function ProjectV2StudioSurface({
     }
   }, [
     absorbBuilderResult,
-    busy,
     onAgentEvent,
     onNotify,
     project.id,
     project.revision,
     provider,
+    refreshSandboxStatus,
     syncSnapshot,
   ]);
 
   useEffect(() => {
     if (
-      autoStarted.current ||
+      autoStarted.current === `${project.id}:${project.revision}` ||
       storageMode !== "cloud" ||
       project.manifest.framework.name !== "nextjs" ||
       project.preview?.status === "ready"
@@ -711,7 +768,7 @@ export function ProjectV2StudioSurface({
     const key = `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`;
     const lease = Number(window.sessionStorage.getItem(key));
     if (Number.isFinite(lease) && Date.now() - lease < AUTO_BUILD_LEASE_MS) return;
-    autoStarted.current = true;
+    autoStarted.current = `${project.id}:${project.revision}`;
     window.sessionStorage.setItem(key, String(Date.now()));
     const timer = window.setTimeout(() => {
       void runBuilder(
@@ -926,6 +983,21 @@ export function ProjectV2StudioSurface({
     await saveSnapshot(next);
   }
 
+  const stopActiveRun = useCallback(async () => {
+    builderAbort.current?.abort();
+    await runRuntimeAction("stop").catch(() => undefined);
+    if (!mounted.current) return;
+    setBusy(null);
+    setAgentState("idle");
+    setAgentSummary("Build stopped. Your saved files and last working preview are unchanged.");
+    setSandbox((current) => ({ ...current, status: "stopped" }));
+  }, [runRuntimeAction]);
+
+  useImperativeHandle(ref, () => ({
+    run: runBuilder,
+    stop: stopActiveRun,
+  }), [runBuilder, stopActiveRun]);
+
   async function restoreCheckpoint(checkpointId: string) {
     if (!window.confirm("Restore this full project snapshot? Current files will be replaced by a new reversible revision.")) return;
     setBusy(`checkpoint:${checkpointId}`);
@@ -1064,8 +1136,8 @@ export function ProjectV2StudioSurface({
             {release.status === "blocked" ? "Repair & verify" : "Build & verify"}
           </Button>
           <Button
-            disabled={Boolean(busy) || !["creating", "running"].includes(sandbox.status)}
-            onClick={() => void stopSandbox().catch((error) => onNotify?.(message(error, "Sandbox stop failed.")))}
+            disabled={!busy && !["creating", "running"].includes(sandbox.status)}
+            onClick={() => void (busy ? stopActiveRun() : stopSandbox()).catch((error) => onNotify?.(message(error, "Sandbox stop failed.")))}
             type="button"
             variant="outline"
           >
@@ -1114,7 +1186,7 @@ export function ProjectV2StudioSurface({
         onRefreshPreview={() => runBuilder(
           "repair",
           "Rebuild the current files, repair any verified error, rerun all checks, and refresh the real preview.",
-        )}
+        ).then(() => undefined)}
         onRenameFile={(from, to) => {
           const pendingDraft = Object.hasOwn(drafts, from) ? drafts[from] : undefined;
           return mutateFiles(
@@ -1165,4 +1237,4 @@ export function ProjectV2StudioSurface({
       />
     </section>
   );
-}
+});

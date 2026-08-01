@@ -10,12 +10,79 @@ import {
 
 import { compileProject } from "../../lib/project-compiler"
 import { createProjectSpec } from "../../lib/project-factory"
+import { PROJECT_STORE_SCOPE_COOKIE } from "../../lib/project-store"
 import {
   PROJECTS_STORAGE_KEY,
   type GeneratedProject,
 } from "../../lib/project-types"
 
 export { expect, test }
+
+function scopedProjectStoreKeys(cookie: string | undefined, projectId?: string) {
+  const match = /^(guest|member)\.([a-f0-9]{64})$/.exec(cookie ?? "")
+  if (!match) {
+    return {
+      indexKey: PROJECTS_STORAGE_KEY,
+      itemKey: projectId
+        ? `${PROJECTS_STORAGE_KEY}:item:${encodeURIComponent(projectId)}`
+        : null,
+    }
+  }
+  const indexKey = `${PROJECTS_STORAGE_KEY}:scope:${match[1]}:${match[2]}`
+  return {
+    indexKey,
+    itemKey: projectId ? `${indexKey}:item:${encodeURIComponent(projectId)}` : null,
+  }
+}
+
+export async function storedProjectsForCurrentActor(
+  page: Page,
+): Promise<GeneratedProject[]> {
+  return page.evaluate(
+    ({ cookieName, projectsKey }) => {
+      const encoded = document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(`${cookieName}=`))
+        ?.slice(cookieName.length + 1)
+      const scope = encoded ? decodeURIComponent(encoded) : undefined
+      const match = /^(guest|member)\.([a-f0-9]{64})$/.exec(scope ?? "")
+      const indexKey = match
+        ? `${projectsKey}:scope:${match[1]}:${match[2]}`
+        : projectsKey
+      return JSON.parse(window.localStorage.getItem(indexKey) || "[]")
+    },
+    { cookieName: PROJECT_STORE_SCOPE_COOKIE, projectsKey: PROJECTS_STORAGE_KEY },
+  )
+}
+
+export async function storedProjectForCurrentActor(
+  page: Page,
+  projectId: string,
+): Promise<GeneratedProject> {
+  const cookie = (await page.context().cookies()).find(
+    (candidate) => candidate.name === PROJECT_STORE_SCOPE_COOKIE,
+  )?.value
+  const { indexKey, itemKey } = scopedProjectStoreKeys(cookie, projectId)
+  return page.evaluate(
+    ({ indexKey: browserIndexKey, itemKey: browserItemKey, id }) => {
+      if (browserItemKey) {
+        const storedItem = window.localStorage.getItem(browserItemKey)
+        if (storedItem) {
+          const parsed = JSON.parse(storedItem) as { project?: GeneratedProject }
+          if (parsed.project?.id === id) return parsed.project
+        }
+      }
+      const projects = JSON.parse(
+        window.localStorage.getItem(browserIndexKey) || "[]",
+      ) as GeneratedProject[]
+      const project = projects.find((candidate) => candidate.id === id)
+      if (!project) throw new Error(`Stored project ${id} was not found`)
+      return project
+    },
+    { indexKey, itemKey, id: projectId },
+  )
+}
 
 async function settlePage(page: Page) {
   await page.evaluate(async () => {

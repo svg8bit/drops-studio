@@ -2,10 +2,10 @@ import {
   expect,
   installRuntimeGuards,
   prepareStudioPage,
+  storedProjectForCurrentActor,
   test,
 } from "../fixtures/ui-test"
-import { PROJECTS_STORAGE_KEY } from "../../lib/project-types"
-import { validateEditableRuntimeHtml } from "../../lib/source-workspace"
+import { prepareProjectV2UiPage } from "../fixtures/project-v2-ui-test"
 
 const PROJECT_ID = "ui-quality-current-crypto-game"
 
@@ -13,23 +13,10 @@ async function storedProjectValue<T>(
   page: Parameters<typeof prepareStudioPage>[0],
   read: "name" | "roundSeconds",
 ): Promise<T> {
-  return page.evaluate(
-    ({ key, projectId, field }) => {
-      const projects = JSON.parse(window.localStorage.getItem(key) || "[]") as Array<{
-        id: string
-        spec: {
-          name: string
-          gameDirection?: { roundSeconds: number }
-        }
-      }>
-      const project = projects.find((item) => item.id === projectId)
-      if (!project) throw new Error("Seeded project was not persisted")
-      return (field === "name"
-        ? project.spec.name
-        : project.spec.gameDirection?.roundSeconds) as T
-    },
-    { key: PROJECTS_STORAGE_KEY, projectId: PROJECT_ID, field: read },
-  )
+  const project = await storedProjectForCurrentActor(page, PROJECT_ID)
+  return (read === "name"
+    ? project.spec.name
+    : project.spec.gameDirection?.roundSeconds) as T
 }
 
 test("controlled text and number edits commit once and survive reload", async ({
@@ -123,18 +110,8 @@ test("controlled text and number edits commit once and survive reload", async ({
   await page.waitForTimeout(500)
   expect(await remounts(), "number blur must cancel the pending debounce").toBe(2)
 
-  const savedProjects = await page.evaluate((key) => {
-    const value = window.localStorage.getItem(key)
-    if (!value) throw new Error("Committed project is missing from storage")
-    return value
-  }, PROJECTS_STORAGE_KEY)
   const restoredPage = await page.context().newPage()
   const assertRestoredCleanRuntime = installRuntimeGuards(restoredPage)
-  await restoredPage.goto("/", { waitUntil: "domcontentloaded" })
-  await restoredPage.evaluate(
-    ({ key, value }) => window.localStorage.setItem(key, value),
-    { key: PROJECTS_STORAGE_KEY, value: savedProjects },
-  )
   await restoredPage.goto(`/studio/${PROJECT_ID}`, {
     waitUntil: "domcontentloaded",
   })
@@ -165,101 +142,31 @@ test("controlled text and number edits commit once and survive reload", async ({
   await restoredPage.close()
 })
 
-test("validated index.html edits update the runtime and survive undo, redo and reload", async ({
+test("Project V2 source edits persist through the real Code workspace and reload", async ({
   page,
 }) => {
   const assertCleanRuntime = installRuntimeGuards(page)
-  await prepareStudioPage(page)
-
-  await page
-    .locator(".studio-rail")
-    .getByRole("button", { name: "Code", exact: true })
-    .click()
-  await page.getByRole("button", { name: /index\.html editable/i }).click()
-
-  const dialog = page.getByRole("dialog", { name: "Owned source workspace" })
-  const editor = dialog.getByLabel("Editable runnable HTML")
-  const originalSource = await editor.inputValue()
-  const marker = '<aside data-source-e2e="true">Manual source is live</aside>'
-  const editedSource = originalSource.replace("</body>", `${marker}</body>`)
-  await editor.fill(editedSource)
-  await dialog.getByRole("button", { name: "Validate & apply" }).click()
-
-  const iframe = page.locator("iframe[title$='live application']")
-  await expect
-    .poll(async () => (await iframe.getAttribute("srcdoc"))?.includes(marker))
-    .toBe(true)
-  await expect(page.getByText(/preview updated and checkpoint created/i)).toBeVisible()
-  await dialog.getByRole("button", { name: "Close source workspace" }).click()
-
-  await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled()
-  await page.getByRole("button", { name: "Undo" }).click()
-  await expect
-    .poll(async () => (await iframe.getAttribute("srcdoc"))?.includes(marker))
-    .toBe(false)
-
-  await expect(page.getByRole("button", { name: "Redo" })).toBeEnabled()
-  await page.getByRole("button", { name: "Redo" }).click()
-  await expect
-    .poll(async () => (await iframe.getAttribute("srcdoc"))?.includes(marker))
-    .toBe(true)
-
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ key, projectId }) => {
-          const projects = JSON.parse(
-            window.localStorage.getItem(key) || "[]",
-          ) as Array<{ id?: string; html?: string; sourceEditedAt?: string }>
-          const saved = projects.find((item) => item.id === projectId)
-          return Boolean(
-            saved?.sourceEditedAt &&
-              String(saved.html || "").includes('data-source-e2e="true"'),
-          )
-        },
-        { key: PROJECTS_STORAGE_KEY, projectId: PROJECT_ID },
-      ),
-    )
-    .toBe(true)
-
-  const storedSourceBeforeReload = await page.evaluate(
-    ({ key, projectId }) =>
-      JSON.parse(window.localStorage.getItem(key) || "[]").find(
-        (item: { id?: string }) => item.id === projectId,
-      ),
-    { key: PROJECTS_STORAGE_KEY, projectId: PROJECT_ID },
-  )
-  expect(
-    validateEditableRuntimeHtml(
-      storedSourceBeforeReload.spec,
-      storedSourceBeforeReload.html,
-    ),
-  ).toEqual({ valid: true, issues: [] })
+  const { project } = await prepareProjectV2UiPage(page)
+  const workspace = page.getByTestId("project-v2-workspace")
+  await expect(workspace).toBeVisible()
+  await page.locator('button[title="app/page.tsx"]').click()
+  const editor = page.locator(".cm-content")
+  const marker = "// SOURCE-E2E-PERSISTED"
+  const originalSource = await editor.textContent()
+  await editor.click()
+  await page.keyboard.press("ControlOrMeta+A")
+  await page.keyboard.type(`${marker}\n${originalSource ?? ""}`, { delay: 1 })
+  await expect(workspace.getByText("Unsaved changes", { exact: true })).toBeVisible()
+  await workspace.getByRole("button", { name: "Save", exact: true }).click()
+  await expect(workspace.getByText("Saved", { exact: true })).toBeVisible()
+  await expect.poll(async () => {
+    const stored = await storedProjectForCurrentActor(page, project.id)
+    return stored.projectV2?.files?.["app/page.tsx"]?.content ?? ""
+  }).toContain(marker)
 
   await page.reload({ waitUntil: "domcontentloaded" })
-  const restoredIframe = page.locator("iframe[title$='live application']")
-  await expect
-    .poll(async () =>
-      (await restoredIframe.getAttribute("srcdoc"))?.includes(marker),
-    )
-    .toBe(true)
-
-  const savedSourceState = await page.evaluate(
-    ({ key, projectId }) => {
-      const projects = JSON.parse(window.localStorage.getItem(key) || "[]")
-      const project = projects.find(
-        (item: { id?: string }) => item.id === projectId,
-      )
-      return {
-        sourceEditedAt: project?.sourceEditedAt,
-        hasMarker: String(project?.html || "").includes(
-          'data-source-e2e="true"',
-        ),
-      }
-    },
-    { key: PROJECTS_STORAGE_KEY, projectId: PROJECT_ID },
-  )
-  expect(savedSourceState.sourceEditedAt).toBeTruthy()
-  expect(savedSourceState.hasMarker).toBe(true)
+  await page.locator(".studio-rail").getByRole("button", { name: "Code", exact: true }).click()
+  await page.locator('button[title="app/page.tsx"]').click()
+  await expect(page.locator(".cm-content")).toContainText(marker)
   await assertCleanRuntime()
 })

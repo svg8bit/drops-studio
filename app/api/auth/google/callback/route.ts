@@ -11,6 +11,10 @@ import {
   GOOGLE_OIDC_TRANSACTION_COOKIE,
   readGoogleOidcTransaction,
 } from "@/lib/google-oidc";
+import {
+  PROJECT_STORE_SCOPE_COOKIE,
+  projectStoreScopeCookieValue,
+} from "@/lib/project-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,6 +82,20 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 90,
       path: "/",
     });
+    response.cookies.set(
+      PROJECT_STORE_SCOPE_COOKIE,
+      projectStoreScopeCookieValue({
+        kind: "member",
+        identity: account.identity,
+      }),
+      {
+        httpOnly: false,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 60 * 60 * 24 * 90,
+        path: "/",
+      },
+    );
     clearTransaction(response);
     response.headers.set("cache-control", "no-store");
     return response;

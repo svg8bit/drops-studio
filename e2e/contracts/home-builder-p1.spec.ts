@@ -97,10 +97,9 @@ test("home builder keeps sample previews honest, coherent and responsive", async
   await assertCleanRuntime()
 })
 
-test("390px keeps the selected recipe centered and fully visible", async ({
+test("390px keeps the selected recipe centered and fully visible", { tag: "@mobile-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-390")
+}) => {
 
   await prepareHomePage(page)
 
@@ -174,10 +173,9 @@ test("home exposes Build now as the visible primary action and Plan as secondary
   expect(semantics.height).toBeGreaterThanOrEqual(44)
 })
 
-test("desktop builder columns stay continuous across the 1160px breakpoint", async ({
+test("desktop builder columns stay continuous across the 1160px breakpoint", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
 
   await prepareHomePage(page)
   const samples: Array<{

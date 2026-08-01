@@ -8,6 +8,7 @@ import {
   prepareStudioPage,
   test,
 } from "../fixtures/ui-test"
+import { prepareProjectV2UiPage } from "../fixtures/project-v2-ui-test"
 
 type AxeViolation = Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"][number]
 
@@ -80,18 +81,12 @@ test("project studio publish dialog has no serious accessibility violations", as
   await assertCleanRuntime()
 })
 
-test("project studio source dialog has no serious accessibility violations", async ({ page }) => {
+test("Project V2 Code workspace has no serious accessibility violations", async ({ page }) => {
   const assertCleanRuntime = installRuntimeGuards(page)
 
-  await prepareStudioPage(page)
-  await page
-    .locator(".studio-rail")
-    .getByRole("button", { name: "Code", exact: true })
-    .click()
-  await page.getByRole("button", { name: /index\.html editable/i }).click()
-  await expect(
-    page.getByRole("dialog", { name: /Owned source workspace/i })
-  ).toBeVisible()
+  await prepareProjectV2UiPage(page)
+  await expect(page.getByTestId("project-v2-workspace")).toBeVisible()
+  await expect(page.locator(".cm-content")).toBeVisible()
   await analyzePage(page)
   await assertCleanRuntime()
 })

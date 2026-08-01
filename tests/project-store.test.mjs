@@ -329,3 +329,183 @@ test("project store refuses stale deletion and rolls back an interrupted deletio
   assert.equal(storage.getItem(itemKey), itemValue);
   assert.equal(storage.getItem("drops-studio-projects-v2"), indexValue);
 });
+
+test("project store isolates browser records by signed actor scope", async () => {
+  const store = await import("../lib/project-store.ts");
+  const storage = memoryStorage();
+  const guestScope = {
+    kind: "guest",
+    identity: "1".repeat(64),
+  };
+  const memberScope = {
+    kind: "member",
+    identity: "2".repeat(64),
+  };
+  const guestProject = project("guest-project", "2026-07-30T00:01:00.000Z");
+  const memberProject = project("member-project", "2026-07-30T00:02:00.000Z");
+
+  await store.saveProjectSafely(guestProject, {
+    storage,
+    scope: guestScope,
+    expectedUpdatedAt: null,
+  });
+  await store.saveProjectSafely(memberProject, {
+    storage,
+    scope: memberScope,
+    expectedUpdatedAt: null,
+  });
+
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: guestScope }).map((item) => item.id),
+    [guestProject.id],
+  );
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: memberScope }).map((item) => item.id),
+    [memberProject.id],
+  );
+  assert.notEqual(
+    store.projectStoreIndexKey(guestScope),
+    store.projectStoreIndexKey(memberScope),
+  );
+});
+
+test("legacy browser projects are claimed once and cannot migrate into another account", async () => {
+  const store = await import("../lib/project-store.ts");
+  const legacy = project("legacy-project", "2026-07-30T00:01:00.000Z");
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": JSON.stringify([legacy]),
+  });
+  const firstScope = {
+    kind: "member",
+    identity: "a".repeat(64),
+  };
+  const secondScope = {
+    kind: "member",
+    identity: "b".repeat(64),
+  };
+
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: firstScope }).map((item) => item.id),
+    [],
+  );
+  assert.equal(await store.claimLegacyProjectsSafely({
+    storage,
+    locks: null,
+    scope: firstScope,
+  }), true);
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: firstScope }).map((item) => item.id),
+    [legacy.id],
+  );
+  assert.equal(store.isProjectStoreLegacyOwner(firstScope, storage), true);
+  assert.equal(await store.claimLegacyProjectsSafely({
+    storage,
+    locks: null,
+    scope: secondScope,
+  }), false);
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: secondScope }),
+    [],
+  );
+  assert.equal(store.isProjectStoreLegacyOwner(secondScope, storage), false);
+});
+
+test("actor bootstrap completes before the single global legacy claim lock is entered", async () => {
+  const store = await import("../lib/project-store.ts");
+  const legacy = project("legacy-bootstrap", "2026-07-30T00:01:00.000Z");
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": JSON.stringify([legacy]),
+  });
+  const scope = { kind: "member", identity: "c".repeat(64) };
+  let bootstrapped = false;
+  const lockNames = [];
+  const locks = {
+    async request(name, options, callback) {
+      lockNames.push(name);
+      assert.equal(bootstrapped, true);
+      assert.equal(options.mode, "exclusive");
+      return callback();
+    },
+  };
+
+  const projects = await store.readProjectsAfterScopeBootstrap(
+    async () => {
+      bootstrapped = true;
+    },
+    { storage, locks, scope },
+  );
+
+  assert.deepEqual(projects.map((item) => item.id), [legacy.id]);
+  assert.deepEqual(lockNames, [store.PROJECT_STORE_LOCK_NAME]);
+});
+
+test("legacy claims across identities share one lock and preserve existing item versions", async () => {
+  const store = await import("../lib/project-store.ts");
+  const legacy = project("legacy-versioned", "2026-07-30T00:03:00.000Z");
+  const firstScope = { kind: "member", identity: "d".repeat(64) };
+  const secondScope = { kind: "member", identity: "e".repeat(64) };
+  const firstItemKey = `${store.projectStoreItemPrefix(firstScope)}${encodeURIComponent(legacy.id)}`;
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": JSON.stringify([legacy]),
+    [firstItemKey]: JSON.stringify({
+      schemaVersion: 1,
+      version: 7,
+      project: { ...legacy, updatedAt: "2026-07-30T00:02:00.000Z" },
+    }),
+  });
+  const lockNames = [];
+  let queue = Promise.resolve();
+  const locks = {
+    request(name, options, callback) {
+      lockNames.push(name);
+      assert.equal(options.mode, "exclusive");
+      const next = queue.then(callback);
+      queue = next.then(() => undefined, () => undefined);
+      return next;
+    },
+  };
+
+  const [firstClaim, secondClaim] = await Promise.all([
+    store.claimLegacyProjectsSafely({ storage, locks, scope: firstScope }),
+    store.claimLegacyProjectsSafely({ storage, locks, scope: secondScope }),
+  ]);
+
+  assert.deepEqual([firstClaim, secondClaim], [true, false]);
+  assert.deepEqual(lockNames, [
+    store.PROJECT_STORE_LOCK_NAME,
+    store.PROJECT_STORE_LOCK_NAME,
+  ]);
+  assert.equal(JSON.parse(storage.getItem(firstItemKey)).version, 7);
+  assert.deepEqual(
+    store.readProjectsFromStore(storage, { scope: secondScope }),
+    [],
+  );
+});
+
+test("browser-default project access fails closed until an actor scope cookie exists", async () => {
+  const store = await import("../lib/project-store.ts");
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const storage = memoryStorage({
+    "drops-studio-projects-v2": JSON.stringify([
+      project("unscoped-project", "2026-07-30T00:01:00.000Z"),
+    ]),
+  });
+  globalThis.window = { localStorage: storage };
+  globalThis.document = { cookie: "" };
+  try {
+    assert.deepEqual(store.readProjectsFromStore(), []);
+    await assert.rejects(
+      store.saveProjectSafely(
+        project("new-project", "2026-07-30T00:02:00.000Z"),
+        { locks: null, expectedUpdatedAt: null },
+      ),
+      /actor scope/i,
+    );
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});

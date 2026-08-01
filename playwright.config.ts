@@ -63,7 +63,16 @@ const projects = [
   { name: "chromium-1440", viewport: { width: 1440, height: 900 } },
   { name: "chromium-1024", viewport: { width: 1024, height: 768 } },
   { name: "chromium-390", viewport: { width: 390, height: 844 } },
-]
+] as const
+
+// Viewport-exclusive tests are selected at discovery time instead of calling
+// test.skip at runtime. This keeps the standard report honest: a scenario is
+// either assigned to its intended project or it is not part of that matrix.
+const viewportProjectFilters = {
+  "chromium-1440": /@tablet-only|@mobile-only/,
+  "chromium-1024": /@desktop-only|@mobile-only/,
+  "chromium-390": /@desktop-only|@tablet-only/,
+} satisfies Record<(typeof projects)[number]["name"], RegExp>
 
 export default defineConfig({
   testDir: "./e2e",
@@ -110,6 +119,7 @@ export default defineConfig({
   },
   projects: projects.map((project) => ({
     name: project.name,
+    grepInvert: viewportProjectFilters[project.name],
     use: { viewport: project.viewport },
   })),
   ...(externalTestOrigin

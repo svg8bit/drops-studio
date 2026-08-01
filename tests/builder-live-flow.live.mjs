@@ -36,8 +36,13 @@ const permissions = new Set([
   "project:publish",
 ]);
 
+if (process.env.DROPS_STUDIO_LIVE_BUILDER !== "1") {
+  throw new Error(
+    "Live Builder verification is external and credentialed. Run it explicitly with npm run test:live:builder.",
+  );
+}
+
 test("live Project V2 flow installs, checks, builds, previews, browser-tests and checkpoints", {
-  skip: process.env.DROPS_STUDIO_LIVE_BUILDER !== "1",
   timeout: 12 * 60_000,
 }, async () => {
   const actorId = `live-builder-${Date.now().toString(36)}`;

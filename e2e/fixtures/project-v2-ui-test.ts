@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { compileProject } from "../../lib/project-compiler";
 import { createProjectSpec } from "../../lib/project-factory";
+import { PROJECT_STORE_SCOPE_COOKIE } from "../../lib/project-store";
 import { materializeProjectV2Template } from "../../lib/project-template-materializer";
 import {
   PROJECTS_STORAGE_KEY,
@@ -11,6 +12,7 @@ import type { ProjectV2 } from "../../lib/project-v2-types";
 import { expect } from "./ui-test";
 
 const CREATED_AT = "2026-07-30T12:00:00.000Z";
+const E2E_GUEST_SCOPE_IDENTITY = "c".repeat(64);
 
 export interface ProjectV2UiFixtureOptions {
   persistedPreview?: boolean;
@@ -69,14 +71,70 @@ export async function prepareProjectV2UiPage(
     updatedAt: CREATED_AT,
   };
 
-  await page.route("**/api/projects/v2**", async (route) => {
+  await page.context().addCookies([{
+    name: PROJECT_STORE_SCOPE_COOKIE,
+    value: `guest.${E2E_GUEST_SCOPE_IDENTITY}`,
+    url: "http://127.0.0.1:4173",
+    sameSite: "Lax",
+  }]);
+  await page.route("**/api/access", async (route) => {
     await route.fulfill({
-      status: 503,
+      status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        code: "PROJECT_V2_STORAGE_UNAVAILABLE",
-        error: "Private Project V2 storage is not configured. The browser project remains available.",
+        access: {
+          authenticated: false,
+          projectSync: false,
+          account: { connected: false, projectSync: false },
+        },
+        projectStoreScope: {
+          kind: "guest",
+          identity: E2E_GUEST_SCOPE_IDENTITY,
+        },
       }),
+    });
+  });
+  let remoteProject = projectV2;
+  let storageRevision = 1;
+  await page.route("**/api/projects/v2**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ found: true, storageRevision, project: remoteProject }),
+      });
+      return;
+    }
+    if (request.method() === "PUT") {
+      const input = request.postDataJSON() as {
+        expectedStorageRevision?: number;
+        project?: ProjectV2;
+      };
+      if (!input.project) {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "PROJECT_V2_INVALID_FIXTURE_REQUEST",
+            error: "A Project V2 snapshot is required.",
+          }),
+        });
+        return;
+      }
+      remoteProject = input.project;
+      storageRevision += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ storageRevision, project: remoteProject }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ deleted: true }),
     });
   });
   await page.route("**/api/builder/runtime", async (route) => {
@@ -169,17 +227,20 @@ export async function prepareProjectV2UiPage(
   });
 
   await page.addInitScript(
-    ({ key, value, autoBuildKey }) => {
+    ({ key, value, autoBuildKey, seedKey }) => {
       if (window.top !== window) return;
+      if (window.sessionStorage.getItem(seedKey) === "1") return;
       window.localStorage.clear();
       window.sessionStorage.clear();
       window.localStorage.setItem(key, value);
-      window.sessionStorage.setItem(autoBuildKey, "1");
+      window.sessionStorage.setItem(autoBuildKey, String(Date.now()));
+      window.sessionStorage.setItem(seedKey, "1");
     },
     {
       key: PROJECTS_STORAGE_KEY,
       value: JSON.stringify([project]),
       autoBuildKey: `drops-studio:v2-auto-build:${id}:${projectV2.revision}`,
+      seedKey: `drops-studio:e2e-project-v2-seeded:${id}`,
     },
   );
   await page.goto(`/studio/${id}`, { waitUntil: "domcontentloaded" });

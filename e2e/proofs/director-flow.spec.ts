@@ -14,6 +14,7 @@ import {
   expect,
   expectNoHorizontalOverflow,
   installRuntimeGuards,
+  storedProjectForCurrentActor,
   test,
 } from "../fixtures/ui-test"
 
@@ -94,17 +95,7 @@ async function openSeededDirectorProject(page: Page) {
 }
 
 async function storedDirectorProject(page: Page) {
-  return page.evaluate(
-    ({ key, projectId }) => {
-      const projects = JSON.parse(
-        window.localStorage.getItem(key) || "[]",
-      ) as GeneratedProject[]
-      const project = projects.find((candidate) => candidate.id === projectId)
-      if (!project) throw new Error("Director proof project is missing")
-      return project
-    },
-    { key: PROJECTS_STORAGE_KEY, projectId: PROJECT_ID },
-  )
+  return storedProjectForCurrentActor(page, PROJECT_ID)
 }
 
 function expectAppliedDirectorSpec(spec: GeneratedProjectSpec) {

@@ -164,21 +164,94 @@ test("managed Postgres persists every encrypted provider envelope without plaint
       provider: "telegram",
       credential: "telegram-account-session-fixture",
       label: "Telegram account session",
+      telegramReceipt: {
+        accountId: "777000123",
+        id: "-1001234567890",
+        title: "Fixture Alpha",
+        username: "@fixture_alpha",
+        url: "https://t.me/fixture_alpha",
+        botUsername: "@DropsStudioFixtureBot",
+        botAdded: true,
+        firstPostSent: true,
+        firstPostMessageId: 42,
+        dmSent: false,
+        dmStartUrl: "https://t.me/DropsStudioFixtureBot?start=drops_studio",
+        warnings: [],
+        createdAt: "2026-08-01T00:00:00.000Z",
+      },
     }, undefined, sql);
 
     const state = await storage.readStudioAccountState(identity, undefined, sql);
     assert.equal(state.revision, 2);
     assert.deepEqual(Object.keys(state.connections).sort(), ["openrouter", "telegram"]);
-    assert.doesNotMatch(sql.storedJson(), /openrouter-provider-key-fixture|telegram-account-session-fixture/);
+    assert.doesNotMatch(sql.storedJson(), /openrouter-provider-key-fixture|telegram-account-session-fixture|fixture_alpha/);
     assert.equal(
       (await storage.readStudioConnectionSecret(identity, "openrouter", undefined, sql))?.credential,
       "openrouter-provider-key-fixture",
     );
-    assert.equal(
-      (await storage.readStudioConnectionSecret(identity, "telegram", undefined, sql))?.credential,
-      "telegram-account-session-fixture",
-    );
+    const telegram = await storage.readStudioConnectionSecret(identity, "telegram", undefined, sql);
+    assert.equal(telegram?.credential, "telegram-account-session-fixture");
+    assert.deepEqual(telegram?.telegramReceipt, {
+      accountId: "777000123",
+      id: "-1001234567890",
+      title: "Fixture Alpha",
+      username: "@fixture_alpha",
+      url: "https://t.me/fixture_alpha",
+      botUsername: "@DropsStudioFixtureBot",
+      botAdded: true,
+      firstPostSent: true,
+      firstPostMessageId: 42,
+      dmSent: false,
+      dmStartUrl: "https://t.me/DropsStudioFixtureBot?start=drops_studio",
+      warnings: [],
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
     assert.ok(sql.statements.some((statement) => statement.startsWith("UPDATE drops_studio_account_states")));
+  } finally {
+    if (previousVaultKey === undefined) delete process.env.DROPS_CONNECTION_VAULT_KEY;
+    else process.env.DROPS_CONNECTION_VAULT_KEY = previousVaultKey;
+  }
+});
+
+test("Telegram receipt parsing rejects coerced message ids and malformed account ids", async () => {
+  const previousVaultKey = process.env.DROPS_CONNECTION_VAULT_KEY;
+  process.env.DROPS_CONNECTION_VAULT_KEY = "receipt-validation-vault-key-with-at-least-32-bytes";
+  const storage = await import("../db/studio-account-state.ts");
+  const sql = memoryAccountSql();
+  const receipt = {
+    accountId: "777000123",
+    id: "-1001234567890",
+    title: "Fixture Alpha",
+    username: "@fixture_alpha",
+    url: "https://t.me/fixture_alpha",
+    botUsername: "@DropsStudioFixtureBot",
+    botAdded: true,
+    firstPostSent: true,
+    firstPostMessageId: 42,
+    dmSent: false,
+    dmStartUrl: "https://t.me/DropsStudioFixtureBot?start=drops_studio",
+    warnings: [],
+    createdAt: "2026-08-01T00:00:00.000Z",
+  };
+  try {
+    for (const invalid of ["42", true]) {
+      await assert.rejects(
+        storage.saveStudioConnection(identity, {
+          provider: "telegram",
+          credential: "telegram-account-session-fixture",
+          telegramReceipt: { ...receipt, firstPostMessageId: invalid },
+        }, undefined, sql),
+        /receipt is invalid/i,
+      );
+    }
+    await assert.rejects(
+      storage.saveStudioConnection(identity, {
+        provider: "telegram",
+        credential: "telegram-account-session-fixture",
+        telegramReceipt: { ...receipt, accountId: "not-an-account" },
+      }, undefined, sql),
+      /receipt is invalid/i,
+    );
   } finally {
     if (previousVaultKey === undefined) delete process.env.DROPS_CONNECTION_VAULT_KEY;
     else process.env.DROPS_CONNECTION_VAULT_KEY = previousVaultKey;

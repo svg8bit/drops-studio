@@ -5,11 +5,18 @@ import {
   GUEST_USAGE_COOKIE,
   memberProjectSyncReadiness,
   platformAiReadiness,
+  projectV2SyncReadiness,
   resolveFundedBuildQuota,
   resolveGuestAccess,
   resolveStudioAccount,
+  resolveStudioProjectActor,
   STUDIO_ACCOUNT_COOKIE,
 } from "../../../lib/access-tier.ts";
+import {
+  PROJECT_STORE_SCOPE_COOKIE,
+  projectStoreScopeCookieValue,
+  type ProjectStoreScope,
+} from "../../../lib/project-store.ts";
 import { readRequestLimitState } from "../../../lib/request-rate-limit.ts";
 
 export const runtime = "nodejs";
@@ -19,6 +26,23 @@ function requestOidcToken(request: NextRequest): string | undefined {
   return value && value.length <= 4_096 && !/[\r\n\0]/.test(value)
     ? value
     : undefined;
+}
+
+function setProjectStoreScope(
+  response: NextResponse,
+  scope: ProjectStoreScope,
+): void {
+  response.cookies.set(
+    PROJECT_STORE_SCOPE_COOKIE,
+    projectStoreScopeCookieValue(scope),
+    {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 60 * 60 * 24 * 90,
+      path: "/",
+    },
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -42,19 +66,27 @@ export async function GET(request: NextRequest) {
         })
       : { status: "unavailable" as const, count: null, remaining: null };
     const platformAvailable = readiness.available && quota.status !== "unavailable" && quota.count !== null;
-    return NextResponse.json(
+    const projectStoreScope = {
+      kind: "member" as const,
+      identity: account.identity,
+    };
+    const response = NextResponse.json(
       {
         access: accessMetadata({
           tier: platformAvailable ? memberTier : "fallback",
           used: quota.count ?? 0,
           account,
-          projectSyncAvailable: memberProjectSyncReadiness(readinessEnvironment),
+          projectSyncAvailable: projectV2SyncReadiness(readinessEnvironment),
+          accountProjectSyncAvailable: memberProjectSyncReadiness(readinessEnvironment),
           platformLimit: memberLimit,
         }),
+        projectStoreScope,
         quotaSigningConfigured: readiness.signingConfigured,
       },
       { headers: { "cache-control": "no-store" } },
     );
+    setProjectStoreScope(response, projectStoreScope);
+    return response;
   }
   const context = resolveGuestAccess({
     identityCookie: request.cookies.get(GUEST_IDENTITY_COOKIE)?.value,
@@ -66,11 +98,23 @@ export async function GET(request: NextRequest) {
     tier: context.configured && readiness.available ? "guest" : "fallback",
     used: context.used,
     projectSyncAvailable: context.configured
-      && memberProjectSyncReadiness(readinessEnvironment),
+      && projectV2SyncReadiness(readinessEnvironment),
   });
+  const signedGuestCookie = context.identityCookie
+    ?? request.cookies.get(GUEST_IDENTITY_COOKIE)?.value;
+  const actor = signedGuestCookie
+    ? resolveStudioProjectActor(
+        { guestCookie: signedGuestCookie },
+        readinessEnvironment,
+      )
+    : null;
+  const projectStoreScope = actor?.kind === "guest"
+    ? { kind: "guest" as const, identity: actor.identity }
+    : null;
   const response = NextResponse.json(
     {
       access,
+      ...(projectStoreScope ? { projectStoreScope } : {}),
       quotaSigningConfigured: readiness.signingConfigured,
     },
     { headers: { "cache-control": "no-store" } },
@@ -84,5 +128,6 @@ export async function GET(request: NextRequest) {
       path: "/",
     });
   }
+  if (projectStoreScope) setProjectStoreScope(response, projectStoreScope);
   return response;
 }

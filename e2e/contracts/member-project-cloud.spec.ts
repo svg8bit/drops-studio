@@ -4,8 +4,8 @@ import { compileProject } from "../../lib/project-compiler"
 import { createProjectSpec } from "../../lib/project-factory"
 import { evaluateProjectQuality } from "../../lib/project-quality"
 import { fallbackAgentPlan } from "../../lib/product-blueprint"
+import { PROJECT_STORE_SCOPE_COOKIE } from "../../lib/project-store"
 import {
-  PROJECTS_STORAGE_KEY,
   type GeneratedProjectSpec,
 } from "../../lib/project-types"
 import type { MemberProjectRecord } from "../../lib/member-project-cloud"
@@ -13,6 +13,8 @@ import type { ProjectV2 } from "../../lib/project-v2-types"
 import {
   expect,
   prepareHomePage,
+  storedProjectForCurrentActor,
+  storedProjectsForCurrentActor,
   test,
 } from "../fixtures/ui-test"
 
@@ -21,6 +23,7 @@ const REMOTE_PROJECT_NAME = "Cloud Morning Alpha"
 const UPDATED_PROJECT_NAME = "Cloud Morning Alpha Pro"
 const SESSION_ONLY_KEY = "sk-session-only-must-never-sync"
 const BUILD_PROMPT = "Build a cloud-synced daily morning alpha brief"
+const MEMBER_SCOPE_IDENTITY = "b".repeat(64)
 
 function projectSpec(
   name = REMOTE_PROJECT_NAME,
@@ -80,6 +83,10 @@ function memberAccessPayload() {
         projectSync: true,
       },
     },
+    projectStoreScope: {
+      kind: "member",
+      identity: MEMBER_SCOPE_IDENTITY,
+    },
   }
 }
 
@@ -88,6 +95,9 @@ async function installMemberAccess(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
+      headers: {
+        "set-cookie": `${PROJECT_STORE_SCOPE_COOKIE}=member.${MEMBER_SCOPE_IDENTITY}; Path=/; SameSite=Lax`,
+      },
       body: JSON.stringify(memberAccessPayload()),
     })
   })
@@ -228,10 +238,9 @@ function assertSafeProjectWrite(body: unknown) {
   }
 }
 
-test("signed-in home restores and opens a remote-only runnable project", async ({
+test("signed-in home restores and opens a remote-only runnable project", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
   let remote = remoteProject()
 
   await installMemberAccess(page)
@@ -265,13 +274,8 @@ test("signed-in home restores and opens a remote-only runnable project", async (
 
   await expect
     .poll(async () => {
-      return page.evaluate(({ key, projectId }) => {
-        const stored = window.localStorage.getItem(key)
-        const projects = stored ? JSON.parse(stored) : []
-        return projects.some(
-          (project: { id?: string }) => project.id === projectId,
-        )
-      }, { key: PROJECTS_STORAGE_KEY, projectId: REMOTE_PROJECT_ID })
+      const projects = await storedProjectsForCurrentActor(page)
+      return projects.some((project) => project.id === REMOTE_PROJECT_ID)
     })
     .toBe(true)
 
@@ -294,10 +298,9 @@ test("signed-in home restores and opens a remote-only runnable project", async (
   )
 })
 
-test("a new build keeps its runnable browser copy when cloud sync fails", async ({
+test("a new build keeps its runnable browser copy when cloud sync fails", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
   test.setTimeout(90_000)
   let cloudPutCount = 0
   let cloudWrite: unknown = null
@@ -362,29 +365,24 @@ test("a new build keeps its runnable browser copy when cloud sync fails", async 
   expect(cloudWrite).not.toBeNull()
 
   const projectId = new URL(page.url()).pathname.split("/").at(-1)
-  const storedProject = await page.evaluate(
-    ({ key, id }) => {
-      const stored = window.localStorage.getItem(key)
-      const projects = stored ? JSON.parse(stored) : []
-      return projects.find((project: { id?: string }) => project.id === id)
-    },
-    { key: PROJECTS_STORAGE_KEY, id: projectId },
-  )
+  if (!projectId) throw new Error("Generated project id is missing")
+  const storedProject = await storedProjectForCurrentActor(page, projectId)
   expect(storedProject).toMatchObject({
     id: projectId,
     spec: { presetId: "morning-alpha" },
   })
   expect(storedProject.html).toMatch(/^<!doctype html>/i)
-  await expect(page.locator("iframe[title$='live application']")).toHaveCount(1)
+  await expect(page.getByText("Preparing your live app", { exact: true })).toBeVisible()
+  await page.locator(".studio-rail").getByRole("button", { name: "Code", exact: true }).click()
+  await expect(page.getByTestId("project-v2-workspace")).toBeVisible()
   await expect(page.locator("[data-sync-status='local']")).toContainText(
     "Saved in browser",
   )
 })
 
-test("Studio restores a remote-only project and syncs validated source without private runtime artifacts or keys", async ({
+test("Studio restores a remote-only project and syncs validated source without private runtime artifacts or keys", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
   const remote = remoteProject()
   let currentRevision = remote.revision
   const cloudWrites: Array<{
@@ -457,12 +455,8 @@ test("Studio restores a remote-only project and syncs validated source without p
     "Saved to cloud",
   )
 
-  const localName = await page.evaluate(({ key, projectId }) => {
-    const stored = window.localStorage.getItem(key)
-    const projects = stored ? JSON.parse(stored) : []
-    return projects.find(
-      (project: { id?: string }) => project.id === projectId,
-    )?.spec?.name
-  }, { key: PROJECTS_STORAGE_KEY, projectId: REMOTE_PROJECT_ID })
+  const localName = (
+    await storedProjectForCurrentActor(page, REMOTE_PROJECT_ID)
+  ).spec.name
   expect(localName).toBe(UPDATED_PROJECT_NAME)
 })

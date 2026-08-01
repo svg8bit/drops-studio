@@ -425,18 +425,3 @@ test("a timed-out command is killed and returns only a secret-free provider erro
   );
   assert.deepEqual(hanging.killed, ["SIGKILL"]);
 });
-
-test("live stable Sandbox smoke is opt-in only", {
-  skip: process.env.DROPS_STUDIO_LIVE_SANDBOX !== "1",
-  timeout: 300_000,
-}, async () => {
-  const adapter = new VercelSandboxRuntimeAdapter();
-  const context = { actorId: "explicit-live-sandbox-smoke", project: project({ id: "live-sandbox-smoke" }), requestId: "live-smoke" };
-  const handle = await adapter.writeProject(context);
-  try {
-    const result = await adapter.runTests(context, handle);
-    assert.equal(result.exitCode, 0);
-  } finally {
-    await adapter.destroy(handle);
-  }
-});

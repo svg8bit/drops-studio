@@ -12,6 +12,7 @@ import {
   expectNoHorizontalOverflow,
   installRuntimeGuards,
   prepareHomePage,
+  storedProjectsForCurrentActor,
   test,
 } from "../fixtures/ui-test"
 
@@ -99,6 +100,40 @@ async function deterministicFallbackPlan() {
 async function installDeterministicBuildBoundary(page: import("@playwright/test").Page) {
   let requests = 0
 
+  await page.route("**/api/builder/agent", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "E2E_SANDBOX_SEPARATE_GATE",
+        error: "Live Sandbox verification runs in the explicit credentialed gate.",
+      }),
+    })
+  })
+  await page.route("**/api/builder/runtime", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        action: "status",
+        result: {
+          provider: "vercel-sandbox",
+          status: "unavailable",
+          sandboxName: null,
+          sessionId: null,
+          vcpus: null,
+          memoryMb: null,
+          createdAt: null,
+          updatedAt: null,
+          expiresAt: null,
+          activeDurationMs: null,
+          previewUrl: null,
+          previewCommandId: null,
+        },
+      }),
+    })
+  })
+
   await page.route("**/api/generate", async (route) => {
     const body = route.request().postDataJSON() as {
       provider?: string
@@ -158,10 +193,7 @@ test("a Russian free prompt builds and runs the illustrated retro wolf game", as
   expect(planRequests).toBe(1)
   expect(buildRequests()).toBe(1)
 
-  const storedProjects = await page.evaluate((storageKey) => {
-    const stored = window.localStorage.getItem(storageKey)
-    return stored ? JSON.parse(stored) : []
-  }, PROJECTS_STORAGE_KEY)
+  const storedProjects = await storedProjectsForCurrentActor(page)
   expect(storedProjects).toHaveLength(1)
   expect(storedProjects[0].spec).toMatchObject({
     presetId: "crypto-game",
@@ -181,10 +213,28 @@ test("a Russian free prompt builds and runs the illustrated retro wolf game", as
     'src="/assets/market-wolf-catcher.png"'
   )
 
-  if ((page.viewportSize()?.width ?? 1440) <= 680) {
-    await page.locator(".mobile-preview-tab").click()
-  }
-  const runtime = page.frameLocator("iframe[title$='live application']")
+  const runtimeHtml = await page.evaluate(async (html) => {
+    const toDataUrl = async (path: string) => {
+      const response = await fetch(path)
+      if (!response.ok) throw new Error(`Required runtime asset ${path} is missing`)
+      const blob = await response.blob()
+      return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ""))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(blob)
+      })
+    }
+    const [background, wolf] = await Promise.all([
+      toDataUrl("/assets/market-catcher-retro.png"),
+      toDataUrl("/assets/market-wolf-catcher.png"),
+    ])
+    return html
+      .replaceAll('src="/assets/market-catcher-retro.png"', `src="${background}"`)
+      .replaceAll('src="/assets/market-wolf-catcher.png"', `src="${wolf}"`)
+  }, storedProjects[0].html)
+  await page.setContent(runtimeHtml, { waitUntil: "load" })
+  const runtime = page
   await expect(runtime.locator(".catcher-runtime")).toBeVisible()
   await expect(runtime.locator(".catcher-copy h2")).toHaveText(
     "Волк ловит рынок"
@@ -255,10 +305,9 @@ test("a Russian free prompt builds and runs the illustrated retro wolf game", as
   await assertCleanRuntime()
 })
 
-test("a failed browser save never opens a missing Project Studio", async ({
+test("a failed browser save never opens a missing Project Studio", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+}) => {
   test.setTimeout(60_000)
   const planPayload = await deterministicFallbackPlan()
   const buildRequests = await installDeterministicBuildBoundary(page)
@@ -266,7 +315,7 @@ test("a failed browser save never opens a missing Project Studio", async ({
   await page.addInitScript((storageKey) => {
     const original = Storage.prototype.setItem
     Storage.prototype.setItem = function setItem(key, value) {
-      if (key === storageKey) {
+      if (key === storageKey || key.startsWith(`${storageKey}:scope:`)) {
         throw new DOMException("Storage quota exceeded", "QuotaExceededError")
       }
       return original.call(this, key, value)

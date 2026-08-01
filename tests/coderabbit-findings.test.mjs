@@ -45,17 +45,23 @@ test("layout and builder keep deterministic release safeguards", async () => {
   assert.match(builder, /handoff\.provider === "dropsbot"/);
   assert.match(builder, /handoff\.flow === "telegram-channel"/);
   assert.match(builder, /setTelegramProjectSlug\(handoff\.project\)/);
-  assert.match(builder, /let savedProjects = readProjectsFromStore\(\)/);
+  assert.match(builder, /let savedProjects: GeneratedProject\[\] = \[\]/);
+  assert.match(builder, /savedProjects = await readProjectsAfterScopeBootstrap\(async \(\) =>/);
+  const accessIndex = builder.indexOf('fetch("/api/access"');
+  const scopedReadIndex = builder.indexOf("readProjectsAfterScopeBootstrap");
+  assert.notEqual(accessIndex, -1, "actor bootstrap request must remain present");
+  assert.notEqual(scopedReadIndex, -1, "scoped project bootstrap helper must remain present");
   assert.match(
     builder,
     /const stored = await saveProjectSafely\(project, \{[\s\S]+?expectedUpdatedAt: null,[\s\S]+?stored\.status === "conflict"[\s\S]+?next = stored\.projects/,
   );
   assert.doesNotMatch(builder, /let next = \[project, \.\.\.projects\]/);
 
-  assert.match(
-    studio,
-    /readProjectsFromStore\(\)\.find\(\(item\) => item\.id === params\.id\) \?\? null/,
-  );
+  assert.match(studio, /await readProjectsAfterScopeBootstrap\(async \(\) =>/);
+  assert.match(studio, /url\.hostname\.endsWith\("\.vercel\.run"\)/);
+  assert.match(studio, /!url\.port/);
+  assert.match(studio, /await reader\.cancel\(\)\.catch/);
+  assert.match(studio, /conversation\.filter\(\(item\) => item\.id !== assistantId\)/);
   assert.match(studio, /const cloud = await listMemberProjectsFromCloud\(\)/);
   assert.match(
     studio,

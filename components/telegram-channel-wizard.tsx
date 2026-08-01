@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { forgetStudioConnection } from "@/lib/studio-account-connections-client";
+
 type TelegramAccount = {
   id: string;
   displayName: string;
@@ -36,7 +38,8 @@ type ChannelResult = {
   dmSent: boolean;
   dmStartUrl: string;
   warnings: string[];
-  accountToken: string;
+  accountToken?: string;
+  createdAt?: string;
 };
 
 type Phase = "loading" | "phone" | "code" | "password" | "connected" | "creating" | "created";
@@ -78,6 +81,7 @@ export function TelegramChannelWizard({
   const [account, setAccount] = useState<TelegramAccount | null>(null);
   const [accountToken, setAccountToken] = useState("");
   const [accountRemembered, setAccountRemembered] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [title, setTitle] = useState(defaultTitle);
   const [about, setAbout] = useState(defaultAbout);
   const [username, setUsername] = useState("");
@@ -104,6 +108,7 @@ export function TelegramChannelWizard({
           connected?: boolean;
           remembered?: boolean;
           account?: TelegramAccount;
+          channel?: ChannelResult;
           error?: string;
         };
         if (!response.ok) {
@@ -124,11 +129,12 @@ export function TelegramChannelWizard({
         setAccount(payload.account);
         setAccountToken(saved);
         setAccountRemembered(payload.remembered === true);
+        if (payload.channel) setResult(payload.channel);
         window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
           detail: { provider: "telegram", connected: true },
         }));
         setCheckingExisting(false);
-        setPhase("connected");
+        setPhase(payload.channel ? "created" : "connected");
       } catch (caught) {
         if (cancelled) return;
         // Preserve the session on transient verification errors. A later open
@@ -214,9 +220,15 @@ export function TelegramChannelWizard({
         headers: sessionHeaders(),
         body: JSON.stringify({ accountToken, requestId, title, about, username, firstPost, ...(ownBot ? { botToken } : {}) }),
       });
-      const payload = await response.json() as ChannelResult & { error?: string };
+      const payload = await response.json() as ChannelResult & {
+        accountPersistence?: { available?: boolean; remembered?: boolean };
+        error?: string;
+      };
       if (!response.ok || !payload.url || !Number.isSafeInteger(payload.firstPostMessageId) || payload.firstPostMessageId <= 0) {
         throw new Error(requestError(payload, "Telegram did not return verifiable evidence for the first channel post."));
+      }
+      if (!payload.accountToken) {
+        throw new Error("Telegram did not return the refreshed account session.");
       }
       window.sessionStorage.setItem(ACCOUNT_STORAGE_KEY, payload.accountToken);
       window.sessionStorage.setItem("drops-studio:telegram-last-channel", JSON.stringify({
@@ -226,8 +238,17 @@ export function TelegramChannelWizard({
         firstPostMessageId: payload.firstPostMessageId,
       }));
       setAccountToken(payload.accountToken);
+      setAccountRemembered(payload.accountPersistence?.remembered === true);
       setCreationRequestId("");
-      setResult(payload);
+      setResult({
+        ...payload,
+        warnings: [
+          ...(payload.warnings ?? []),
+          ...(payload.accountPersistence?.available && !payload.accountPersistence.remembered
+            ? ["The channel is live, but encrypted cross-session restore could not be refreshed. Reopen Connections to retry."]
+            : []),
+        ],
+      });
       setPhase("created");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Telegram could not create the channel.");
@@ -235,25 +256,40 @@ export function TelegramChannelWizard({
     }
   }
 
-  function disconnect() {
-    void fetch("/api/account/connections?provider=telegram", {
-      method: "DELETE",
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
-    }).catch(() => undefined);
-    window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
-    setAccount(null);
-    setAccountToken("");
-    setAccountRemembered(false);
-    window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
-      detail: { provider: "telegram", connected: false },
-    }));
-    setResult(null);
-    setFlowToken("");
-    setPhoneCode("");
-    setPassword("");
-    setCreationRequestId("");
-    setPhase("phone");
+  async function disconnect() {
+    setError("");
+    setDisconnecting(true);
+    try {
+      if (accountRemembered) {
+        const removal = await forgetStudioConnection("telegram");
+        if (!removal.deleted) {
+          throw new Error(
+            removal.error
+            ?? "Telegram could not be removed from your encrypted account vault.",
+          );
+        }
+      }
+      window.sessionStorage.removeItem(ACCOUNT_STORAGE_KEY);
+      window.sessionStorage.removeItem("drops-studio:telegram-last-channel");
+      setAccount(null);
+      setAccountToken("");
+      setAccountRemembered(false);
+      window.dispatchEvent(new CustomEvent("drops-studio:connection-changed", {
+        detail: { provider: "telegram", connected: false },
+      }));
+      setResult(null);
+      setFlowToken("");
+      setPhoneCode("");
+      setPassword("");
+      setCreationRequestId("");
+      setPhase("phone");
+    } catch (caught) {
+      setError(caught instanceof Error
+        ? caught.message
+        : "Telegram could not be disconnected safely.");
+    } finally {
+      setDisconnecting(false);
+    }
   }
 
   return (
@@ -309,7 +345,7 @@ export function TelegramChannelWizard({
 
       {(["connected", "creating"].includes(phase)) && account && (
         <div className="telegram-channel-builder">
-          <div className="telegram-account-row"><span><UserRoundCheck /></span><div><strong>{account.displayName}</strong><small>{accountRemembered ? "Encrypted in your Studio account" : account.username || "Connected for this browser tab"}</small></div><b>CONNECTED</b><button type="button" onClick={disconnect}>Change</button></div>
+          <div className="telegram-account-row"><span><UserRoundCheck /></span><div><strong>{account.displayName}</strong><small>{accountRemembered ? "Encrypted in your Studio account" : account.username || "Connected for this browser tab"}</small></div><b>CONNECTED</b><button type="button" disabled={disconnecting} onClick={() => void disconnect()}>{disconnecting ? "Disconnecting…" : "Change"}</button></div>
           <div className="telegram-form-grid">
             <label><span>Channel name</span><input value={title} maxLength={64} onChange={(event) => setTitle(event.target.value)} /></label>
             <label><span>Public username <i>optional</i></span><div className="telegram-username"><b>@</b><input value={username} maxLength={32} onChange={(event) => setUsername(event.target.value.replace(/^@/, "").replace(/[^A-Za-z0-9_]/g, ""))} placeholder="my_alpha_channel" /></div></label>

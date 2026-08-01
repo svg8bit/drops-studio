@@ -63,7 +63,7 @@ test("starter preview is removed and source contains the required product surfac
   assert.match(component, /sessionStorage/);
   assert.match(component, /DropsStudioSetup/);
   assert.match(setup, /Start from a blank canvas/);
-  assert.match(component, /readProjectsFromStore/);
+  assert.match(component, /readProjectsAfterScopeBootstrap/);
   assert.match(component, /saveProjectSafely/);
   assert.match(component, /item\.id !== "dropsbot"/);
   assert.doesNotMatch(component, /marker === "account-connected"/);

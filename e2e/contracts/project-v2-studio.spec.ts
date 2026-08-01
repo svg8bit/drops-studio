@@ -1,10 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 
-import { PROJECT_STORE_ITEM_PREFIX } from "../../lib/project-store";
-
 import {
   expect,
   expectNoHorizontalOverflow,
+  storedProjectForCurrentActor,
   test,
 } from "../fixtures/ui-test";
 import { prepareProjectV2UiPage } from "../fixtures/project-v2-ui-test";
@@ -28,14 +27,10 @@ test("Project V2 keeps drafts, saves locally, exposes Data and Logic, and reache
   await expect(page.locator(".cm-content")).toContainText("PRESERVED-DRAFT");
   await workspace.getByRole("button", { name: "Save", exact: true }).click();
   await expect(workspace.getByText("Saved", { exact: true })).toBeVisible();
-  await expect.poll(async () => page.evaluate(({ itemPrefix, id }) => {
-    const item = JSON.parse(
-      window.localStorage.getItem(`${itemPrefix}${encodeURIComponent(id)}`) || "null",
-    ) as {
-      project?: { projectV2?: { files?: Record<string, { content?: string }> } };
-    } | null;
-    return item?.project?.projectV2?.files?.["app/page.tsx"]?.content ?? "";
-  }, { itemPrefix: PROJECT_STORE_ITEM_PREFIX, id: project.id })).toContain("PRESERVED-DRAFT");
+  await expect.poll(async () => {
+    const stored = await storedProjectForCurrentActor(page, project.id);
+    return stored.projectV2?.files?.["app/page.tsx"]?.content ?? "";
+  }).toContain("PRESERVED-DRAFT");
 
   await workspace.getByRole("button", { name: "Data", exact: true }).click();
   await expect(workspace.getByText("Declared namespace and capability only", { exact: true })).toBeVisible();

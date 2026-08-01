@@ -55,6 +55,7 @@ export interface RunBuilderAgentDependencies {
   modelResolver?: BuilderModelResolver;
   deterministicFallback?: BuilderDeterministicFallback;
   runnerFactory?: BuilderAgentRunnerFactory;
+  signal?: AbortSignal;
 }
 
 export const materializedProjectDeterministicFallback: BuilderDeterministicFallback = {
@@ -259,10 +260,20 @@ export async function runBuilderAgent(
     try {
       output = await runner.generate({
         prompt: agentPrompt(request, attempt, gate),
-        abortSignal: AbortSignal.timeout(AGENT_TIMEOUT_MS),
+        abortSignal: dependencies.signal
+          ? AbortSignal.any([
+              dependencies.signal,
+              AbortSignal.timeout(AGENT_TIMEOUT_MS),
+            ])
+          : AbortSignal.timeout(AGENT_TIMEOUT_MS),
       });
       lastSummary = safeSummary(output.text, lastSummary);
     } catch (error) {
+      if (dependencies.signal?.aborted) {
+        gate = emptyGate("Builder execution was stopped by the user.");
+        lastSummary = "Builder stopped. Saved project files and the last working preview were preserved.";
+        break;
+      }
       gate = emptyGate(
         secretFreeRuntimeMessage(error, "AI builder provider call failed."),
       );

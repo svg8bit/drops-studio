@@ -1,4 +1,4 @@
-import { generateText, type LanguageModel } from "ai";
+import { generateText, streamText, type LanguageModel } from "ai";
 import { NextRequest } from "next/server.js";
 import { z } from "zod";
 
@@ -12,6 +12,7 @@ import type {
 import { ProjectRuntimeProviderError } from "../../../../lib/project-runtime-adapter.ts";
 import {
   builderActor,
+  BUILDER_NO_STORE_HEADERS,
   builderJson,
   builderRouteError,
   consumeBuilderLimit,
@@ -53,6 +54,12 @@ interface GenerateChatInput {
   abortSignal: AbortSignal;
 }
 
+interface StreamChatResult {
+  toTextStreamResponse(init?: ResponseInit): Response;
+}
+
+const MAX_STREAM_LINE_CHARACTERS = 16_384;
+
 export interface AgentChatRouteDependencies {
   modelResolver?: BuilderModelResolver;
   rememberConnection?: (
@@ -63,6 +70,14 @@ export interface AgentChatRouteDependencies {
     selection: BuilderProviderSelection;
   }>;
   generate?: (input: GenerateChatInput) => Promise<{ text: string }>;
+  stream?: (input: GenerateChatInput) => StreamChatResult;
+}
+
+function acceptsTextStream(request: NextRequest): boolean {
+  if (request.headers.get("x-drops-stream")?.trim() === "1") return true;
+  return (request.headers.get("accept") ?? "")
+    .split(",")
+    .some((value) => value.trim().split(";", 1)[0]?.toLowerCase() === "text/plain");
 }
 
 function safeProviderFailure(error: unknown): ProjectRuntimeProviderError {
@@ -70,6 +85,80 @@ function safeProviderFailure(error: unknown): ProjectRuntimeProviderError {
   return new ProjectRuntimeProviderError(
     "The selected AI model did not complete this chat request. The project was not changed.",
   );
+}
+
+function secretSafeTextStreamResponse(response: Response): Response {
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  let scanContext = "";
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          pending += decoder.decode(value, { stream: !done });
+          let enqueued = false;
+          let newline = pending.indexOf("\n");
+          while (newline >= 0) {
+            const line = pending.slice(0, newline + 1);
+            pending = pending.slice(newline + 1);
+            if (
+              line.length > MAX_STREAM_LINE_CHARACTERS
+              || findArtifactSecrets(`${scanContext}${line}`, "agent chat stream").length
+            ) {
+              throw new ProjectRuntimeProviderError(
+                "The selected AI model returned an unsafe streaming response. The project was not changed.",
+              );
+            }
+            scanContext = `${scanContext}${line}`.slice(-512);
+            controller.enqueue(encoder.encode(line));
+            enqueued = true;
+            newline = pending.indexOf("\n");
+          }
+          if (pending.length > MAX_STREAM_LINE_CHARACTERS) {
+            throw new ProjectRuntimeProviderError(
+              "The selected AI model returned an unsafe or oversized streaming response. The project was not changed.",
+            );
+          }
+          if (done) {
+            if (
+              pending
+              && findArtifactSecrets(`${scanContext}${pending}`, "agent chat stream").length
+            ) {
+              throw new ProjectRuntimeProviderError(
+                "The selected AI model returned an unsafe streaming response. The project was not changed.",
+              );
+            }
+            if (pending) controller.enqueue(encoder.encode(pending));
+            pending = "";
+            controller.close();
+            reader.releaseLock();
+            return;
+          }
+          if (enqueued) return;
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        try {
+          reader.releaseLock();
+        } catch {
+          // The reader can already be detached after cancellation.
+        }
+        controller.error(safeProviderFailure(error));
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+    },
+  });
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export async function handleAgentChatRequest(
@@ -117,8 +206,47 @@ export async function handleAgentChatRequest(
       remembered.selection,
       remembered.credentials,
     );
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
+    const abortSignal = AbortSignal.any([
+      request.signal,
+      AbortSignal.timeout(30_000),
+    ]);
+    const generationInput: GenerateChatInput = {
+      model: resolved.model,
+      system:
+        "You are Drops Agent inside one existing crypto product project. Answer in the language of the latest user message. Use only the supplied project context. Be concise and practical. Never claim a file edit, build, deployment, Telegram delivery, connection, or external action unless the context explicitly proves it. Never request or repeat API keys, tokens, private keys, or credentials. If the user asks for a change, explain that a change request will run through the verified file-edit flow; this endpoint is conversation-only.",
+      prompt: JSON.stringify({
+        project: parsed.data.context,
+        latestUserMessage: parsed.data.message,
+      }),
+      abortSignal,
+    };
+
+    if (acceptsTextStream(request)) {
+      try {
+        const result = (dependencies.stream ?? ((input) => streamText({
+          model: input.model,
+          system: input.system,
+          prompt: input.prompt,
+          abortSignal: input.abortSignal,
+          maxOutputTokens: 1_200,
+          maxRetries: 1,
+          onError: ({ error }) => {
+            console.error(
+              "[agent-chat] provider stream failed",
+              error instanceof Error ? error.name : "unknown",
+            );
+          },
+        })))(generationInput);
+        return secretSafeTextStreamResponse(
+          result.toTextStreamResponse({
+            headers: BUILDER_NO_STORE_HEADERS,
+          }),
+        );
+      } catch (error) {
+        throw safeProviderFailure(error);
+      }
+    }
+
     let result: { text: string };
     try {
       result = await (dependencies.generate ?? (async (input) => generateText({
@@ -128,22 +256,9 @@ export async function handleAgentChatRequest(
         abortSignal: input.abortSignal,
         maxOutputTokens: 1_200,
         maxRetries: 1,
-      })))(
-        {
-          model: resolved.model,
-          system:
-            "You are Drops Agent inside one existing crypto product project. Answer in the language of the latest user message. Use only the supplied project context. Be concise and practical. Never claim a file edit, build, deployment, Telegram delivery, connection, or external action unless the context explicitly proves it. Never request or repeat API keys, tokens, private keys, or credentials. If the user asks for a change, explain that a change request will run through the verified file-edit flow; this endpoint is conversation-only.",
-          prompt: JSON.stringify({
-            project: parsed.data.context,
-            latestUserMessage: parsed.data.message,
-          }),
-          abortSignal: controller.signal,
-        },
-      );
+      })))(generationInput);
     } catch (error) {
       throw safeProviderFailure(error);
-    } finally {
-      clearTimeout(timer);
     }
     const reply = result.text.trim();
     if (!reply || findArtifactSecrets(reply, "agent chat response").length) {

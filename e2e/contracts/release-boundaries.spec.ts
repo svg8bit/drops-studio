@@ -9,8 +9,10 @@ import { compileProject } from "../../lib/project-compiler"
 import { createProjectArchive } from "../../lib/project-export"
 import { createProjectSpec } from "../../lib/project-factory"
 import { presets } from "../../lib/presets"
-import { PROJECTS_STORAGE_KEY } from "../../lib/project-types"
-import { prepareStudioPage } from "../fixtures/ui-test"
+import {
+  prepareStudioPage,
+  storedProjectForCurrentActor,
+} from "../fixtures/ui-test"
 
 const market = [
   { symbol: "BTC", name: "Bitcoin", price: "$118,420", change: 2.4, marketCap: "$2.36T" },
@@ -39,8 +41,7 @@ function gameSpec() {
     : spec
 }
 
-test("publish boundary rejects secrets without echoing them", async ({ request }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+test("publish boundary rejects secrets without echoing them", { tag: "@desktop-only" }, async ({ request }) => {
   const secret = ["123456789", "AAE9Qqkx4JmU3Rr6Tt8Vv0Xx2Zz4Bb6Cc8"].join(":")
   const spec = { ...gameSpec(), prompt: `Use ${secret}` }
   const response = await request.post("/api/projects/publish", { data: { spec } })
@@ -50,8 +51,7 @@ test("publish boundary rejects secrets without echoing them", async ({ request }
   expect(text).not.toContain(secret)
 })
 
-test("server publish fails closed when category contract is tampered", async ({ request }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+test("server publish fails closed when category contract is tampered", { tag: "@desktop-only" }, async ({ request }) => {
   const source = gameSpec()
   const spec = { ...source, experience: { ...source.experience, archetype: "voice-assistant" as const } }
   const response = await request.post("/api/projects/publish", {
@@ -66,8 +66,7 @@ test("server publish fails closed when category contract is tampered", async ({ 
 })
 
 for (const evidence of ["dropstab", "fallback"] as const) {
-  test(`browser runtime cannot mint ${evidence} provider evidence`, async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "chromium-1440")
+  test(`browser runtime cannot mint ${evidence} provider evidence`, { tag: "@desktop-only" }, async ({ page }) => {
     await page.route("**/api/public-data", async (route) => {
       await route.fulfill({
         status: 200,
@@ -83,16 +82,15 @@ for (const evidence of ["dropstab", "fallback"] as const) {
     })
     await prepareStudioPage(page)
     await expect.poll(async () =>
-      page.evaluate((storageKey) => {
-        const projects = JSON.parse(localStorage.getItem(storageKey) || "[]")
-        const quality = projects[0]?.quality
+      storedProjectForCurrentActor(page, "ui-quality-current-crypto-game").then((project) => {
+        const quality = project.quality
         return {
           provider: quality?.runtimeSmoke?.dataProvider ?? null,
           providerPassed: quality?.checks?.find((item: { id?: string }) => item.id === "provider-evidence")?.passed ?? null,
           adapterPassed: quality?.checks?.find((item: { id?: string }) => item.id === "data-adapter")?.passed ?? null,
           ready: quality?.readyToPublish ?? null,
         }
-      }, PROJECTS_STORAGE_KEY),
+      }),
     ).toEqual({
       provider: null,
       providerPassed: false,
@@ -102,8 +100,7 @@ for (const evidence of ["dropstab", "fallback"] as const) {
   })
 }
 
-test("downloaded game ZIP runs with working assets below a deployment subpath", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
+test("downloaded game ZIP runs with working assets below a deployment subpath", { tag: "@desktop-only" }, async ({ page }, testInfo) => {
   const spec = gameSpec()
   const project = {
     id: "archive-subpath-game",

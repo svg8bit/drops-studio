@@ -8,6 +8,10 @@ import {
 } from "../../../../../lib/access-tier.ts";
 import { saveStudioConnection } from "../../../../../db/studio-account-state.ts";
 import { consumeRequestLimit, requestIdentity } from "../../../../../lib/request-rate-limit.ts";
+import {
+  PROJECT_STORE_SCOPE_COOKIE,
+  projectStoreScopeCookieValue,
+} from "../../../../../lib/project-store.ts";
 
 export const runtime = "nodejs";
 
@@ -138,6 +142,22 @@ export async function POST(request: NextRequest) {
         maxAge: 60 * 60 * 24 * 90,
         path: "/",
       });
+    }
+    if (account) {
+      result.cookies.set(
+        PROJECT_STORE_SCOPE_COOKIE,
+        projectStoreScopeCookieValue({
+          kind: "member",
+          identity: account.identity,
+        }),
+        {
+          httpOnly: false,
+          sameSite: "lax",
+          secure: process.env.NODE_ENV === "production",
+          maxAge: 60 * 60 * 24 * 90,
+          path: "/",
+        },
+      );
     }
     return result;
   } catch (error) {

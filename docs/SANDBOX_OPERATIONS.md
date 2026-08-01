@@ -275,12 +275,14 @@ Before enabling the runtime:
 3. Verify `@vercel/sandbox` remains the pinned stable version expected by the
    adapter.
 4. Run the mocked adapter contract tests.
-5. Run the opt-in live Sandbox smoke test only in an isolated account/project;
-   the test-only opt-in name is `DROPS_STUDIO_LIVE_SANDBOX`.
+5. Run `npm run test:live:sandbox` only in an isolated account/project. This
+   external matrix creates a real, billable Sandbox and requires working Vercel
+   runtime credentials. It is intentionally not discovered by `test:unit`.
 6. Confirm `AGENT_BROWSER_SNAPSHOT_ID` names a maintained prebuilt
-   `@agent-browser/sandbox` snapshot. Run the full opt-in
-   install/check/build/preview/browser/checkpoint proof with
-   `DROPS_STUDIO_LIVE_BUILDER` only in an isolated account/project.
+   `@agent-browser/sandbox` snapshot. Run
+   `npm run test:live:builder` for the full external
+   install/check/build/preview/browser/checkpoint proof only in an isolated
+   account/project. `npm run test:live` runs both credentialed proofs.
 7. Verify the returned runtime status says Node 24, persistent and at least
    2 vCPU.
 8. Install a starter, run its declared checks/build, start preview, read real
