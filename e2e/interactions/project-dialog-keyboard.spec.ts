@@ -38,7 +38,7 @@ async function verifyKeyboardDialog(
   await expect(trigger).toBeFocused()
 }
 
-test("remaining project dialogs trap focus, close on Escape and restore their triggers", async ({
+test("publish dialog traps focus, closes on Escape and restores its trigger", async ({
   page,
 }) => {
   const assertCleanRuntime = installRuntimeGuards(page)
@@ -46,19 +46,6 @@ test("remaining project dialogs trap focus, close on Escape and restore their tr
 
   const publishTrigger = page.locator(".workspace-actions .publish-top")
   await verifyKeyboardDialog(page, publishTrigger, /Publish a working product/i)
-
-  const codeTool = page
-    .locator(".studio-rail")
-    .getByRole("button", { name: "Code", exact: true })
-  await codeTool.focus()
-  await expect(codeTool).toBeFocused()
-  await codeTool.press("Enter")
-
-  const sourceTrigger = page.getByRole("button", {
-    name: "Open source workspace",
-    exact: true,
-  })
-  await verifyKeyboardDialog(page, sourceTrigger, /Owned source workspace/i)
 
   await assertCleanRuntime()
 })

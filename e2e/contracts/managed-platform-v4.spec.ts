@@ -64,8 +64,7 @@ test("managed platform capability API returns status metadata without secret val
   expect(JSON.stringify(payload)).not.toMatch(/(?:sk-|ghp_|github_pat_|xox[baprs]-|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i);
 });
 
-test("managed platform surfaces pass WCAG A/AA checks", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440");
+test("managed platform surfaces pass WCAG A/AA checks", { tag: "@desktop-only" }, async ({ page }) => {
   await page.goto("/backend", { waitUntil: "domcontentloaded" });
   await expect(page.getByText("Environment:", { exact: false })).toBeVisible();
 

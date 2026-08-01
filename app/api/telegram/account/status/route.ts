@@ -28,15 +28,27 @@ export async function POST(request: NextRequest) {
   const remembered = account
     ? await readStudioConnectionSecret(account.identity, "telegram").catch(() => null)
     : null;
-  const token = (typeof body?.accountToken === "string" ? body.accountToken : "")
+  const suppliedToken = typeof body?.accountToken === "string"
+    ? body.accountToken
+    : "";
+  const usesRememberedCredential = !suppliedToken && Boolean(remembered?.credential);
+  const token = suppliedToken
     || remembered?.credential
     || "";
   if (!token) return telegramAccountJson({ connected: false, remembered: false });
   try {
+    const inspected = inspectTelegramAccountToken(token);
+    const receipt = remembered?.telegramReceipt;
+    const receiptMatchesAccount = receipt?.accountId
+      ? receipt.accountId === inspected.id
+      : usesRememberedCredential;
     return telegramAccountJson({
       connected: true,
       remembered: Boolean(remembered),
-      account: inspectTelegramAccountToken(token),
+      account: inspected,
+      ...(receipt && receiptMatchesAccount
+        ? { channel: receipt }
+        : {}),
     });
   } catch {
     return telegramAccountJson({ connected: false, remembered: false });

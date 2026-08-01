@@ -6,10 +6,9 @@ import {
   test,
 } from "../fixtures/ui-test"
 
-test("Build opens the unified Director workspace with a working radio preview and safe Connections return", async ({
+test("Build opens the unified Director workspace with an honest live-preview handoff and safe Connections return", { tag: "@desktop-only" }, async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1440")
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await page.route("**/api/account", async (route) => {
@@ -28,6 +27,39 @@ test("Build opens the unified Director workspace with a working radio preview an
       }),
     })
   })
+  await page.route("**/api/builder/agent", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "E2E_SANDBOX_SEPARATE_GATE",
+        error: "Live Sandbox verification runs in the explicit credentialed gate.",
+      }),
+    })
+  })
+  await page.route("**/api/builder/runtime", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        action: "status",
+        result: {
+          provider: "vercel-sandbox",
+          status: "unavailable",
+          sandboxName: null,
+          sessionId: null,
+          vcpus: null,
+          memoryMb: null,
+          createdAt: null,
+          updatedAt: null,
+          expiresAt: null,
+          activeDurationMs: null,
+          previewUrl: null,
+          previewCommandId: null,
+        },
+      }),
+    })
+  })
 
   await prepareHomePage(page)
   await page.locator('[data-preset="crypto-radio"]').click()
@@ -36,6 +68,7 @@ test("Build opens the unified Director workspace with a working radio preview an
   await page.waitForURL(/\/studio\/[a-f0-9-]+\?panel=director&autobuild=1$/i)
   await expect(page.locator(".project-studio-layout")).toHaveClass(/tab-director/)
   await expect(page.getByText("Drops Agent", { exact: true })).toBeVisible()
+  await expect(page.getByLabel("AI model")).toHaveValue("free")
   await expect(page.getByText("Studio Maker", { exact: true })).toBeVisible()
   await expect(page.locator(".conversation article.user")).toContainText(
     "Build Crypto Radio",
@@ -44,9 +77,9 @@ test("Build opens the unified Director workspace with a working radio preview an
     "isolated build",
   )
 
-  const runtime = page.frameLocator("iframe[title$='live application']")
-  await expect(runtime.locator('[data-project-kind="crypto-radio"]')).toBeVisible()
-  await expect(runtime.getByText("Your browser rundown is ready", { exact: true })).toBeVisible()
+  await expect(page.locator("iframe[title$='live application']")).toHaveCount(0)
+  await expect(page.getByText("Preparing your live app", { exact: true })).toBeVisible()
+  await expect(page.getByText(/same Project V2 files shown in Code/i)).toBeVisible()
 
   const chat = page.locator(".assistant-panel")
   const initialChatWidth = await chat.evaluate((element) =>

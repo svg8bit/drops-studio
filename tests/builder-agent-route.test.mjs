@@ -99,7 +99,7 @@ function guestCookie() {
   return createGuestIdentityCookie("01234567-89ab-cdef-0123-456789abcdef", secret);
 }
 
-function request(path, body, headers = {}) {
+function request(path, body, headers = {}, signal) {
   return new NextRequest(`https://studio.example.test${path}`, {
     method: "POST",
     headers: {
@@ -111,6 +111,7 @@ function request(path, body, headers = {}) {
       ...headers,
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -192,14 +193,14 @@ test("agent route rejects project snapshots in the body and cross-origin executi
   assert.equal(crossOrigin.status, 403);
 });
 
-test("agent route forwards the Vercel Function OIDC token only to the request-scoped Gateway resolver", async () => {
+test("an initial build uses the selected Gateway model and keeps its OIDC token request-scoped", async () => {
   const deps = dependencies();
   const oidc = `ey${"A".repeat(30)}.ey${"B".repeat(30)}.${"C".repeat(40)}`;
   let receivedCredentials = null;
   const response = await handleBuilderAgentRequest(request("/api/builder/agent", {
     projectId: "builder-route-project",
     prompt: "Inspect the canonical project without exposing credentials.",
-    mode: "edit",
+    mode: "build",
     provider: { provider: "gateway", model: "openai/gpt-5.6-sol" },
   }, { "x-vercel-oidc-token": oidc }), {
     ...deps,
@@ -217,7 +218,10 @@ test("agent route forwards the Vercel Function OIDC token only to the request-sc
   });
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.equal(receivedCredentials.gatewayToken, oidc);
-  const serialized = JSON.stringify(await response.json());
+  const payload = await response.json();
+  assert.equal(payload.result.providerMode, "ai-agent");
+  assert.equal(payload.result.status, "completed");
+  const serialized = JSON.stringify(payload);
   assert.equal(serialized.includes(oidc), false);
 });
 
@@ -337,6 +341,29 @@ test("builder request deadline stops the Sandbox and returns a restartable timeo
   const payload = await response.json();
   assert.equal(payload.code, "BUILDER_EXECUTION_TIMEOUT");
   assert.match(payload.error, /stopped.*restart/i);
+  assert.equal(deps.calls.stop, 1);
+});
+
+test("a disconnected client aborts the active build and preserves a restartable project", async () => {
+  const deps = dependencies();
+  const controller = new AbortController();
+  deps.deterministicFallback = {
+    async run() {
+      await new Promise(() => {});
+    },
+  };
+  const pending = handleBuilderAgentRequest(request("/api/builder/agent", {
+    projectId: "builder-route-project",
+    prompt: "Stop this build without losing the project.",
+    mode: "build",
+    provider: { provider: "free" },
+  }, {}, controller.signal), deps);
+  controller.abort();
+  const response = await pending;
+  assert.equal(response.status, 499);
+  const payload = await response.json();
+  assert.equal(payload.code, "BUILDER_EXECUTION_CANCELLED");
+  assert.match(payload.error, /saved project files.*preserved/i);
   assert.equal(deps.calls.stop, 1);
 });
 

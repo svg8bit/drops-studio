@@ -231,6 +231,11 @@ function configuredCredentials(): VercelSandboxCredentials | null {
 }
 
 async function defaultProvider(): Promise<VercelSandboxProvider> {
+  if (process.env.DROPS_STUDIO_TEST_DISABLE_SANDBOX === "1") {
+    throw new ProjectRuntimeUnavailableError(
+      "Sandbox execution is disabled for the deterministic browser-test matrix.",
+    );
+  }
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     return {

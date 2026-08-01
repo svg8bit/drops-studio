@@ -14,6 +14,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleStop,
   Cloud,
   Code2,
   Database,
@@ -63,7 +64,10 @@ import { TelegramChannelWizard } from "@/components/telegram-channel-wizard";
 import { DropsBotWebhookConnection } from "@/components/dropsbot-webhook-connection";
 import { StudioAccountTeamPanel } from "@/components/studio-account-team-panel";
 import { DropsBrand } from "@/components/drops-brand";
-import { ProjectV2StudioSurface } from "@/components/project-v2-studio-surface";
+import {
+  ProjectV2StudioSurface,
+  type ProjectV2StudioSurfaceHandle,
+} from "@/components/project-v2-studio-surface";
 import {
   ProjectWorkspaceDialog,
   type WorkspaceAiEvidenceView,
@@ -82,7 +86,6 @@ import {
   projectV2ArchiveFilename,
 } from "@/lib/project-v2-export";
 import type { ProjectV2 } from "@/lib/project-v2-types";
-import type { BuilderAgentResult } from "@/lib/builder-agent/types";
 import { applyAgentPlan, type AgentProductPlan } from "@/lib/product-blueprint";
 import { evaluateProjectQuality } from "@/lib/project-quality";
 import {
@@ -97,6 +100,7 @@ import {
   secureEditableRuntimeSrcDoc,
 } from "@/lib/runtime-srcdoc-security";
 import {
+  readProjectsAfterScopeBootstrap,
   readProjectsFromStore,
   saveProjectSafely,
 } from "@/lib/project-store";
@@ -120,6 +124,7 @@ import {
 } from "@/lib/member-project-sync-client";
 import {
   migrateSessionConnectionsToAccount,
+  preferredRememberedModelProvider,
   readStudioAccountSnapshot,
 } from "@/lib/studio-account-connections-client";
 import {
@@ -174,6 +179,22 @@ const STUDIO_PANEL_WIDTH_KEY = "drops-studio:studio-panel-width";
 const STUDIO_PANEL_MIN_WIDTH = 320;
 const STUDIO_PANEL_MAX_WIDTH = 720;
 
+function builderConversationMessage(event: {
+  phase: "snapshot" | "sandbox" | "verification" | "preview";
+  status: "active" | "done" | "blocked";
+}) {
+  if (event.status === "blocked") {
+    return "I hit an issue while starting the app. Your saved files and last working preview are unchanged. Choose Retry when you are ready.";
+  }
+  const messages = {
+    snapshot: event.status === "active" ? "Saving your project…" : "Project saved.",
+    sandbox: event.status === "active" ? "Starting your app…" : "App started.",
+    verification: event.status === "active" ? "Checking and fixing your app…" : "Checks passed.",
+    preview: event.status === "active" ? "Preparing the live preview…" : "Live preview is ready.",
+  } as const;
+  return messages[event.phase];
+}
+
 function friendlyConversationMessage(content: string) {
   if (
     /Independent Verifier|RETRYABLE_FAILURE|deterministic evidence|browser telemetry|host-side check|release gate/i.test(
@@ -225,6 +246,15 @@ const modelLabels: Record<ProjectProvider, string> = {
 
 function usesRussian(text: string) {
   return /[\u0400-\u04ff]/.test(text);
+}
+
+function russianFileWord(count: number): string {
+  const mod100 = Math.abs(count) % 100;
+  if (mod100 >= 11 && mod100 <= 14) return "файлов";
+  const mod10 = Math.abs(count) % 10;
+  if (mod10 === 1) return "файл";
+  if (mod10 >= 2 && mod10 <= 4) return "файла";
+  return "файлов";
 }
 
 function requestsExternalAction(text: string) {
@@ -630,7 +660,13 @@ function currentProjectV2PreviewUrl(projectV2?: ProjectV2): string | null {
   }
   try {
     const url = new URL(projectV2.preview.url);
-    return url.protocol === "https:" && !url.username && !url.password
+    const isSandboxPreviewHost = url.hostname !== "vercel.run"
+      && url.hostname.endsWith(".vercel.run");
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && !url.port
+      && isSandboxPreviewHost
       ? url.toString()
       : null;
   } catch {
@@ -645,6 +681,7 @@ export function ProjectStudio() {
   const sourceReturnFocusRef = useRef<HTMLElement | null>(null);
   const publishReturnFocusRef = useRef<HTMLElement | null>(null);
   const projectRef = useRef<GeneratedProject | null>(null);
+  const projectV2SurfaceRef = useRef<ProjectV2StudioSurfaceHandle | null>(null);
   const committedProjectRef = useRef<GeneratedProject | null>(null);
   const pendingSpecRef = useRef<PendingSpecCommit | null>(null);
   const quietCommitTimerRef = useRef<number | null>(null);
@@ -661,6 +698,9 @@ export function ProjectStudio() {
   const [accountBrain, setAccountBrain] = useState<ProjectProvider | null>(
     null,
   );
+  const [connectedBrains, setConnectedBrains] = useState<ProjectProvider[]>([
+    "free",
+  ]);
   const [runtimeProject, setRuntimeProject] =
     useState<GeneratedProject | null>(null);
   const [runtimeRevision, setRuntimeRevision] = useState(0);
@@ -796,8 +836,19 @@ export function ProjectStudio() {
           return false;
         }
 
+        // The mounted Project V2 surface is the single owner of Next.js file
+        // snapshot synchronization. Keeping the GeneratedProject metadata and
+        // Project V2 filesystem on separate writers prevents two optimistic
+        // PUTs from racing with the same storage revision after a chat edit.
+        const projectV2SurfaceOwnsCloudSync =
+          candidate.projectV2?.manifest.framework.name === "nextjs";
+
         if (!cloudSyncAvailableRef.current) {
-          if (candidate.projectV2 && projectV2SyncAvailableRef.current) {
+          if (
+            candidate.projectV2
+            && projectV2SyncAvailableRef.current
+            && !projectV2SurfaceOwnsCloudSync
+          ) {
             try {
               const v2Record = await saveProjectV2ToCloud(
                 candidate.projectV2,
@@ -822,6 +873,7 @@ export function ProjectStudio() {
               }
             }
           }
+          if (projectV2SurfaceOwnsCloudSync) return true;
           setProjectSyncStatus("local");
           return true;
         }
@@ -833,7 +885,7 @@ export function ProjectStudio() {
             cloudRevisionRef.current ?? 0,
           );
           cloudRevisionRef.current = record.revision;
-          if (candidate.projectV2) {
+          if (candidate.projectV2 && !projectV2SurfaceOwnsCloudSync) {
             const v2Record = await saveProjectV2ToCloud(
               candidate.projectV2,
               projectV2CloudRevisionRef.current ?? 0,
@@ -885,34 +937,42 @@ export function ProjectStudio() {
   useEffect(() => {
     let cancelled = false;
     const loadWorkspace = async () => {
-      let found =
-        readProjectsFromStore().find((item) => item.id === params.id) ?? null;
+      let found: GeneratedProject | null = null;
       try {
-        const accessResponse = await fetch("/api/access", {
-          credentials: "same-origin",
-          cache: "no-store",
-          headers: { accept: "application/json" },
-        });
-        const accessPayload = (await accessResponse.json()) as {
-          access?: {
-            authenticated?: boolean;
-            projectSync?: boolean;
-            account?: { connected?: boolean; projectSync?: boolean };
+        const accessBootstrap: {
+          responseOk: boolean;
+          payload: {
+            access?: {
+              authenticated?: boolean;
+              projectSync?: boolean;
+              account?: { connected?: boolean; projectSync?: boolean };
+            };
           };
-        };
+        } = { responseOk: false, payload: {} };
+        const browserProjects = await readProjectsAfterScopeBootstrap(async () => {
+          const accessResponse = await fetch("/api/access", {
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { accept: "application/json" },
+          });
+          accessBootstrap.responseOk = accessResponse.ok;
+          accessBootstrap.payload = (await accessResponse.json()) as typeof accessBootstrap.payload;
+        });
+        const accessPayload = accessBootstrap.payload;
         const cloudAvailable = Boolean(
-          accessResponse.ok &&
+          accessBootstrap.responseOk &&
           accessPayload.access?.authenticated &&
           accessPayload.access.account?.connected &&
           accessPayload.access.account.projectSync,
         );
         const projectV2CloudAvailable = Boolean(
-          accessResponse.ok
+          accessBootstrap.responseOk
           && (
             accessPayload.access?.projectSync
             ?? accessPayload.access?.account?.projectSync
           ),
         );
+        found = browserProjects.find((item) => item.id === params.id) ?? null;
         cloudSyncAvailableRef.current = cloudAvailable;
         projectV2SyncAvailableRef.current = projectV2CloudAvailable;
         if (cloudAvailable) {
@@ -973,6 +1033,12 @@ export function ProjectStudio() {
           setProjectSyncStatus("local");
         }
       } catch {
+        try {
+          found =
+            readProjectsFromStore().find((item) => item.id === params.id) ?? null;
+        } catch {
+          found = null;
+        }
         cloudSyncAvailableRef.current = false;
         projectV2SyncAvailableRef.current = false;
         setProjectSyncStatus("local");
@@ -1412,6 +1478,8 @@ export function ProjectStudio() {
     () => currentProjectV2PreviewUrl(project?.projectV2),
     [project?.projectV2],
   );
+  const usesNativeProjectV2 =
+    project?.projectV2?.manifest.framework.name === "nextjs";
   const trustedRuntimeSmoke =
     (runtimeProject?.quality?.runtimeSmoke?.mode === "server-artifact"
       || runtimeProject?.quality?.runtimeSmoke?.mode === "server-inspection")
@@ -1448,11 +1516,18 @@ export function ProjectStudio() {
       "custom",
     ];
     const current = window.sessionStorage.getItem("drops-studio:active-brain");
-    if (current && providers.includes(current as ProjectProvider)) {
-      sessionBrainTimer = window.setTimeout(() => {
-        if (!cancelled) setAccountBrain(current as ProjectProvider);
-      }, 0);
-    }
+    const sessionProviders = providers.filter((provider) =>
+      Boolean(window.sessionStorage.getItem(`drops-studio:${provider}`)?.trim()),
+    );
+    sessionBrainTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      setConnectedBrains(
+        Array.from(new Set<ProjectProvider>(["free", ...sessionProviders])),
+      );
+      if (current && providers.includes(current as ProjectProvider)) {
+        setAccountBrain(current as ProjectProvider);
+      }
+    }, 0);
     void (async () => {
       const initial = await readStudioAccountSnapshot();
       if (cancelled || !initial.authenticated) return;
@@ -1461,22 +1536,41 @@ export function ProjectStudio() {
         storage: window.sessionStorage,
       });
       const snapshot = migrated.snapshot;
-      if (snapshot.profile?.name) {
-          setAccountProfile({
-            name: snapshot.profile.name,
-            ...(snapshot.profile.email ? { email: snapshot.profile.email } : {}),
-          });
-      }
-      if (current) return;
-      const preferred = snapshot.connections.find(
+      const rememberedProviders = snapshot.connections
+        .filter(
           (connection) =>
             connection.connected
             && providers.includes(connection.provider as ProjectProvider),
-        );
-      if (!preferred?.provider) return;
-      const provider = preferred.provider as ProjectProvider;
+        )
+        .map((connection) => connection.provider as ProjectProvider);
+      setConnectedBrains(
+        Array.from(
+          new Set<ProjectProvider>([
+            "free",
+            ...sessionProviders,
+            ...rememberedProviders,
+          ]),
+        ),
+      );
+      if (snapshot.profile?.name) {
+        setAccountProfile({
+          name: snapshot.profile.name,
+          ...(snapshot.profile.email ? { email: snapshot.profile.email } : {}),
+        });
+      }
+      const currentSessionProvider = current
+        && providers.includes(current as ProjectProvider)
+        && window.sessionStorage.getItem(`drops-studio:${current}`)?.trim()
+        ? current as ProjectProvider
+        : null;
+      const provider = currentSessionProvider
+        ?? preferredRememberedModelProvider(snapshot.connections, current);
+      if (!provider) return;
       window.sessionStorage.setItem("drops-studio:active-brain", provider);
-      if (preferred.model) {
+      const preferred = snapshot.connections.find(
+        (connection) => connection.connected && connection.provider === provider,
+      );
+      if (preferred?.model) {
         window.sessionStorage.setItem(
           `drops-studio:${provider}:model`,
           preferred.model,
@@ -1496,6 +1590,16 @@ export function ProjectStudio() {
     if (accountBrain) return accountBrain;
     return project?.spec.brain.provider || "free";
   }, [accountBrain, project]);
+  const selectableBrains = useMemo(
+    () => Array.from(new Set<ProjectProvider>([...connectedBrains, activeProvider])),
+    [activeProvider, connectedBrains],
+  );
+
+  const selectActiveBrain = useCallback((provider: ProjectProvider) => {
+    setAccountBrain(provider);
+    window.sessionStorage.setItem("drops-studio:active-brain", provider);
+    setToast(`${modelLabels[provider]} selected for this Studio session`);
+  }, []);
 
   const adoptProject = useCallback((next: GeneratedProject) => {
     if (quietCommitTimerRef.current !== null) {
@@ -1567,12 +1671,7 @@ export function ProjectStudio() {
       const current = projectRef.current;
       if (!current) return;
       const eventId = `builder-${current.id}-${event.phase}`;
-      const content =
-        event.status === "active"
-          ? `Working · ${event.message}`
-          : event.status === "done"
-            ? `Verified · ${event.message}`
-            : `Paused · ${event.message}`;
+      const content = builderConversationMessage(event);
       const existing = current.conversation ?? [];
       if (existing.some((item) => item.id === eventId && item.content === content)) {
         return;
@@ -1974,12 +2073,77 @@ export function ProjectStudio() {
       const currentProject = projectRef.current ?? activeProject;
       const next: GeneratedProject = {
         ...currentProject,
-        conversation: [...baseConversation, assistant],
+        conversation: [...(currentProject.conversation ?? baseConversation), assistant],
         updatedAt: new Date().toISOString(),
       };
       projectRef.current = next;
       setProject(next);
       void persistProject(next, currentProject.updatedAt);
+    };
+
+    const streamAssistantReply = async (response: Response) => {
+      if (!response.body) {
+        const reply = (await response.text()).trim();
+        if (!reply) throw new Error("The selected model returned an empty response.");
+        appendAssistantReply(reply);
+        return;
+      }
+      const assistantId = nowId("assistant");
+      const createdAt = new Date().toISOString();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let reply = "";
+      const updateStream = (content: string) => {
+        const currentProject = projectRef.current ?? conversationDraft;
+        const conversation = currentProject.conversation ?? baseConversation;
+        const assistant: ProjectChatMessage = {
+          id: assistantId,
+          role: "assistant",
+          content,
+          createdAt,
+        };
+        const existing = conversation.findIndex((item) => item.id === assistantId);
+        const nextConversation = existing >= 0
+          ? conversation.map((item, index) => index === existing ? assistant : item)
+          : [...conversation, assistant];
+        const next = {
+          ...currentProject,
+          conversation: nextConversation,
+          updatedAt: new Date().toISOString(),
+        };
+        projectRef.current = next;
+        setProject(next);
+      };
+      const dropStreamedMessage = () => {
+        const currentProject = projectRef.current ?? conversationDraft;
+        const conversation = currentProject.conversation ?? baseConversation;
+        const next = {
+          ...currentProject,
+          conversation: conversation.filter((item) => item.id !== assistantId),
+          updatedAt: new Date().toISOString(),
+        };
+        projectRef.current = next;
+        setProject(next);
+      };
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          reply += decoder.decode(chunk.value, { stream: true });
+          updateStream(reply);
+        }
+        reply += decoder.decode();
+        if (!reply.trim()) throw new Error("The selected model returned an empty response.");
+        updateStream(reply.trim());
+        const next = projectRef.current;
+        if (next) void persistProject(next, activeProject.updatedAt);
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        dropStreamedMessage();
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
     };
 
     if (requestsExternalAction(instruction)) {
@@ -2024,7 +2188,11 @@ export function ProjectStudio() {
         const response = await fetch("/api/agent/chat", {
           method: "POST",
           credentials: "same-origin",
-          headers,
+          headers: {
+            ...headers,
+            accept: "text/plain",
+            "x-drops-stream": "1",
+          },
           signal: AbortSignal.timeout(35_000),
           body: JSON.stringify({
             projectId: activeProject.id,
@@ -2052,17 +2220,19 @@ export function ProjectStudio() {
             },
           }),
         });
-        const payload = (await response.json().catch(() => ({}))) as {
-          reply?: string;
-          provider?: string;
-          model?: string;
-          error?: string;
-        };
-        if (!response.ok || !payload.reply) {
-          throw new Error(payload.error || "The selected model did not answer.");
+        if (!response.ok) {
+          const raw = await response.text();
+          let error = "The selected model did not answer.";
+          try {
+            const payload = JSON.parse(raw) as { error?: string };
+            if (payload.error) error = payload.error;
+          } catch {
+            if (raw.trim()) error = raw.trim().slice(0, 500);
+          }
+          throw new Error(error);
         }
-        appendAssistantReply(payload.reply);
-        setToast(`${payload.model || modelLabels[provider]} answered with project context`);
+        await streamAssistantReply(response);
+        setToast(`${modelLabels[provider]} answered with project context`);
       } catch (error) {
         void error;
         appendAssistantReply(
@@ -2111,144 +2281,51 @@ export function ProjectStudio() {
       return;
     }
 
-    if (
-      activeProject.projectV2
-      && projectV2SyncAvailableRef.current
-    ) {
-      let adopted = false;
+    if (usesNativeProjectV2 && activeProject.projectV2) {
       try {
-        await fetch("/api/access", {
-          credentials: "same-origin",
-          cache: "no-store",
-          headers: { accept: "application/json" },
-        });
-        let snapshot = await loadProjectV2FromCloud(activeProject.id);
-        if (!snapshot) {
-          snapshot = await saveProjectV2ToCloud(activeProject.projectV2, 0);
+        const runner = projectV2SurfaceRef.current;
+        if (!runner) {
+          throw new Error("The project builder is still loading. Retry in a moment.");
         }
-        projectV2CloudRevisionRef.current = snapshot.storageRevision;
-        const provider = activeProvider;
-        const headers: Record<string, string> = {
-          accept: "application/json",
-          "content-type": "application/json",
-        };
-        const key = provider === "gateway"
-          ? null
-          : window.sessionStorage.getItem(`drops-studio:${provider}`);
-        if (provider === "openrouter" && key) {
-          headers["x-openrouter-key"] = key;
-        } else if (key) {
-          headers["x-provider-key"] = key;
-        }
-        const model =
-          window.sessionStorage.getItem(
-            provider === "custom"
-              ? "drops-studio:custom-model"
-              : `drops-studio:${provider}:model`,
-          ) || undefined;
-        const response = await fetch("/api/builder/agent", {
-          method: "POST",
-          credentials: "same-origin",
-          headers,
-          signal: AbortSignal.timeout(120_000),
-          body: JSON.stringify({
-            projectId: activeProject.id,
-            prompt: instruction,
-            mode: "edit",
-            provider: {
-              provider,
-              ...(model ? { model } : {}),
-              ...(provider === "custom"
-                ? {
-                    baseUrl:
-                      window.sessionStorage.getItem(
-                        "drops-studio:custom-endpoint",
-                      ) || undefined,
-                  }
-                : {}),
-            },
-          }),
-        });
-        const payload = (await response.json().catch(() => ({}))) as {
-          result?: BuilderAgentResult;
-          error?: string;
-        };
-        if (!payload.result) {
-          throw new Error(payload.error || "The Project V2 agent returned no verified result.");
-        }
-        const remote = await loadProjectV2FromCloud(activeProject.id);
-        const projectV2 = remote?.project ?? payload.result.project;
-        if (remote) projectV2CloudRevisionRef.current = remote.storageRevision;
-        const changedFiles = Array.from(
-          new Set([
-            ...Object.keys(snapshot.project.files),
-            ...Object.keys(projectV2.files),
-          ]),
-        ).filter(
-          (path) =>
-            snapshot.project.files[path]?.hash !== projectV2.files[path]?.hash,
-        ).length;
-        const assistant: ProjectChatMessage = {
-          id: nowId("assistant"),
-          role: "assistant",
-          createdAt: new Date().toISOString(),
-          content: payload.result.releaseGate.ok
-            ? `${payload.result.providerMode === "deterministic-fallback" ? "Free Auto fallback" : "AI agent"} changed ${changedFiles} real file${changedFiles === 1 ? "" : "s"}, passed the release gate, refreshed preview and created a checkpoint. Open Builder to inspect the diff and evidence.`
-            : `${payload.result.summary} The changed Project V2 files and exact blocking checks are available in Builder; no deployment was claimed.`,
-        };
-        const next: GeneratedProject = {
-          ...conversationDraft,
-          projectV2,
-          conversation: [...baseConversation, assistant],
-          updatedAt: projectV2.updatedAt,
-        };
-        projectRef.current = next;
-        committedProjectRef.current = next;
-        setProject(next);
-        adopted = true;
-        setProjectSyncStatus(remote ? "synced" : "local");
-        const save = () =>
-          saveProjectSafely(next, {
-            expectedUpdatedAt: activeProject.updatedAt,
-          });
-        const queued = saveQueueRef.current.then(save, save);
-        saveQueueRef.current = queued.then(
-          () => true,
-          () => false,
-        );
-        const saved = await queued;
-        if (saved.status === "conflict") {
-          setProjectSyncStatus("conflict");
-          setToast(
-            "Another tab saved a newer browser version. Reload before continuing Project V2 edits.",
+        const beforeFiles = activeProject.projectV2.files;
+        const result = await runner.run("edit", instruction);
+        if (!result) {
+          appendAssistantReply(
+            usesRussian(instruction)
+              ? "Запрос остановлен или уже выполняется другая сборка. Сохранённые файлы не потеряны."
+              : "The request was stopped or another build is already running. Your saved files are unchanged.",
           );
           return;
         }
-        setToast(
-          remote
-            ? payload.result.releaseGate.ok
-              ? "Project V2 files changed and verified in Sandbox"
-              : "Project V2 edit saved with blocking check evidence"
-            : payload.result.releaseGate.ok
-              ? "Sandbox verification passed; the Project V2 update is saved in this browser because private cloud sync could not be confirmed."
-              : "Blocking check evidence is saved in this browser because private cloud sync could not be confirmed.",
+        const changedFiles = Array.from(
+          new Set([
+            ...Object.keys(beforeFiles),
+            ...Object.keys(result.project.files),
+          ]),
+        ).filter(
+          (path) =>
+            beforeFiles[path]?.hash !== result.project.files[path]?.hash,
+        ).length;
+        appendAssistantReply(
+          result.releaseGate.ok
+            ? usesRussian(instruction)
+              ? `Готово — изменено ${changedFiles} ${russianFileWord(changedFiles)}, проверки прошли, а live preview обновлён.`
+              : `Done — changed ${changedFiles} real file${changedFiles === 1 ? "" : "s"}, passed the checks, and refreshed the live preview.`
+            : usesRussian(instruction)
+              ? "Изменения сохранены, но приложение ещё не готово. Я оставил последнюю рабочую версию preview; нажмите Retry в Code, чтобы продолжить исправление."
+              : "The changes are saved, but the app is not ready yet. The last working preview is unchanged; choose Retry in Code to continue the repair.",
         );
+        setToast(result.releaseGate.ok
+          ? "Files changed and live preview refreshed"
+          : "Changes saved — one more repair pass is needed");
       } catch (error) {
         void error;
         appendAssistantReply(
-          adopted
-            ? usesRussian(instruction)
-              ? "Файлы обновлены в этой сессии, но сохранение не завершилось. Перезагрузите проект, чтобы проверить состояние."
-              : "The files changed in this session, but saving did not complete. Reload the project to verify its state."
-            : usesRussian(instruction)
+          usesRussian(instruction)
               ? `Подключённая модель ${modelLabels[activeProvider]} не завершила редактирование файлов. Проект не изменён и Free Auto не подменял модель. Проверьте подключение и повторите запрос или явно выберите Free Auto.`
               : `${modelLabels[activeProvider]} did not complete the file edit. The project was not changed and Free Auto did not replace the selected model. Check the connection and retry, or explicitly select Free Auto.`,
         );
-        setToast(
-          adopted
-            ? "Project V2 files changed, but the save did not complete"
-            : "AI edit failed safely — no project files changed",
-        );
+        setToast("AI edit failed safely — no project files changed");
       } finally {
         setDirecting(false);
       }
@@ -3530,7 +3607,7 @@ export function ProjectStudio() {
             type="button"
             aria-label={
               project.projectV2?.manifest.framework.name === "nextjs"
-                ? "Open Builder to run this app"
+                ? "Open Code to run this app"
                 : "Run app"
             }
             onClick={() =>
@@ -3542,7 +3619,7 @@ export function ProjectStudio() {
             <Play />{" "}
             <span>
               {project.projectV2?.manifest.framework.name === "nextjs"
-                ? "Open Builder"
+                ? "Code"
                 : "Run app"}
             </span>
           </button>
@@ -3606,10 +3683,8 @@ export function ProjectStudio() {
 
       <div
         className={`project-studio-layout tab-${tab}${
-          tab === "code" && project.projectV2?.manifest.framework.name === "nextjs"
-            ? " v2-builder-active"
-            : ""
-        }${sidePanelCollapsed ? " side-panel-collapsed" : ""}${
+          sidePanelCollapsed ? " side-panel-collapsed" : ""
+        }${
           sidePanelResizing ? " side-panel-resizing" : ""
         }`}
         style={
@@ -3644,6 +3719,7 @@ export function ProjectStudio() {
           >
             <ProjectV2StudioSurface
               key={project.projectV2.id}
+              ref={projectV2SurfaceRef}
               onAgentEvent={recordBuilderAgentEvent}
               onNotify={setToast}
               onProjectChange={adoptProjectV2}
@@ -4841,7 +4917,7 @@ export function ProjectStudio() {
                     {builderEvidence.verified
                       ? "Typecheck, lint, tests, production build and live Sandbox preview passed for this file revision. The legacy score below applies only to standalone /p publishing."
                       : hasProjectV2
-                      ? `${builderEvidence.passed}/${builderEvidence.total} current-revision checks have verified evidence. Open Builder to run the remaining checks and start the live preview.`
+                      ? `${builderEvidence.passed}/${builderEvidence.total} current-revision checks are ready. Open Code to run the remaining checks and start the live preview.`
                       : externalSetup
                       ? "The web setup app can publish, but the external outcome is not live until it is connected and verified."
                       : "Deterministic checks run on every edit and before every publish."}
@@ -5158,22 +5234,36 @@ export function ProjectStudio() {
                 </span>
               </b>
                 </div>
-                <iframe
-                  ref={iframeRef}
-                  key={`${runtimeRevision}:${runtimePreviewUrl ?? "local"}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
-                  title={`${project.spec.name} live application`}
-                  src={runtimePreviewUrl ?? undefined}
-                  srcDoc={runtimePreviewUrl ? undefined : runtimeSrcDoc}
-                  sandbox={runtimePreviewUrl ? "allow-scripts allow-forms allow-downloads allow-same-origin" : "allow-scripts allow-forms allow-downloads"}
-                  onLoad={() => {
-                    if (!runtimePreviewUrl) {
-                      iframeRef.current?.contentWindow?.postMessage(
-                        { type: "drops-studio-design-mode", enabled: designMode },
-                        "*",
-                      );
-                    }
-                  }}
-                />
+                {usesNativeProjectV2 && !runtimePreviewUrl ? (
+                  <div className="runtime-preview-empty" role="status">
+                    <span><LoaderCircle className="spin" /></span>
+                    <strong>Preparing your live app</strong>
+                    <p>
+                      The same Project V2 files shown in Code will appear here
+                      as soon as the isolated preview is ready.
+                    </p>
+                    <button type="button" onClick={() => setTab("code")}>
+                      Open build progress
+                    </button>
+                  </div>
+                ) : (
+                  <iframe
+                    ref={iframeRef}
+                    key={`${runtimeRevision}:${runtimePreviewUrl ?? "local"}:${Boolean(previewGameAssets.background)}:${Boolean(previewGameAssets.sprite)}`}
+                    title={`${project.spec.name} live application`}
+                    src={runtimePreviewUrl ?? undefined}
+                    srcDoc={runtimePreviewUrl ? undefined : runtimeSrcDoc}
+                    sandbox={runtimePreviewUrl ? "allow-scripts allow-forms allow-downloads allow-same-origin" : "allow-scripts allow-forms allow-downloads"}
+                    onLoad={() => {
+                      if (!runtimePreviewUrl) {
+                        iframeRef.current?.contentWindow?.postMessage(
+                          { type: "drops-studio-design-mode", enabled: designMode },
+                          "*",
+                        );
+                      }
+                    }}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -5295,16 +5385,42 @@ export function ProjectStudio() {
               rows={3}
             />
             <footer>
-              <span>
-                <Sparkles /> {modelLabels[activeProvider]}
-              </span>
-              <button
-                type="submit"
-                disabled={!chatInput.trim() || directing}
-                aria-label="Send change request"
-              >
-                <Send />
-              </button>
+              <label className="chat-model-select">
+                <Sparkles />
+                <span className="sr-only">AI model</span>
+                <select
+                  aria-label="AI model"
+                  value={activeProvider}
+                  onChange={(event) =>
+                    selectActiveBrain(event.target.value as ProjectProvider)
+                  }
+                >
+                  {selectableBrains.map((provider) => (
+                    <option key={provider} value={provider}>
+                      {modelLabels[provider]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="chat-composer-actions">
+                {directing && usesNativeProjectV2 ? (
+                  <button
+                    type="button"
+                    className="chat-stop-button"
+                    aria-label="Stop current build"
+                    onClick={() => void projectV2SurfaceRef.current?.stop()}
+                  >
+                    <CircleStop />
+                  </button>
+                ) : null}
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim() || directing}
+                  aria-label="Send change request"
+                >
+                  <Send />
+                </button>
+              </div>
             </footer>
           </form>
         </aside>

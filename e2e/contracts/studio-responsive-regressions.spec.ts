@@ -349,10 +349,9 @@ test("uses exact DropsTab and Drops Bot assets instead of generic surrogate mark
   )
 })
 
-test("1024px workspace hides the legacy statusbar without overflow", async ({
+test("1024px workspace hides the legacy statusbar without overflow", { tag: "@tablet-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-1024")
+}) => {
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await prepareStudioPage(page)
@@ -361,10 +360,9 @@ test("1024px workspace hides the legacy statusbar without overflow", async ({
   await assertCleanRuntime()
 })
 
-test("390px Morning Alpha runtime fits catalyst and action modules without overflow", async ({
+test("390px Morning Alpha runtime fits catalyst and action modules without overflow", { tag: "@mobile-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-390")
+}) => {
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await prepareMorningAlphaStudioPage(page)
@@ -562,11 +560,9 @@ test("Director, status and navigation surfaces stay readable without collisions"
   }
 })
 
-test("900px workspace shows one selected primary tool surface", async (
+test("900px workspace shows one selected primary tool surface", { tag: "@tablet-only" }, async (
   { page },
-  testInfo
 ) => {
-  test.skip(testInfo.project.name !== "chromium-1024")
   await page.setViewportSize({ width: 900, height: 800 })
   const assertCleanRuntime = installRuntimeGuards(page)
 

@@ -308,14 +308,10 @@ async function proveTelegramSetup(runtime: FrameLocator, page: Page) {
   await expect(setupTrigger).toBeFocused()
 }
 
-test("publishes and anonymously proves game, radio and Telegram setup products", async ({
+test("publishes and anonymously proves game, radio and Telegram setup products", { tag: "@desktop-only" }, async ({
   browser,
   request,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-1440",
-    "The release proof runs once against the canonical 1440 production runtime."
-  )
+}) => {
 
   const evidence: ProofEvidence[] = []
   await mkdir(path.dirname(EVIDENCE_PATH), { recursive: true })

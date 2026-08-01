@@ -10,13 +10,9 @@ import {
 
 const DESIGN_EVIDENCE_DIR = path.join(process.cwd(), "docs/design")
 
-test("captures the current home implementation at its reference viewport", async ({
+test("captures the current home implementation at its reference viewport", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-1440",
-    "Design evidence is captured once from the canonical Chromium project."
-  )
+}) => {
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -31,13 +27,9 @@ test("captures the current home implementation at its reference viewport", async
   await assertCleanRuntime()
 })
 
-test("captures the current selected-element studio implementation", async ({
+test("captures the current selected-element studio implementation", { tag: "@desktop-only" }, async ({
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-1440",
-    "Design evidence is captured once from the canonical Chromium project."
-  )
+}) => {
   const assertCleanRuntime = installRuntimeGuards(page)
 
   await page.setViewportSize({ width: 1280, height: 790 })

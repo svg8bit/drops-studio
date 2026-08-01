@@ -39,6 +39,22 @@ interface StoredState {
   etag: string | null;
 }
 
+export interface StudioTelegramChannelReceipt {
+  accountId?: string;
+  id: string;
+  title: string;
+  username?: string;
+  url: string;
+  botUsername: string;
+  botAdded: true;
+  firstPostSent: true;
+  firstPostMessageId: number;
+  dmSent: boolean;
+  dmStartUrl: string;
+  warnings: string[];
+  createdAt: string;
+}
+
 declare global {
   var __DROPS_STUDIO_LOCAL_ACCOUNT_STATE__: Map<string, StudioAccountState> | undefined;
 }
@@ -102,6 +118,73 @@ function safeText(value: unknown, max: number): string | undefined {
   const normalized = value.trim();
   if (!normalized || normalized.length > max || /[\r\n\0]/.test(normalized)) return undefined;
   return normalized;
+}
+
+function safeTelegramUrl(value: unknown): string | undefined {
+  const url = safeUrl(value);
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname.toLowerCase() === "t.me" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTelegramChannelReceipt(
+  value: unknown,
+): StudioTelegramChannelReceipt | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Partial<StudioTelegramChannelReceipt>;
+  const accountId = safeText(input.accountId, 32);
+  const id = safeText(input.id, 128);
+  const title = safeText(input.title, 64);
+  const username = safeText(input.username, 33);
+  const url = safeTelegramUrl(input.url);
+  const botUsername = safeText(input.botUsername, 33);
+  const dmStartUrl = safeTelegramUrl(input.dmStartUrl);
+  const createdAt = typeof input.createdAt === "string"
+    && Number.isFinite(Date.parse(input.createdAt))
+    ? input.createdAt
+    : undefined;
+  const firstPostMessageId = input.firstPostMessageId;
+  if (
+    !id
+    || !title
+    || !url
+    || !botUsername
+    || !dmStartUrl
+    || !createdAt
+    || input.botAdded !== true
+    || input.firstPostSent !== true
+    || typeof input.dmSent !== "boolean"
+    || (input.accountId !== undefined && (!accountId || !/^\d{1,32}$/.test(accountId)))
+    || typeof firstPostMessageId !== "number"
+    || !Number.isSafeInteger(firstPostMessageId)
+    || firstPostMessageId <= 0
+    || !/^@[A-Za-z0-9_]{3,32}$/.test(botUsername)
+    || (username && !/^@[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username))
+  ) return undefined;
+  const warnings = Array.isArray(input.warnings)
+    ? input.warnings
+      .slice(0, 8)
+      .map((warning) => safeText(warning, 240))
+      .filter((warning): warning is string => Boolean(warning))
+    : [];
+  return {
+    ...(accountId ? { accountId } : {}),
+    id,
+    title,
+    ...(username ? { username } : {}),
+    url,
+    botUsername,
+    botAdded: true,
+    firstPostSent: true,
+    firstPostMessageId,
+    dmSent: input.dmSent,
+    dmStartUrl,
+    warnings,
+    createdAt,
+  };
 }
 
 function parseProfile(value: unknown): StudioAccountProfile | undefined {
@@ -466,6 +549,7 @@ export async function saveStudioConnection(
     model?: string;
     endpoint?: string;
     label?: string;
+    telegramReceipt?: StudioTelegramChannelReceipt;
   },
   storageOverride?: BlobStorage,
   sqlOverride?: ProjectDataSqlClient,
@@ -474,10 +558,17 @@ export async function saveStudioConnection(
   if (input.endpoint && !endpoint) {
     throw new Error("Connection endpoint must be a credential-free HTTPS URL.");
   }
+  const telegramReceipt = input.telegramReceipt
+    ? parseTelegramChannelReceipt(input.telegramReceipt)
+    : undefined;
+  if (input.telegramReceipt && (input.provider !== "telegram" || !telegramReceipt)) {
+    throw new Error("Telegram channel receipt is invalid.");
+  }
   const encryptedPayload = JSON.stringify({
     version: 1,
     credential: input.credential,
     ...(endpoint ? { endpoint } : {}),
+    ...(telegramReceipt ? { telegramReceipt } : {}),
   });
   return mutateState(identity, (state, now) => ({
     ...state,
@@ -527,6 +618,7 @@ export async function readStudioConnectionSecret(
   model?: string;
   endpointHost?: string;
   label?: string;
+  telegramReceipt?: StudioTelegramChannelReceipt;
 } | null> {
   const state = await readStudioAccountState(identity, storageOverride, sqlOverride);
   const connection = state.connections[provider];
@@ -534,15 +626,18 @@ export async function readStudioConnectionSecret(
   const decrypted = decryptStudioConnection({ identity, connection });
   let credential = decrypted;
   let endpoint: string | undefined;
+  let telegramReceipt: StudioTelegramChannelReceipt | undefined;
   try {
     const payload = JSON.parse(decrypted) as {
       version?: unknown;
       credential?: unknown;
       endpoint?: unknown;
+      telegramReceipt?: unknown;
     };
     if (payload.version === 1 && typeof payload.credential === "string") {
       credential = payload.credential;
       endpoint = safeUrl(payload.endpoint);
+      telegramReceipt = parseTelegramChannelReceipt(payload.telegramReceipt);
     }
   } catch {
     // Backward compatibility for credentials encrypted before the v1 envelope.
@@ -553,5 +648,6 @@ export async function readStudioConnectionSecret(
     ...(connection.model ? { model: connection.model } : {}),
     ...(connection.endpointHost ? { endpointHost: connection.endpointHost } : {}),
     ...(connection.label ? { label: connection.label } : {}),
+    ...(telegramReceipt ? { telegramReceipt } : {}),
   };
 }

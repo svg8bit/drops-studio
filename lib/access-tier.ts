@@ -66,6 +66,9 @@ type EnvLike = Partial<Record<
   | "BLOB_READ_WRITE_TOKEN"
   | "BLOB_STORE_ID"
   | "DROPS_STUDIO_LOCAL_PROJECT_STORE"
+  | "DROPS_MANAGED_DATA_PROVIDER"
+  | "DROPS_MANAGED_DATABASE_URL"
+  | "DROPS_MANAGED_POSTGRES_URL"
   | "VERCEL",
   string | undefined
 >>;
@@ -130,6 +133,15 @@ export function memberProjectSyncReadiness(env: EnvLike = process.env): boolean 
       || env.BLOB_READ_WRITE_TOKEN?.trim()
       || (env.BLOB_STORE_ID?.trim() && env.VERCEL_OIDC_TOKEN?.trim()),
   );
+}
+
+export function projectV2SyncReadiness(env: EnvLike = process.env): boolean {
+  const postgresConfigured = env.DROPS_MANAGED_DATA_PROVIDER === "postgres"
+    && Boolean(
+      env.DROPS_MANAGED_DATABASE_URL?.trim()
+        || env.DROPS_MANAGED_POSTGRES_URL?.trim(),
+    );
+  return memberProjectSyncReadiness(env) || postgresConfigured;
 }
 
 /**
@@ -346,6 +358,7 @@ export function accessMetadata(input: {
   used: number;
   account?: StudioAccount | null;
   projectSyncAvailable?: boolean;
+  accountProjectSyncAvailable?: boolean;
   platformLimit?: number;
 }) {
   const usesPlatformAi = input.tier === "guest" || input.tier === "member" || input.tier === "pro";
@@ -359,6 +372,9 @@ export function accessMetadata(input: {
     : GUEST_DAILY_LIMIT;
   const remaining = Math.max(0, limit - Math.max(0, input.used));
   const authenticated = Boolean(input.account);
+  const accountProjectSyncAvailable = Boolean(
+    input.accountProjectSyncAvailable ?? input.projectSyncAvailable,
+  );
   return {
     tier: input.tier,
     authenticated,
@@ -378,10 +394,12 @@ export function accessMetadata(input: {
           available: true,
           connected: true,
           provider: input.account.provider,
-          projectSync: Boolean(input.projectSyncAvailable),
-          note: input.projectSyncAvailable
+          projectSync: accountProjectSyncAvailable,
+          note: accountProjectSyncAvailable
             ? "Private cloud project sync is configured. Compiled HTML and model keys remain outside cloud storage."
-            : "Member AI access is active. Projects remain browser-local while private cloud storage is unavailable.",
+            : input.projectSyncAvailable
+              ? "Project V2 files use actor-owned transactional storage. Legacy project metadata remains browser-local."
+              : "Member AI access is active. Projects remain browser-local while private cloud storage is unavailable.",
         }
         : {
           available: true,

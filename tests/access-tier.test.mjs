@@ -426,6 +426,51 @@ test("access status recognizes a signed member and reports its daily platform al
   }
 });
 
+test("access status advertises transactional Project V2 storage without claiming Blob-only member metadata sync", async () => {
+  const { GET } = await import("../app/api/access/route.ts");
+  const { NextRequest } = await import("next/server.js");
+  const previous = {
+    NODE_ENV: process.env.NODE_ENV,
+    DROPS_ACCOUNT_COOKIE_SECRET: process.env.DROPS_ACCOUNT_COOKIE_SECRET,
+    DROPS_MANAGED_DATA_PROVIDER: process.env.DROPS_MANAGED_DATA_PROVIDER,
+    DROPS_MANAGED_DATABASE_URL: process.env.DROPS_MANAGED_DATABASE_URL,
+    BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+    BLOB_STORE_ID: process.env.BLOB_STORE_ID,
+    VERCEL_OIDC_TOKEN: process.env.VERCEL_OIDC_TOKEN,
+    DROPS_STUDIO_LOCAL_PROJECT_STORE: process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE,
+  };
+  process.env.NODE_ENV = "test";
+  process.env.DROPS_ACCOUNT_COOKIE_SECRET = secret;
+  process.env.DROPS_MANAGED_DATA_PROVIDER = "postgres";
+  process.env.DROPS_MANAGED_DATABASE_URL = "postgresql://configured.example/drops";
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  delete process.env.BLOB_STORE_ID;
+  delete process.env.VERCEL_OIDC_TOKEN;
+  delete process.env.DROPS_STUDIO_LOCAL_PROJECT_STORE;
+  try {
+    const accountCookie = createStudioAccountCookie(
+      { provider: "openrouter", subject: accountSubject },
+      secret,
+    );
+    const response = await GET(new NextRequest("http://localhost/api/access", {
+      headers: { cookie: `${STUDIO_ACCOUNT_COOKIE}=${accountCookie}` },
+    }));
+    const payload = await response.json();
+
+    assert.equal(payload.access.projectSync, true);
+    assert.equal(payload.access.account.projectSync, false);
+    assert.deepEqual(payload.projectStoreScope, {
+      kind: "member",
+      identity: readStudioAccountCookie(accountCookie, secret).identity,
+    });
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test("access status never advertises member AI when Gateway or durable quota is unavailable", async () => {
   const { GET } = await import("../app/api/access/route.ts");
   const { NextRequest } = await import("next/server.js");
