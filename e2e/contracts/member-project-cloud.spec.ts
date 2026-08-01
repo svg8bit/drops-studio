@@ -91,6 +91,22 @@ async function installMemberAccess(page: Page) {
       body: JSON.stringify(memberAccessPayload()),
     })
   })
+  await page.route("**/api/account", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        authenticated: true,
+        profile: {
+          provider: "google",
+          name: "Studio Maker",
+          email: "maker@example.test",
+        },
+        connections: [],
+        vault: { available: true },
+      }),
+    })
+  })
 }
 
 async function installProjectV2Cloud(page: Page) {
@@ -259,12 +275,15 @@ test("signed-in home restores and opens a remote-only runnable project", async (
     })
     .toBe(true)
 
-  await page.getByRole("button", { name: /My Projects/ }).click()
-  const dialog = page.getByRole("dialog")
-  await expect(dialog.getByText("Private cloud + browser", { exact: true })).toBeVisible()
-  await dialog
-    .locator(".project-open-button")
-    .filter({ hasText: REMOTE_PROJECT_NAME })
+  await page
+    .getByRole("button", { name: /Open projects for Studio Maker/ })
+    .click()
+  await expect(page).toHaveURL(/\/projects$/)
+  await expect(
+    page.getByRole("heading", { name: "Private account projects" }),
+  ).toBeVisible()
+  await page
+    .getByRole("link", { name: new RegExp(REMOTE_PROJECT_NAME) })
     .click()
 
   await expect(page).toHaveURL(new RegExp(`/studio/${REMOTE_PROJECT_ID}$`))

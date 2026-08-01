@@ -55,14 +55,19 @@ test("template catalog is wired to the canonical twelve recipes", async () => {
   assert.doesNotMatch(source, /sampleTemplates|mockTemplates|placeholderTemplates/i);
 });
 
-test("project and integration surfaces read real browser state without exposing values", async () => {
+test("project and integration surfaces read account state without exposing values or claiming guest ownership", async () => {
   const [projects, integrations] = await Promise.all([
     readFile(new URL("../components/platform/project-library.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/platform/integration-catalog.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(projects, /readProjectsFromStore/);
+  assert.match(projects, /readStudioAccountSnapshot/);
+  assert.match(projects, /listMemberProjectsFromCloud/);
+  assert.doesNotMatch(projects, /readProjectsFromStore/);
+  assert.match(projects, /Guest browser drafts are never presented as account-owned projects/);
   assert.match(projects, /\/studio\/\$\{encodeURIComponent\(project\.id\)\}/);
   assert.match(integrations, /sessionStorage\.getItem/);
+  assert.match(integrations, /migrateSessionConnectionsToAccount/);
+  assert.match(integrations, /Saved to account/);
   assert.match(integrations, /Setup required/);
   assert.doesNotMatch(integrations, /setSessionConnections\([^)]*getItem/);
 });

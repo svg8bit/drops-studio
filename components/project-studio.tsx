@@ -119,6 +119,10 @@ import {
   saveMemberProjectToCloud,
 } from "@/lib/member-project-sync-client";
 import {
+  migrateSessionConnectionsToAccount,
+  readStudioAccountSnapshot,
+} from "@/lib/studio-account-connections-client";
+import {
   loadProjectV2FromCloud,
   ProjectV2SyncError,
   saveProjectV2ToCloud,
@@ -1449,45 +1453,37 @@ export function ProjectStudio() {
         if (!cancelled) setAccountBrain(current as ProjectProvider);
       }, 0);
     }
-    void fetch("/api/account", {
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { accept: "application/json" },
-    })
-      .then(async (response) => {
-        if (!response.ok || cancelled) return;
-        const payload = (await response.json()) as {
-          profile?: { name?: string; email?: string } | null;
-          connections?: Array<{
-            provider?: string;
-            connected?: boolean;
-            model?: string;
-          }>;
-        };
-        if (payload.profile?.name) {
+    void (async () => {
+      const initial = await readStudioAccountSnapshot();
+      if (cancelled || !initial.authenticated) return;
+      const migrated = await migrateSessionConnectionsToAccount({
+        snapshot: initial,
+        storage: window.sessionStorage,
+      });
+      const snapshot = migrated.snapshot;
+      if (snapshot.profile?.name) {
           setAccountProfile({
-            name: payload.profile.name,
-            ...(payload.profile.email ? { email: payload.profile.email } : {}),
+            name: snapshot.profile.name,
+            ...(snapshot.profile.email ? { email: snapshot.profile.email } : {}),
           });
-        }
-        if (current) return;
-        const preferred = payload.connections?.find(
+      }
+      if (current) return;
+      const preferred = snapshot.connections.find(
           (connection) =>
             connection.connected
             && providers.includes(connection.provider as ProjectProvider),
         );
-        if (!preferred?.provider) return;
-        const provider = preferred.provider as ProjectProvider;
-        window.sessionStorage.setItem("drops-studio:active-brain", provider);
-        if (preferred.model) {
-          window.sessionStorage.setItem(
-            `drops-studio:${provider}:model`,
-            preferred.model,
-          );
-        }
-        setAccountBrain(provider);
-      })
-      .catch(() => undefined);
+      if (!preferred?.provider) return;
+      const provider = preferred.provider as ProjectProvider;
+      window.sessionStorage.setItem("drops-studio:active-brain", provider);
+      if (preferred.model) {
+        window.sessionStorage.setItem(
+          `drops-studio:${provider}:model`,
+          preferred.model,
+        );
+      }
+      setAccountBrain(provider);
+    })().catch(() => undefined);
     return () => {
       cancelled = true;
       if (sessionBrainTimer !== null) {
@@ -1998,12 +1994,86 @@ export function ProjectStudio() {
 
     if (isReadOnlyChatQuestion(instruction)) {
       const fileCount = Object.keys(activeProject.projectV2?.files ?? {}).length;
-      appendAssistantReply(
-        usesRussian(instruction)
-          ? `Да, чат работает и видит текущий проект «${activeProject.spec.name}»${fileCount ? ` (${fileCount} файлов)` : ""}. Напишите, что изменить — Free Auto применит безопасную правку сразу, а подключённая модель сможет отредактировать реальные файлы.`
-          : `Yes — chat is connected to “${activeProject.spec.name}”${fileCount ? ` (${fileCount} files)` : ""}. Describe a change: Free Auto applies safe edits immediately, while a connected model can edit the real files.`,
-      );
-      setDirecting(false);
+      const fileCountEn = fileCount === 1 ? "1 file" : `${fileCount} files`;
+      const fileCountRu = fileCount === 1 ? "1 файл" : `${fileCount} файлов`;
+      if (activeProvider === "free") {
+        appendAssistantReply(
+          usesRussian(instruction)
+            ? `Free Auto работает без модели и видит текущий проект «${activeProject.spec.name}»${fileCount ? ` (${fileCountRu})` : ""}. Подключите OpenAI, Anthropic, OpenRouter, Kimi или Custom API, чтобы получать ответы модели; безопасные детерминированные правки доступны уже сейчас.`
+            : `Free Auto works without an AI model and can see “${activeProject.spec.name}”${fileCount ? ` (${fileCountEn})` : ""}. Connect OpenAI, Anthropic, OpenRouter, Kimi, or Custom API for model answers; safe deterministic edits are available now.`,
+        );
+        setDirecting(false);
+        return;
+      }
+      try {
+        const provider = activeProvider;
+        const headers = studioRequestHeaders();
+        const key = provider === "gateway"
+          ? null
+          : window.sessionStorage.getItem(`drops-studio:${provider}`);
+        if (provider === "openrouter" && key) {
+          headers["x-openrouter-key"] = key;
+        } else if (key) {
+          headers["x-provider-key"] = key;
+        }
+        const model = window.sessionStorage.getItem(
+          provider === "custom"
+            ? "drops-studio:custom-model"
+            : `drops-studio:${provider}:model`,
+        ) || undefined;
+        const response = await fetch("/api/agent/chat", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          signal: AbortSignal.timeout(35_000),
+          body: JSON.stringify({
+            projectId: activeProject.id,
+            message: instruction,
+            provider: {
+              provider,
+              ...(model ? { model } : {}),
+              ...(provider === "custom"
+                ? {
+                    baseUrl: window.sessionStorage.getItem(
+                      "drops-studio:custom-endpoint",
+                    ) || undefined,
+                  }
+                : {}),
+            },
+            context: {
+              name: activeProject.spec.name,
+              presetId: activeProject.spec.presetId,
+              description: activeProject.spec.description.slice(0, 500),
+              filePaths: Object.keys(activeProject.projectV2?.files ?? {}).slice(0, 100),
+              recentMessages: baseConversation.slice(-12).map((message) => ({
+                role: message.role,
+                content: message.content.slice(0, 2_000),
+              })),
+            },
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          reply?: string;
+          provider?: string;
+          model?: string;
+          error?: string;
+        };
+        if (!response.ok || !payload.reply) {
+          throw new Error(payload.error || "The selected model did not answer.");
+        }
+        appendAssistantReply(payload.reply);
+        setToast(`${payload.model || modelLabels[provider]} answered with project context`);
+      } catch (error) {
+        void error;
+        appendAssistantReply(
+          usesRussian(instruction)
+            ? `Подключённая модель ${modelLabels[activeProvider]} сейчас не ответила. Проект не изменён. Проверьте подключение и повторите запрос или явно выберите Free Auto.`
+            : `${modelLabels[activeProvider]} did not answer this request. The project was not changed. Check the connection and retry, or explicitly select Free Auto.`,
+        );
+        setToast("The selected AI connection needs attention");
+      } finally {
+        setDirecting(false);
+      }
       return;
     }
 
@@ -2045,6 +2115,7 @@ export function ProjectStudio() {
       activeProject.projectV2
       && projectV2SyncAvailableRef.current
     ) {
+      let adopted = false;
       try {
         await fetch("/api/access", {
           credentials: "same-origin",
@@ -2134,6 +2205,7 @@ export function ProjectStudio() {
         projectRef.current = next;
         committedProjectRef.current = next;
         setProject(next);
+        adopted = true;
         setProjectSyncStatus(remote ? "synced" : "local");
         const save = () =>
           saveProjectSafely(next, {
@@ -2162,33 +2234,21 @@ export function ProjectStudio() {
               : "Blocking check evidence is saved in this browser because private cloud sync could not be confirmed.",
         );
       } catch (error) {
-        const fallback = selectedBlock?.kind === "element"
-          ? createFreeElementDirectorProposal(
-              activeProject.spec,
-              instruction,
-              selectedBlock,
-            )
-          : createFreeDirectorProposal(
-              activeProject.spec,
-              instruction,
-              selectedBlock?.id,
-            );
-        const assistant: ProjectChatMessage = {
-          id: nowId("assistant"),
-          role: "assistant",
-          createdAt: new Date().toISOString(),
-          content: usesRussian(instruction)
-            ? "Подключённая модель не завершила этот запрос, поэтому Free Auto сразу применил безопасную версию правки. Preview обновляется; предыдущая версия сохранена."
-            : "The connected model did not finish this request, so Free Auto immediately applied a safe version of the change. The preview is refreshing and the previous version is saved.",
-        };
         void error;
-        commitSpec(
-          fallback.spec,
-          `Free Auto fallback · ${fallback.affected.join(", ")}`,
-          "director",
-          [...baseConversation, assistant],
+        appendAssistantReply(
+          adopted
+            ? usesRussian(instruction)
+              ? "Файлы обновлены в этой сессии, но сохранение не завершилось. Перезагрузите проект, чтобы проверить состояние."
+              : "The files changed in this session, but saving did not complete. Reload the project to verify its state."
+            : usesRussian(instruction)
+              ? `Подключённая модель ${modelLabels[activeProvider]} не завершила редактирование файлов. Проект не изменён и Free Auto не подменял модель. Проверьте подключение и повторите запрос или явно выберите Free Auto.`
+              : `${modelLabels[activeProvider]} did not complete the file edit. The project was not changed and Free Auto did not replace the selected model. Check the connection and retry, or explicitly select Free Auto.`,
         );
-        setToast("Free Auto applied the fallback change — Undo is available");
+        setToast(
+          adopted
+            ? "Project V2 files changed, but the save did not complete"
+            : "AI edit failed safely — no project files changed",
+        );
       } finally {
         setDirecting(false);
       }
@@ -2395,34 +2455,13 @@ export function ProjectStudio() {
       projectRef.current = next;
       setProject(next);
     } catch (error) {
-      const fallback =
-        selectedBlock?.kind === "element"
-          ? createFreeElementDirectorProposal(
-              activeProject.spec,
-              instruction,
-              selectedBlock,
-            )
-          : createFreeDirectorProposal(
-              activeProject.spec,
-              instruction,
-              selectedBlock?.id,
-            );
-      const assistant: ProjectChatMessage = {
-        id: nowId("assistant"),
-        role: "assistant",
-        createdAt: new Date().toISOString(),
-        content: usesRussian(instruction)
-          ? "Подключённая модель сейчас не ответила, поэтому Free Auto применил безопасную версию этой правки. Preview обновляется, предыдущая версия доступна в Versions."
-          : "The connected model did not respond, so Free Auto applied a safe version of this change. The preview is refreshing and the previous version remains in Versions.",
-      };
       void error;
-      commitSpec(
-        fallback.spec,
-        `Free Auto fallback · ${fallback.affected.join(", ")}`,
-        "director",
-        [...baseConversation, assistant],
+      appendAssistantReply(
+        usesRussian(instruction)
+          ? `Подключённая модель ${modelLabels[activeProvider]} не подготовила валидную правку. Проект не изменён и Free Auto не подменял выбранную модель. Проверьте подключение и повторите запрос или явно выберите Free Auto.`
+          : `${modelLabels[activeProvider]} did not produce a valid edit. The project was not changed and Free Auto did not replace the selected model. Check the connection and retry, or explicitly select Free Auto.`,
       );
-      setToast("Free Auto applied a fallback change — Undo is available");
+      setToast("AI edit failed safely — no project changes were applied");
     } finally {
       setDirecting(false);
     }
