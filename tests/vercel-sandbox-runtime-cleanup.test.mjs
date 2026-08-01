@@ -242,7 +242,7 @@ test("protected cleanup route stops only sandboxes older than the configured idl
   });
   assert.equal(response.status, 200);
   assert.equal(received.idleBefore.toISOString(), "2026-07-30T11:45:00.000Z");
-  assert.equal(received.limit, 100);
+  assert.equal(received.limit, 50);
   assert.deepEqual((await response.json()).stopped, ["ds2-idle"]);
 });
 

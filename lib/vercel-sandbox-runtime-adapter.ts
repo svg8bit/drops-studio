@@ -938,12 +938,14 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
 
   async cleanupIdle(options: RuntimeCleanupOptions): Promise<RuntimeCleanupResult> {
     const provider = await this.#provider();
-    const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
+    // The stable Sandbox list API currently rejects page sizes above 50.
+    const limit = Math.min(Math.max(options.limit ?? 25, 1), 50);
     const stopped: string[] = [];
     const failed: string[] = [];
     let inspected = 0;
     const sandboxes = await provider.list({
       namePrefix: "ds2-",
+      sortBy: "name",
       limit,
       ...this.#credentialsInput(),
     });

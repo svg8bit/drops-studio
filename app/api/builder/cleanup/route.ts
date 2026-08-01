@@ -64,7 +64,7 @@ export async function handleBuilderCleanupRequest(
     const adapter = dependencies.runtime ?? new VercelSandboxRuntimeAdapter();
     const result = await adapter.cleanupIdle({
       idleBefore: new Date(now.getTime() - minutes * 60_000),
-      limit: 100,
+      limit: 50,
     });
     return response({
       idleMinutes: minutes,
