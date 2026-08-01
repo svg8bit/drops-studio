@@ -82,6 +82,12 @@ import {
   studioAccountDisplayName,
   studioAccountInitial,
 } from "@/lib/studio-account-profile";
+import {
+  migrateSessionConnectionsToAccount,
+  readStudioAccountSnapshot,
+  rememberStudioConnection,
+  type RememberStudioConnectionResult,
+} from "@/lib/studio-account-connections-client";
 
 // Defer the Connections Hub and My Projects overlays until either is opened.
 const DropsStudioDialogs = dynamic(
@@ -142,13 +148,6 @@ interface StudioAccountProfileView {
   name: string;
   email?: string;
   picture?: string;
-}
-
-interface StudioAccountConnectionView {
-  provider: Exclude<ProviderId, "free"> | "telegram";
-  connected: boolean;
-  model?: string;
-  endpointHost?: string;
 }
 
 const initialBuildActivity: BuildActivityItem[] = [
@@ -451,6 +450,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   const carouselRef = useRef<HTMLDivElement>(null);
   const centeredPresetRef = useRef(false);
   const guestIdRef = useRef("");
+  const accountConnectionMigrationRef = useRef(false);
   const previewSection = useNearViewport();
 
   const selectedPreset = useMemo(
@@ -506,31 +506,53 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
   }, []);
 
   const hydrateAccountState = useCallback(async () => {
-    const response = await fetch("/api/account", {
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { accept: "application/json" },
-    });
-    if (response.status === 401) {
+    let snapshot = await readStudioAccountSnapshot();
+    if (!snapshot.authenticated) {
       setAccountProfile(null);
       return;
     }
-    const payload = (await response.json().catch(() => ({}))) as {
-      profile?: StudioAccountProfileView | null;
-      connections?: StudioAccountConnectionView[];
-    };
-    if (!response.ok) return;
-    setAccountProfile(payload.profile ?? null);
-    const remembered = payload.connections ?? [];
+    if (!accountConnectionMigrationRef.current) {
+      accountConnectionMigrationRef.current = true;
+      const migration = await migrateSessionConnectionsToAccount({
+        snapshot,
+        storage: window.sessionStorage,
+      });
+      snapshot = migration.snapshot;
+      if (migration.error) {
+        setToast(`Signed in, but connection sync needs attention: ${migration.error}`);
+      } else if (migration.migrated.length) {
+        setToast(
+          `${migration.migrated.length} existing connection${migration.migrated.length === 1 ? "" : "s"} encrypted for this account.`,
+        );
+      }
+    }
+    setAccountProfile(snapshot.profile as StudioAccountProfileView | null);
+    const remembered = snapshot.connections;
     setConnections((current) => {
       const next = { ...current };
-      for (const connection of remembered) {
-        if (connection.provider === "telegram") {
-          next.dropsbot = connection.connected;
-        } else if (connection.provider in next) {
-          next[connection.provider as Exclude<ProviderId, "free">] = connection.connected;
-        }
+      for (const provider of [
+        "dropstab",
+        "openai",
+        "anthropic",
+        "openrouter",
+        "kimi",
+        "custom",
+      ] as const) {
+        next[provider] = Boolean(
+          window.sessionStorage.getItem(`drops-studio:${provider}`)?.trim()
+          || remembered.some(
+            (connection) => connection.provider === provider && connection.connected,
+          ),
+        );
       }
+      next.dropsbot = Boolean(
+        window.sessionStorage.getItem("drops-studio:telegram-account")?.trim()
+        || remembered.some(
+          (connection) =>
+            (connection.provider === "telegram" || connection.provider === "dropsbot")
+            && connection.connected,
+        ),
+      );
       return next;
     });
     for (const connection of remembered) {
@@ -1356,15 +1378,9 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
     credential: string;
     model?: string;
     endpoint?: string;
-  }): Promise<boolean> {
-    if (!memberConnected) return false;
-    const response = await fetch("/api/account/connections", {
-      method: "PUT",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    }).catch(() => null);
-    return Boolean(response?.ok);
+  }): Promise<RememberStudioConnectionResult> {
+    if (!memberConnected) return { saved: false, connections: [] };
+    return rememberStudioConnection(input);
   }
 
   async function connectOpenRouterAccount() {
@@ -1485,9 +1501,11 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         endpoint: customEndpoint.trim(),
       });
       setToast(
-        remembered
+        remembered.saved
           ? "Custom API verified for this tab and encrypted in your Studio account vault."
-          : "Custom API configured for this tab. Sign in to remember it across sessions.",
+          : memberConnected
+            ? `Custom API verified for this tab, but account sync failed. ${remembered.error ?? "Retry from Connections."}`
+            : "Custom API configured for this tab. Sign in to remember it across sessions.",
       );
       closeConnectionsHub();
       return;
@@ -1584,7 +1602,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         });
         setToast(
           returnedModels.length
-            ? `${provider.name} verified${remembered ? " and encrypted for your account" : " for this tab"}. Choose from ${verifiedCatalog?.totalModelCount ?? returnedModels.length} provider-returned models.`
+            ? `${provider.name} verified${remembered.saved ? " and encrypted for your account" : " for this tab"}. Choose from ${verifiedCatalog?.totalModelCount ?? returnedModels.length} provider-returned models.${!remembered.saved && memberConnected && remembered.error ? ` Account sync: ${remembered.error}` : ""}`
             : `${provider.name} verified, but no model list was returned. Enter the exact model ID to continue.`,
         );
         return;
@@ -1594,9 +1612,11 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         credential: connectionKey,
       });
       setToast(
-        remembered
+        remembered.saved
           ? `${provider.name} verified and encrypted for your Studio account.`
-          : `${provider.name} verified and connected for this browser tab.`,
+          : memberConnected
+            ? `${provider.name} verified for this tab, but account sync failed. ${remembered.error ?? "Retry from Connections."}`
+            : `${provider.name} verified and connected for this browser tab.`,
       );
       closeConnectionsHub();
     } catch (error) {
@@ -2030,11 +2050,11 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
           <button
             type="button"
             onClick={() => {
-              setProjectsOpen(true);
+              router.push("/projects");
               setMenuOpen(false);
             }}
           >
-            My Projects <span>{projects.length}</span>
+            Projects
           </button>
           <a href="/integrations">Integrations</a>
           <a href="/platform">Platform</a>
@@ -2063,7 +2083,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
             aria-label={accountProfile
               ? `Open projects for ${studioAccountDisplayName(accountProfile.name)}`
               : "Sign in"}
-            onClick={accountProfile ? () => setProjectsOpen(true) : startGoogleSignIn}
+            onClick={accountProfile ? () => router.push("/projects") : startGoogleSignIn}
           >
             <span className="account-avatar" aria-hidden="true">
               {accountProfile ? studioAccountInitial(accountProfile.name) : <UserRound />}
@@ -2379,7 +2399,7 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         </div>
         <div className="studio-footer-bottom">
           <span>© {new Date().getFullYear()} Drops Studio</span>
-          <span>Session-safe credentials · explicit approval for external actions</span>
+          <span>Guest and tab-only keys stay in this tab · account-saved connections are encrypted · external actions require approval</span>
         </div>
       </footer>
 

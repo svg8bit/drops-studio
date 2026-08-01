@@ -17,12 +17,14 @@ test("Build opens the unified Director workspace with a working radio preview an
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
+        authenticated: true,
         profile: {
           provider: "google",
           name: "Studio Maker",
           email: "maker@example.test",
         },
         connections: [],
+        vault: { available: true },
       }),
     })
   })
