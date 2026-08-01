@@ -138,10 +138,10 @@ test("controlled text and number edits commit once and survive reload", async ({
   await restoredPage.goto(`/studio/${PROJECT_ID}`, {
     waitUntil: "domcontentloaded",
   })
-  await expect(restoredPage.getByLabel("Product name")).toHaveValue(finalName)
   await restoredPage
     .getByRole("button", { name: "Design", exact: true })
     .click()
+  await expect(restoredPage.getByLabel("Product name")).toHaveValue(finalName)
   await expect(
     restoredPage.getByRole("spinbutton", {
       name: "Round timer",
