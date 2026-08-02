@@ -367,6 +367,61 @@ test("a disconnected client aborts the active build and preserves a restartable 
   assert.equal(deps.calls.stop, 1);
 });
 
+test("automatic build request IDs deduplicate an active run and remain restartable", async () => {
+  const deps = dependencies();
+  const controller = new AbortController();
+  const buildRequestId = "autobuild-request-0001";
+  deps.deterministicFallback = {
+    async run() {
+      await new Promise(() => {});
+    },
+  };
+  const body = {
+    projectId: "builder-route-project",
+    prompt: "Build once across a Studio reload.",
+    mode: "build",
+    buildRequestId,
+    provider: { provider: "free" },
+  };
+  const pending = handleBuilderAgentRequest(
+    request("/api/builder/agent", body, {}, controller.signal),
+    deps,
+  );
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (deps.getStored().runs.some(
+      (run) => run.id === `auto:${buildRequestId}` && run.status === "running",
+    )) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const duplicate = await handleBuilderAgentRequest(
+    request("/api/builder/agent", body),
+    deps,
+  );
+  assert.equal(duplicate.status, 202);
+  assert.equal((await duplicate.json()).code, "BUILDER_REQUEST_IN_PROGRESS");
+
+  controller.abort();
+  assert.equal((await pending).status, 499);
+  assert.equal(
+    deps.getStored().runs.find((run) => run.id === `auto:${buildRequestId}`)?.status,
+    "stopped",
+  );
+
+  delete deps.deterministicFallback;
+  const restarted = await handleBuilderAgentRequest(
+    request("/api/builder/agent", body),
+    deps,
+  );
+  assert.equal(restarted.status, 200, JSON.stringify(await restarted.clone().json()));
+  const payload = await restarted.json();
+  assert.equal(
+    payload.result.project.runs.find(
+      (run) => run.id === `auto:${buildRequestId}`,
+    )?.status,
+    "succeeded",
+  );
+});
+
 test("runtime preview persists and returns real Project V2 preview metadata", async () => {
   const deps = dependencies();
   const response = await handleBuilderRuntimeRequest(request("/api/builder/runtime", {

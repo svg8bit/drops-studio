@@ -152,6 +152,10 @@ import {
   studioAccountDisplayName,
   studioAccountInitial,
 } from "@/lib/studio-account-profile";
+import {
+  clearStudioBuildIntent,
+  consumeStudioBuildIntent,
+} from "@/lib/studio-build-intent";
 
 type InspectorTab =
   | "project"
@@ -174,6 +178,7 @@ type ProjectSyncStatus =
   | "synced"
   | "conflict"
   | "error";
+type StudioBuildLifecycle = "idle" | "running" | "ready" | "blocked";
 
 const STUDIO_PANEL_WIDTH_KEY = "drops-studio:studio-panel-width";
 const STUDIO_PANEL_MIN_WIDTH = 320;
@@ -650,6 +655,17 @@ function projectV2BuildEvidence(projectV2?: ProjectV2): {
   return { passed, total: 5, verified: passed === 5 };
 }
 
+function projectV2BuildLifecycle(projectV2?: ProjectV2): StudioBuildLifecycle {
+  if (projectV2BuildEvidence(projectV2).verified) return "ready";
+  if (
+    projectV2?.preview?.status === "failed"
+    && projectV2.preview.projectRevision === projectV2.revision
+  ) {
+    return "blocked";
+  }
+  return "idle";
+}
+
 function currentProjectV2PreviewUrl(projectV2?: ProjectV2): string | null {
   if (
     !projectV2?.preview?.url
@@ -691,6 +707,11 @@ export function ProjectStudio() {
   const cloudRevisionRef = useRef<number | null>(null);
   const projectV2CloudRevisionRef = useRef<number | null>(null);
   const [project, setProject] = useState<GeneratedProject | null>(null);
+  const [autoBuildRequestId, setAutoBuildRequestId] = useState<string | null>(
+    null,
+  );
+  const [buildLifecycle, setBuildLifecycle] =
+    useState<StudioBuildLifecycle>("idle");
   const [accountProfile, setAccountProfile] = useState<{
     name: string;
     email?: string;
@@ -1153,6 +1174,17 @@ export function ProjectStudio() {
         setRuntimeSmoke(null);
         setProject(migrated);
         setRuntimeProject(migrated);
+        setBuildLifecycle(projectV2BuildLifecycle(migrated.projectV2));
+        const buildRequestId = consumeStudioBuildIntent(
+          {
+            pathname: window.location.pathname,
+            search: window.location.search,
+            hash: window.location.hash,
+          },
+          (url) => window.history.replaceState(window.history.state, "", url),
+          () => window.crypto.randomUUID(),
+        );
+        setAutoBuildRequestId(buildRequestId);
         const requestedPanel = new URLSearchParams(window.location.search).get(
           "panel",
         );
@@ -1632,6 +1664,7 @@ export function ProjectStudio() {
       committedProjectRef.current = next;
       setProject(next);
       setDirty(true);
+      setBuildLifecycle(projectV2BuildLifecycle(nextProjectV2));
       setProjectSyncStatus(storageRevision !== undefined ? "synced" : "local");
       const save = () =>
         saveProjectSafely(next, {
@@ -1662,12 +1695,36 @@ export function ProjectStudio() {
     [],
   );
 
+  const settleAutoBuildIntent = useCallback((requestId: string) => {
+    const cleared = clearStudioBuildIntent(
+      {
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+      },
+      requestId,
+      (url) => window.history.replaceState(window.history.state, "", url),
+    );
+    if (cleared) {
+      setAutoBuildRequestId((current) => current === requestId ? null : current);
+    }
+  }, []);
+
   const recordBuilderAgentEvent = useCallback(
     (event: {
       phase: "snapshot" | "sandbox" | "verification" | "preview";
       status: "active" | "done" | "blocked";
       message: string;
     }) => {
+      setBuildLifecycle(
+        event.status === "blocked"
+          ? "blocked"
+          : event.phase === "preview" && event.status === "done"
+            ? "ready"
+            : event.status === "active"
+              ? "running"
+              : "running",
+      );
       const current = projectRef.current;
       if (!current) return;
       const eventId = `builder-${current.id}-${event.phase}`;
@@ -3577,9 +3634,13 @@ export function ProjectStudio() {
                   : externalSetup
                   ? "Needs connection"
                   : hasProjectV2
-                    ? builderEvidence.verified
-                      ? "Ready"
-                      : "Draft"
+                    ? buildLifecycle === "running"
+                      ? "Building"
+                      : buildLifecycle === "blocked"
+                        ? "Needs retry"
+                        : builderEvidence.verified
+                          ? "Ready"
+                          : "Ready to build"
                     : "Draft"}
           </b>
         </div>
@@ -3720,6 +3781,8 @@ export function ProjectStudio() {
             <ProjectV2StudioSurface
               key={project.projectV2.id}
               ref={projectV2SurfaceRef}
+              autoBuildRequestId={autoBuildRequestId}
+              onAutoBuildSettled={settleAutoBuildIntent}
               onAgentEvent={recordBuilderAgentEvent}
               onNotify={setToast}
               onProjectChange={adoptProjectV2}
@@ -4889,7 +4952,9 @@ export function ProjectStudio() {
                   className={
                     releaseEvidenceReady
                       ? "quality-pass"
-                      : "quality-fail"
+                      : buildLifecycle === "running"
+                        ? "quality-pending"
+                        : "quality-fail"
                   }
                 >
                   {hasProjectV2
@@ -4898,7 +4963,13 @@ export function ProjectStudio() {
                 </b>
               </div>
               <div
-                className={`quality-hero ${releaseEvidenceReady ? "passed" : "failed"}`}
+                className={`quality-hero ${
+                  releaseEvidenceReady
+                    ? "passed"
+                    : buildLifecycle === "running"
+                      ? "pending"
+                      : "failed"
+                }`}
               >
                 <span>
                   <ShieldCheck />
@@ -4908,7 +4979,11 @@ export function ProjectStudio() {
                     {builderEvidence.verified
                       ? "Project V2 build verified"
                       : hasProjectV2
-                      ? "Project V2 build pending"
+                      ? buildLifecycle === "running"
+                        ? "Building and checking your app"
+                        : buildLifecycle === "blocked"
+                          ? "Build needs another pass"
+                          : "Ready for a verified build"
                       : quality.readyToPublish
                       ? releaseLabel
                       : "Build needs attention"}
@@ -4917,7 +4992,11 @@ export function ProjectStudio() {
                     {builderEvidence.verified
                       ? "Typecheck, lint, tests, production build and live Sandbox preview passed for this file revision. The legacy score below applies only to standalone /p publishing."
                       : hasProjectV2
-                      ? `${builderEvidence.passed}/${builderEvidence.total} current-revision checks are ready. Open Code to run the remaining checks and start the live preview.`
+                      ? buildLifecycle === "running"
+                        ? "The saved files are running through install, checks and live preview startup now. Progress remains visible in Chat."
+                        : buildLifecycle === "blocked"
+                          ? "Your files and last working preview are safe. Open Code and choose Retry when you are ready."
+                          : `${builderEvidence.passed}/${builderEvidence.total} current-revision checks have passed. Open Code and choose Build & verify to create or refresh the live preview.`
                       : externalSetup
                       ? "The web setup app can publish, but the external outcome is not live until it is connected and verified."
                       : "Deterministic checks run on every edit and before every publish."}

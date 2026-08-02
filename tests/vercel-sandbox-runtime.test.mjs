@@ -353,10 +353,47 @@ test("checkpoint restore uses a full secret-free file snapshot and idle cleanup 
   checkpoint.files.find((file) => file.path === "app/page.tsx").content = "export default function Page(){ return <main>Restored</main>; }";
   const restored = await adapter.restoreCheckpoint(context, checkpoint, handle);
   assert.match(await adapter.readFile(restored, "app/page.tsx"), /Restored/);
-  const cleanup = await adapter.cleanupIdle({ idleBefore: new Date("2026-07-30T12:00:00.000Z") });
+  const cleanup = await adapter.cleanupIdle({
+    idleBefore: new Date("2026-07-30T12:00:00.000Z"),
+    limit: 100,
+  });
   assert.equal(cleanup.inspected, 1);
   assert.deepEqual(cleanup.stopped, [sandbox.name]);
   assert.equal(sandbox.stopped, true);
+  assert.equal(mock.calls.list[0].limit, 50);
+  assert.equal(mock.calls.list[0].sortBy, "name");
+});
+
+test("idle cleanup auto-paginates beyond the provider page size", async () => {
+  const sandbox = new MockSandbox();
+  const records = Array.from({ length: 75 }, (_, index) => ({
+    name: `ds2-cleanup-${String(index).padStart(3, "0")}`,
+    status: "running",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const listCalls = [];
+  const adapter = new VercelSandboxRuntimeAdapter({
+    credentials: null,
+    provider: {
+      async getOrCreate() { return sandbox; },
+      async get() { return sandbox; },
+      async list(input) {
+        listCalls.push(input);
+        return (async function* () {
+          for (const record of records) yield record;
+        })();
+      },
+    },
+  });
+  const cleanup = await adapter.cleanupIdle({
+    idleBefore: new Date("2026-07-30T12:00:00.000Z"),
+    limit: 50,
+  });
+  assert.equal(listCalls[0].limit, 50);
+  assert.equal(cleanup.inspected, 75);
+  assert.equal(cleanup.stopped.length, 75);
+  assert.equal(cleanup.failed.length, 0);
 });
 
 test("command and log output is truncated and redacted before leaving the adapter", async () => {

@@ -227,19 +227,17 @@ export async function prepareProjectV2UiPage(
   });
 
   await page.addInitScript(
-    ({ key, value, autoBuildKey, seedKey }) => {
+    ({ key, value, seedKey }) => {
       if (window.top !== window) return;
       if (window.sessionStorage.getItem(seedKey) === "1") return;
       window.localStorage.clear();
       window.sessionStorage.clear();
       window.localStorage.setItem(key, value);
-      window.sessionStorage.setItem(autoBuildKey, String(Date.now()));
       window.sessionStorage.setItem(seedKey, "1");
     },
     {
       key: PROJECTS_STORAGE_KEY,
       value: JSON.stringify([project]),
-      autoBuildKey: `drops-studio:v2-auto-build:${id}:${projectV2.revision}`,
       seedKey: `drops-studio:e2e-project-v2-seeded:${id}`,
     },
   );

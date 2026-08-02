@@ -61,7 +61,11 @@ import type { AgentRunTrace } from "@/lib/agent/evals/types";
 import styles from "./project-v2-studio-surface.module.css";
 
 const AUTO_BUILD_KEY = "drops-studio:v2-auto-build";
-const AUTO_BUILD_LEASE_MS = 6 * 60 * 1000;
+const BUILD_STATUS_POLL_MS = 10_000;
+
+function autoBuildRunId(requestId: string): string {
+  return `auto:${requestId}`;
+}
 
 interface BuilderApiPayload {
   result?: BuilderAgentResult;
@@ -108,6 +112,8 @@ type ProjectV2StorageMode = "checking" | "cloud" | "local";
 export interface ProjectV2StudioSurfaceProps {
   project: ProjectV2;
   provider: ProjectProvider;
+  autoBuildRequestId?: string | null;
+  onAutoBuildSettled?: (requestId: string) => void;
   onProjectChange: (project: ProjectV2, storageRevision?: number) => void;
   onAgentEvent?: (event: {
     phase: "snapshot" | "sandbox" | "verification" | "preview";
@@ -332,6 +338,8 @@ export const ProjectV2StudioSurface = forwardRef<
 >(function ProjectV2StudioSurface({
   project,
   provider,
+  autoBuildRequestId = null,
+  onAutoBuildSettled,
   onProjectChange,
   onAgentEvent,
   onNotify,
@@ -373,6 +381,8 @@ export const ProjectV2StudioSurface = forwardRef<
   const [agentTrace, setAgentTrace] = useState<AgentRunTrace | null>(null);
   const mounted = useRef(true);
   const autoStarted = useRef<string | null>(null);
+  const activeAutoBuildRequest = useRef<string | null>(null);
+  const [autoBuildRetry, setAutoBuildRetry] = useState(0);
   const builderAbort = useRef<AbortController | null>(null);
   const activeRunRef = useRef(false);
   const snapshotSyncQueue = useRef<Promise<void>>(Promise.resolve());
@@ -604,13 +614,20 @@ export const ProjectV2StudioSurface = forwardRef<
   const runBuilder = useCallback(async (
     mode: "build" | "edit" | "repair",
     prompt: string,
+    options: {
+      requestId?: string;
+      onTerminalResponse?: (response: Response) => void;
+    } = {},
   ): Promise<BuilderAgentResult | null> => {
     if (activeRunRef.current) return null;
     activeRunRef.current = true;
+    activeAutoBuildRequest.current = options.requestId ?? null;
     let activePhase: "snapshot" | "sandbox" | "verification" = "snapshot";
     const controller = new AbortController();
     builderAbort.current = controller;
     let statusTimer: ReturnType<typeof setInterval> | null = null;
+    let runtimeReadyObserved = false;
+    let runSettled = false;
     setBusy("task:build");
     setAgentState("running");
     setAgentSummary(
@@ -642,9 +659,33 @@ export const ProjectV2StudioSurface = forwardRef<
         status: "active",
         message: "Starting the isolated Node 24 Sandbox and syncing real project files…",
       });
+      const refreshBuildProgress = async () => {
+        const state = await refreshSandboxStatus(snapshot.project.id);
+        if (
+          runSettled
+          || controller.signal.aborted
+          || runtimeReadyObserved
+          || state.status !== "running"
+        ) {
+          return;
+        }
+        runtimeReadyObserved = true;
+        activePhase = "verification";
+        onAgentEvent?.({
+          phase: "sandbox",
+          status: "done",
+          message: "The isolated Node 24 Sandbox is running.",
+        });
+        onAgentEvent?.({
+          phase: "verification",
+          status: "active",
+          message: "Installing dependencies and running the declared checks…",
+        });
+      };
       statusTimer = setInterval(() => {
-        void refreshSandboxStatus(snapshot.project.id).catch(() => undefined);
-      }, 4_000);
+        void refreshBuildProgress().catch(() => undefined);
+      }, BUILD_STATUS_POLL_MS);
+      void refreshBuildProgress().catch(() => undefined);
       const response = await fetch("/api/builder/agent", {
         method: "POST",
         credentials: "same-origin",
@@ -655,8 +696,11 @@ export const ProjectV2StudioSurface = forwardRef<
           prompt,
           mode,
           provider: providerSelection(provider),
+          ...(options.requestId ? { buildRequestId: options.requestId } : {}),
         }),
       });
+      options.onTerminalResponse?.(response);
+      runSettled = true;
       if (statusTimer) {
         clearInterval(statusTimer);
         statusTimer = null;
@@ -665,11 +709,14 @@ export const ProjectV2StudioSurface = forwardRef<
       if (!payload.result) {
         throw new Error(payload.error ?? "Builder agent returned no verifiable result.");
       }
-      onAgentEvent?.({
-        phase: "sandbox",
-        status: "done",
-        message: "Project files are running inside the isolated Node 24 Sandbox.",
-      });
+      if (!runtimeReadyObserved) {
+        runtimeReadyObserved = true;
+        onAgentEvent?.({
+          phase: "sandbox",
+          status: "done",
+          message: "Project files are running inside the isolated Node 24 Sandbox.",
+        });
+      }
       activePhase = "verification";
       onAgentEvent?.({
         phase: "verification",
@@ -699,9 +746,6 @@ export const ProjectV2StudioSurface = forwardRef<
           message: "Live Sandbox preview is ready. You can keep chatting to edit multiple files.",
         });
       } else {
-        window.sessionStorage.removeItem(
-          `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
-        );
         onAgentEvent?.({
           phase: "verification",
           status: "blocked",
@@ -710,9 +754,7 @@ export const ProjectV2StudioSurface = forwardRef<
       }
       return payload.result;
     } catch (error) {
-      window.sessionStorage.removeItem(
-        `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
-      );
+      runSettled = true;
       const cancelled = controller.signal.aborted;
       const failure = cancelled
         ? "Build stopped. Your saved files and last working preview are unchanged."
@@ -737,20 +779,19 @@ export const ProjectV2StudioSurface = forwardRef<
       onNotify?.(failure);
       return null;
     } finally {
+      runSettled = true;
       if (statusTimer) clearInterval(statusTimer);
       if (builderAbort.current === controller) builderAbort.current = null;
       activeRunRef.current = false;
-      window.sessionStorage.removeItem(
-        `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`,
-      );
+      if (activeAutoBuildRequest.current === options.requestId) {
+        activeAutoBuildRequest.current = null;
+      }
       if (mounted.current) setBusy(null);
     }
   }, [
     absorbBuilderResult,
     onAgentEvent,
     onNotify,
-    project.id,
-    project.revision,
     provider,
     refreshSandboxStatus,
     syncSnapshot,
@@ -758,26 +799,84 @@ export const ProjectV2StudioSurface = forwardRef<
 
   useEffect(() => {
     if (
-      autoStarted.current === `${project.id}:${project.revision}` ||
+      !autoBuildRequestId ||
+      autoStarted.current === autoBuildRequestId ||
       storageMode !== "cloud" ||
-      project.manifest.framework.name !== "nextjs" ||
-      project.preview?.status === "ready"
+      project.manifest.framework.name !== "nextjs"
     ) {
       return;
     }
-    const key = `${AUTO_BUILD_KEY}:${project.id}:${project.revision}`;
-    const lease = Number(window.sessionStorage.getItem(key));
-    if (Number.isFinite(lease) && Date.now() - lease < AUTO_BUILD_LEASE_MS) return;
-    autoStarted.current = `${project.id}:${project.revision}`;
-    window.sessionStorage.setItem(key, String(Date.now()));
+    const key = `${AUTO_BUILD_KEY}:${project.id}:${autoBuildRequestId}`;
+    if (project.preview?.status === "ready") {
+      window.sessionStorage.removeItem(key);
+      onAutoBuildSettled?.(autoBuildRequestId);
+      return;
+    }
+    const persistedRun = project.runs.find(
+      (run) => run.id === autoBuildRunId(autoBuildRequestId),
+    );
+    autoStarted.current = autoBuildRequestId;
+    if (persistedRun?.status === "running" || persistedRun?.status === "queued") {
+      const timer = window.setTimeout(() => {
+        void loadProjectV2FromCloud(project.id).then((remote) => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          if (remote) onProjectChange(remote.project, remote.storageRevision);
+          setAutoBuildRetry((value) => value + 1);
+        }).catch(() => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          setAutoBuildRetry((value) => value + 1);
+        });
+      }, BUILD_STATUS_POLL_MS);
+      return () => window.clearTimeout(timer);
+    }
+    let launched = false;
     const timer = window.setTimeout(() => {
+      launched = true;
+      window.sessionStorage.setItem(key, autoBuildRequestId);
+      let retryAfterInProgress = false;
       void runBuilder(
         "build",
         "Build this Project V2 exactly as planned, verify every declared check, start the real preview, exercise its primary interaction, and create a checkpoint only when the release gate passes.",
-      );
+        {
+          requestId: autoBuildRequestId,
+          onTerminalResponse: (response) => {
+            if (response.status === 202) {
+              retryAfterInProgress = true;
+              return;
+            }
+            window.sessionStorage.removeItem(key);
+            onAutoBuildSettled?.(autoBuildRequestId);
+          },
+        },
+      ).finally(() => {
+        if (!retryAfterInProgress || !mounted.current) return;
+        window.setTimeout(() => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          setAutoBuildRetry((value) => value + 1);
+        }, BUILD_STATUS_POLL_MS);
+      });
     }, 50);
-    return () => window.clearTimeout(timer);
-  }, [project.id, project.manifest.framework.name, project.preview?.status, project.revision, runBuilder, storageMode]);
+    return () => {
+      window.clearTimeout(timer);
+      if (!launched && autoStarted.current === autoBuildRequestId) {
+        autoStarted.current = null;
+      }
+    };
+  }, [
+    autoBuildRequestId,
+    autoBuildRetry,
+    onAutoBuildSettled,
+    onProjectChange,
+    project.id,
+    project.manifest.framework.name,
+    project.preview?.status,
+    project.runs,
+    runBuilder,
+    storageMode,
+  ]);
 
   const saveSnapshot = useCallback(async (next: ProjectV2) => {
     if (storageMode === "local") {
@@ -984,14 +1083,21 @@ export const ProjectV2StudioSurface = forwardRef<
   }
 
   const stopActiveRun = useCallback(async () => {
+    const automaticOwner = activeAutoBuildRequest.current;
     builderAbort.current?.abort();
     await runRuntimeAction("stop").catch(() => undefined);
+    if (autoBuildRequestId && automaticOwner === autoBuildRequestId) {
+      window.sessionStorage.removeItem(
+        `${AUTO_BUILD_KEY}:${project.id}:${autoBuildRequestId}`,
+      );
+      onAutoBuildSettled?.(autoBuildRequestId);
+    }
     if (!mounted.current) return;
     setBusy(null);
     setAgentState("idle");
     setAgentSummary("Build stopped. Your saved files and last working preview are unchanged.");
     setSandbox((current) => ({ ...current, status: "stopped" }));
-  }, [runRuntimeAction]);
+  }, [autoBuildRequestId, onAutoBuildSettled, project.id, runRuntimeAction]);
 
   useImperativeHandle(ref, () => ({
     run: runBuilder,

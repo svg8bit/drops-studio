@@ -10,6 +10,7 @@ test("Build opens the unified Director workspace with an honest live-preview han
   page,
 }, testInfo) => {
   const assertCleanRuntime = installRuntimeGuards(page)
+  let builderAgentCalls = 0
 
   await page.route("**/api/account", async (route) => {
     await route.fulfill({
@@ -28,6 +29,7 @@ test("Build opens the unified Director workspace with an honest live-preview han
     })
   })
   await page.route("**/api/builder/agent", async (route) => {
+    builderAgentCalls += 1
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -65,8 +67,9 @@ test("Build opens the unified Director workspace with an honest live-preview han
   await page.locator('[data-preset="crypto-radio"]').click()
   await page.getByRole("button", { name: "Build now", exact: true }).click()
 
-  await page.waitForURL(/\/studio\/[a-f0-9-]+\?panel=director&autobuild=1$/i)
+  await page.waitForURL(/\/studio\/[a-f0-9-]+\?panel=director&autobuild=1&buildRequest=[a-f0-9-]+$/i)
   await expect(page.locator(".project-studio-layout")).toHaveClass(/tab-director/)
+  await expect(page).toHaveURL(/\/studio\/[a-f0-9-]+\?panel=director$/i)
   await expect(page.getByText("Drops Agent", { exact: true })).toBeVisible()
   await expect(page.getByLabel("AI model")).toHaveValue("free")
   await expect(page.getByText("Studio Maker", { exact: true })).toBeVisible()
@@ -127,8 +130,14 @@ test("Build opens the unified Director workspace with an honest live-preview han
   const dialog = page.getByRole("dialog")
   await expect(dialog.getByText("Connections Hub", { exact: true })).toBeVisible()
   await dialog.getByRole("button", { name: "Close connections" }).click()
-  await expect(page).toHaveURL(/\/studio\/[a-f0-9-]+\?panel=director&autobuild=1$/i)
+  await expect(page).toHaveURL(/\/studio\/[a-f0-9-]+\?panel=director$/i)
   await expect(page.getByText("Drops Agent", { exact: true })).toBeVisible()
+
+  await expect.poll(() => builderAgentCalls).toBe(1)
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await expect(page.getByText("Drops Agent", { exact: true })).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(builderAgentCalls).toBe(1)
 
   await assertCleanRuntime()
 })

@@ -1867,7 +1867,8 @@ export function DropsStudio({ hero }: { hero: ReactNode }) {
         createdAt: now,
         updatedAt: now,
       };
-      const studioHref = `/studio/${project.id}?panel=director&autobuild=1`;
+      const buildRequestId = crypto.randomUUID();
+      const studioHref = `/studio/${project.id}?panel=director&autobuild=1&buildRequest=${encodeURIComponent(buildRequestId)}`;
       void router.prefetch(studioHref);
       void warmProjectExperience(spec);
       const stored = await saveProjectSafely(project, {
