@@ -950,7 +950,6 @@ export class VercelSandboxRuntimeAdapter implements ProjectRuntimeAdapter {
       ...this.#credentialsInput(),
     });
     for await (const record of sandboxes) {
-      if (inspected >= limit) break;
       inspected += 1;
       if (record.updatedAt >= options.idleBefore.getTime()) continue;
       try {

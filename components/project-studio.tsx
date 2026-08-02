@@ -152,7 +152,10 @@ import {
   studioAccountDisplayName,
   studioAccountInitial,
 } from "@/lib/studio-account-profile";
-import { consumeStudioBuildIntent } from "@/lib/studio-build-intent";
+import {
+  clearStudioBuildIntent,
+  consumeStudioBuildIntent,
+} from "@/lib/studio-build-intent";
 
 type InspectorTab =
   | "project"
@@ -1691,6 +1694,21 @@ export function ProjectStudio() {
     },
     [],
   );
+
+  const settleAutoBuildIntent = useCallback((requestId: string) => {
+    const cleared = clearStudioBuildIntent(
+      {
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+      },
+      requestId,
+      (url) => window.history.replaceState(window.history.state, "", url),
+    );
+    if (cleared) {
+      setAutoBuildRequestId((current) => current === requestId ? null : current);
+    }
+  }, []);
 
   const recordBuilderAgentEvent = useCallback(
     (event: {
@@ -3764,6 +3782,7 @@ export function ProjectStudio() {
               key={project.projectV2.id}
               ref={projectV2SurfaceRef}
               autoBuildRequestId={autoBuildRequestId}
+              onAutoBuildSettled={settleAutoBuildIntent}
               onAgentEvent={recordBuilderAgentEvent}
               onNotify={setToast}
               onProjectChange={adoptProjectV2}
@@ -4933,7 +4952,9 @@ export function ProjectStudio() {
                   className={
                     releaseEvidenceReady
                       ? "quality-pass"
-                      : "quality-fail"
+                      : buildLifecycle === "running"
+                        ? "quality-pending"
+                        : "quality-fail"
                   }
                 >
                   {hasProjectV2
@@ -4942,7 +4963,13 @@ export function ProjectStudio() {
                 </b>
               </div>
               <div
-                className={`quality-hero ${releaseEvidenceReady ? "passed" : "failed"}`}
+                className={`quality-hero ${
+                  releaseEvidenceReady
+                    ? "passed"
+                    : buildLifecycle === "running"
+                      ? "pending"
+                      : "failed"
+                }`}
               >
                 <span>
                   <ShieldCheck />
