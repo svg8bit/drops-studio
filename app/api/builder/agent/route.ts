@@ -409,7 +409,8 @@ export async function handleBuilderAgentRequest(
       request,
       parsed.data.provider,
     );
-    const { buildRequestId: _buildRequestId, ...builderInput } = parsed.data;
+    const builderInput = { ...parsed.data };
+    delete builderInput.buildRequestId;
     const agentRequest = {
       ...builderInput,
       provider: remembered.selection,
