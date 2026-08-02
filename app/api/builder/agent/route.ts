@@ -34,6 +34,7 @@ import type {
   ProjectRuntimeAdapter,
   RuntimeAuditSink,
 } from "../../../../lib/project-runtime-adapter.ts";
+import type { ProjectV2 } from "../../../../lib/project-v2-types.ts";
 import {
   ServerBuilderAuditSink,
   SnapshotBuilderProjectRepository,
@@ -57,12 +58,110 @@ const requestSchema = z.object({
   projectId: z.string().regex(/^[a-z0-9][a-z0-9:._-]{0,127}$/i),
   prompt: z.string().min(1).max(20_000),
   mode: z.enum(["build", "edit", "repair"]),
+  buildRequestId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,95}$/).optional(),
   provider: z.object({
     provider: z.enum(["free", "gateway", "openai", "anthropic", "openrouter", "kimi", "custom"]),
     model: z.string().min(1).max(192).optional(),
     baseUrl: z.string().url().max(2_000).optional(),
   }).strict(),
 }).strict();
+
+function autoBuildRunId(requestId: string): string {
+  return `auto:${requestId}`;
+}
+
+function withAutoBuildRun(
+  project: ProjectV2,
+  requestId: string,
+  status: "running" | "succeeded" | "failed" | "stopped",
+): ProjectV2 {
+  const id = autoBuildRunId(requestId);
+  const prior = project.runs.find((run) => run.id === id);
+  const now = new Date().toISOString();
+  const runs = [
+    ...project.runs.filter((run) => run.id !== id),
+    {
+      id,
+      taskId: "build",
+      projectRevision: project.revision,
+      status,
+      runtime: "vercel-sandbox" as const,
+      startedAt: status === "running" ? now : prior?.startedAt ?? now,
+      ...(status === "running"
+        ? {}
+        : { finishedAt: now, exitCode: status === "succeeded" ? 0 : null }),
+      logIds: prior?.logIds ?? [],
+      auditEventIds: prior?.auditEventIds ?? [],
+    },
+  ].slice(-256);
+  const retainedRunIds = new Set(runs.map((run) => run.id));
+  return {
+    ...project,
+    runs,
+    logs: project.logs.filter((log) => retainedRunIds.has(log.runId)),
+    updatedAt: now,
+  };
+}
+
+async function claimAutoBuildRequest(input: {
+  actorId: string;
+  project: ProjectV2;
+  repository: BuilderProjectRepository;
+  requestId: string;
+}): Promise<{ status: "claimed" | "running"; project: ProjectV2 }> {
+  let project = input.project;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const existing = project.runs.find(
+      (run) => run.id === autoBuildRunId(input.requestId),
+    );
+    if (existing?.status === "running" || existing?.status === "queued") {
+      return { status: "running", project };
+    }
+    try {
+      project = await input.repository.saveAuthorized(
+        input.actorId,
+        withAutoBuildRun(project, input.requestId, "running"),
+        project.revision,
+      );
+      return { status: "claimed", project };
+    } catch (error) {
+      const current = await input.repository.loadAuthorized(
+        input.actorId,
+        project.id,
+      );
+      if (!current) throw error;
+      const claimed = current.runs.find(
+        (run) => run.id === autoBuildRunId(input.requestId),
+      );
+      if (claimed?.status === "running" || claimed?.status === "queued") {
+        return { status: "running", project: current };
+      }
+      if (attempt === 1) throw error;
+      project = current;
+    }
+  }
+  return { status: "running", project };
+}
+
+async function settleAutoBuildRequest(input: {
+  actorId: string;
+  projectId: string;
+  repository: BuilderProjectRepository;
+  requestId: string;
+  status: "succeeded" | "failed" | "stopped";
+}): Promise<ProjectV2 | null> {
+  const current = await input.repository.loadAuthorized(input.actorId, input.projectId);
+  if (!current) return null;
+  const run = current.runs.find(
+    (item) => item.id === autoBuildRunId(input.requestId),
+  );
+  if (!run || run.status !== "running") return current;
+  return input.repository.saveAuthorized(
+    input.actorId,
+    withAutoBuildRun(current, input.requestId, input.status),
+    current.revision,
+  );
+}
 
 const ALL_AGENT_PERMISSIONS = new Set([
   "files:read",
@@ -240,13 +339,41 @@ export async function handleBuilderAgentRequest(
         400,
       );
     }
+    if (parsed.data.buildRequestId && parsed.data.mode !== "build") {
+      return builderJson(
+        {
+          code: "BUILDER_INVALID_REQUEST",
+          error: "Automatic build request IDs are valid only for initial builds.",
+        },
+        400,
+      );
+    }
     const repository = dependencies.repository ?? new SnapshotBuilderProjectRepository();
-    const project = await repository.loadAuthorized(actorId, parsed.data.projectId);
+    let project = await repository.loadAuthorized(actorId, parsed.data.projectId);
     if (!project) {
       return builderJson(
         { code: "BUILDER_PROJECT_NOT_FOUND", error: "Project V2 was not found." },
         404,
       );
+    }
+    if (parsed.data.buildRequestId) {
+      const claim = await claimAutoBuildRequest({
+        actorId,
+        project,
+        repository,
+        requestId: parsed.data.buildRequestId,
+      });
+      project = claim.project;
+      if (claim.status === "running") {
+        return builderJson(
+          {
+            code: "BUILDER_REQUEST_IN_PROGRESS",
+            status: "running",
+            project,
+          },
+          202,
+        );
+      }
     }
     const audit = dependencies.audit ?? new ServerBuilderAuditSink();
     const sandboxRuntime =
@@ -264,7 +391,7 @@ export async function handleBuilderAgentRequest(
     try {
     const session = new BuilderAgentSession({
       actorId,
-      requestId: randomUUID(),
+      requestId: parsed.data.buildRequestId ?? randomUUID(),
       project,
       repository,
       runtime: sandboxRuntime,
@@ -282,8 +409,9 @@ export async function handleBuilderAgentRequest(
       request,
       parsed.data.provider,
     );
+    const { buildRequestId: _buildRequestId, ...builderInput } = parsed.data;
     const agentRequest = {
-      ...parsed.data,
+      ...builderInput,
       provider: remembered.selection,
       approvedTools: [...approvedTools],
     };
@@ -372,9 +500,21 @@ export async function handleBuilderAgentRequest(
         );
       }
     }
+    const settledProject = parsed.data.buildRequestId
+      ? await settleAutoBuildRequest({
+          actorId,
+          projectId: result.project.id,
+          repository,
+          requestId: parsed.data.buildRequestId,
+          status: result.releaseGate.ok ? "succeeded" : "failed",
+        })
+      : null;
+    const settledResult = settledProject
+      ? { ...result, project: settledProject }
+      : result;
     return builderJson(
       {
-        result,
+        result: settledResult,
         ...(intelligence
           ? {
               intelligence: {
@@ -386,8 +526,19 @@ export async function handleBuilderAgentRequest(
             }
           : {}),
       },
-      result.status === "blocked" ? 422 : 200,
+      settledResult.status === "blocked" ? 422 : 200,
     );
+    } catch (error) {
+      if (parsed.data.buildRequestId) {
+        await settleAutoBuildRequest({
+          actorId,
+          projectId: project.id,
+          repository,
+          requestId: parsed.data.buildRequestId,
+          status: request.signal.aborted ? "stopped" : "failed",
+        }).catch(() => undefined);
+      }
+      throw error;
     } finally {
       request.signal.removeEventListener("abort", abortForDisconnectedClient);
     }

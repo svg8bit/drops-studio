@@ -61,8 +61,11 @@ import type { AgentRunTrace } from "@/lib/agent/evals/types";
 import styles from "./project-v2-studio-surface.module.css";
 
 const AUTO_BUILD_KEY = "drops-studio:v2-auto-build";
-const AUTO_BUILD_LEASE_MS = 8_000;
 const BUILD_STATUS_POLL_MS = 10_000;
+
+function autoBuildRunId(requestId: string): string {
+  return `auto:${requestId}`;
+}
 
 interface BuilderApiPayload {
   result?: BuilderAgentResult;
@@ -378,6 +381,8 @@ export const ProjectV2StudioSurface = forwardRef<
   const [agentTrace, setAgentTrace] = useState<AgentRunTrace | null>(null);
   const mounted = useRef(true);
   const autoStarted = useRef<string | null>(null);
+  const activeAutoBuildRequest = useRef<string | null>(null);
+  const [autoBuildRetry, setAutoBuildRetry] = useState(0);
   const builderAbort = useRef<AbortController | null>(null);
   const activeRunRef = useRef(false);
   const snapshotSyncQueue = useRef<Promise<void>>(Promise.resolve());
@@ -609,10 +614,14 @@ export const ProjectV2StudioSurface = forwardRef<
   const runBuilder = useCallback(async (
     mode: "build" | "edit" | "repair",
     prompt: string,
-    onTerminalResponse?: () => void,
+    options: {
+      requestId?: string;
+      onTerminalResponse?: (response: Response) => void;
+    } = {},
   ): Promise<BuilderAgentResult | null> => {
     if (activeRunRef.current) return null;
     activeRunRef.current = true;
+    activeAutoBuildRequest.current = options.requestId ?? null;
     let activePhase: "snapshot" | "sandbox" | "verification" = "snapshot";
     const controller = new AbortController();
     builderAbort.current = controller;
@@ -687,9 +696,10 @@ export const ProjectV2StudioSurface = forwardRef<
           prompt,
           mode,
           provider: providerSelection(provider),
+          ...(options.requestId ? { buildRequestId: options.requestId } : {}),
         }),
       });
-      onTerminalResponse?.();
+      options.onTerminalResponse?.(response);
       runSettled = true;
       if (statusTimer) {
         clearInterval(statusTimer);
@@ -773,6 +783,9 @@ export const ProjectV2StudioSurface = forwardRef<
       if (statusTimer) clearInterval(statusTimer);
       if (builderAbort.current === controller) builderAbort.current = null;
       activeRunRef.current = false;
+      if (activeAutoBuildRequest.current === options.requestId) {
+        activeAutoBuildRequest.current = null;
+      }
       if (mounted.current) setBusy(null);
     }
   }, [
@@ -799,25 +812,53 @@ export const ProjectV2StudioSurface = forwardRef<
       onAutoBuildSettled?.(autoBuildRequestId);
       return;
     }
-    const lease = Number(window.sessionStorage.getItem(key));
-    const leaseAge = Date.now() - lease;
-    const leaseActive = Number.isFinite(lease) && leaseAge >= 0
-      && leaseAge < AUTO_BUILD_LEASE_MS;
+    const persistedRun = project.runs.find(
+      (run) => run.id === autoBuildRunId(autoBuildRequestId),
+    );
     autoStarted.current = autoBuildRequestId;
+    if (persistedRun?.status === "running" || persistedRun?.status === "queued") {
+      const timer = window.setTimeout(() => {
+        void loadProjectV2FromCloud(project.id).then((remote) => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          if (remote) onProjectChange(remote.project, remote.storageRevision);
+          setAutoBuildRetry((value) => value + 1);
+        }).catch(() => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          setAutoBuildRetry((value) => value + 1);
+        });
+      }, BUILD_STATUS_POLL_MS);
+      return () => window.clearTimeout(timer);
+    }
     let launched = false;
-    const delay = leaseActive ? AUTO_BUILD_LEASE_MS - leaseAge : 50;
     const timer = window.setTimeout(() => {
       launched = true;
-      window.sessionStorage.setItem(key, String(Date.now()));
+      window.sessionStorage.setItem(key, autoBuildRequestId);
+      let retryAfterInProgress = false;
       void runBuilder(
         "build",
         "Build this Project V2 exactly as planned, verify every declared check, start the real preview, exercise its primary interaction, and create a checkpoint only when the release gate passes.",
-        () => {
-          window.sessionStorage.removeItem(key);
-          onAutoBuildSettled?.(autoBuildRequestId);
+        {
+          requestId: autoBuildRequestId,
+          onTerminalResponse: (response) => {
+            if (response.status === 202) {
+              retryAfterInProgress = true;
+              return;
+            }
+            window.sessionStorage.removeItem(key);
+            onAutoBuildSettled?.(autoBuildRequestId);
+          },
         },
-      );
-    }, delay);
+      ).finally(() => {
+        if (!retryAfterInProgress || !mounted.current) return;
+        window.setTimeout(() => {
+          if (!mounted.current) return;
+          autoStarted.current = null;
+          setAutoBuildRetry((value) => value + 1);
+        }, BUILD_STATUS_POLL_MS);
+      });
+    }, 50);
     return () => {
       window.clearTimeout(timer);
       if (!launched && autoStarted.current === autoBuildRequestId) {
@@ -826,10 +867,13 @@ export const ProjectV2StudioSurface = forwardRef<
     };
   }, [
     autoBuildRequestId,
+    autoBuildRetry,
     onAutoBuildSettled,
+    onProjectChange,
     project.id,
     project.manifest.framework.name,
     project.preview?.status,
+    project.runs,
     runBuilder,
     storageMode,
   ]);
@@ -1039,9 +1083,10 @@ export const ProjectV2StudioSurface = forwardRef<
   }
 
   const stopActiveRun = useCallback(async () => {
+    const automaticOwner = activeAutoBuildRequest.current;
     builderAbort.current?.abort();
     await runRuntimeAction("stop").catch(() => undefined);
-    if (autoBuildRequestId) {
+    if (autoBuildRequestId && automaticOwner === autoBuildRequestId) {
       window.sessionStorage.removeItem(
         `${AUTO_BUILD_KEY}:${project.id}:${autoBuildRequestId}`,
       );
